@@ -263,6 +263,18 @@ CatalogShell::CatalogShell() {
     }
 
     Content = root_;
+    Window::Current->CoreWindow->KeyDown +=
+        ref new TypedEventHandler<Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^>(
+            [this](Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^ e) {
+                if (page_ == 0) return;
+                const auto code = e->VirtualKey;
+                if (code == Windows::System::VirtualKey::GamepadB ||
+                    code == Windows::System::VirtualKey::Escape ||
+                    code == Windows::System::VirtualKey::BrowserBack) {
+                    PlayCue(2);
+                    ShowPage(page_ == 4 ? 1 : 0);
+                }
+            });
     BuildNavigation();
     Render();
     RestorePaths();
