@@ -32,6 +32,7 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -pedantic \
             tests/catalog_native_smoke.cpp \
             src/Vita3K.UWP/SfoReader.cpp \
+            src/Vita3K.UWP/GameFormats.cpp \
             src/Vita3K.UWP/MenuMusic.cpp \
             -o catalog_native_smoke
           ./catalog_native_smoke
