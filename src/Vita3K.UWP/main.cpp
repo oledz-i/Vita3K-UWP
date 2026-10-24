@@ -3,6 +3,8 @@
 // Selecting firmware does NOT install it or imply the Vita3K core is present.
 #include <collection.h>
 #include <ppltasks.h>
+#include <windows.h>
+#include <string>
 
 using namespace concurrency;
 using namespace Windows::ApplicationModel::Activation;
@@ -21,6 +23,7 @@ private:
     TextBlock^ firmwarePath_;
     TextBlock^ feedback_;
     TextBlock^ libraryStatus_;
+    TextBlock^ memoryStatus_;
     StackPanel^ libraryEntries_;
 
     TextBlock^ MakeText(Platform::String^ text, double size) {
@@ -40,6 +43,35 @@ private:
         button->MinHeight = 52;
         button->MinWidth = 320;
         return button;
+    }
+
+    void ProbeMemory() {
+        // A diagnostic of UWP virtual memory APIs, not a Vita CPU/JIT implementation.
+        const SIZE_T length = 4096;
+        void* page = VirtualAlloc(nullptr, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!page) {
+            memoryStatus_->Text = ref new Platform::String(
+                (L"VirtualAlloc RW failed, Win32 error " + std::to_wstring(GetLastError())).c_str());
+            return;
+        }
+        volatile unsigned char* bytes = static_cast<volatile unsigned char*>(page);
+        bytes[0] = 0x5A;
+        bool rwWorks = (bytes[0] == 0x5A);
+        DWORD oldProtection = 0;
+        BOOL rxWorks = VirtualProtect(page, length, PAGE_EXECUTE_READ, &oldProtection);
+        DWORD protectError = rxWorks ? 0 : GetLastError();
+        if (rxWorks) {
+            DWORD ignored = 0;
+            VirtualProtect(page, length, PAGE_READWRITE, &ignored);
+        }
+        VirtualFree(page, 0, MEM_RELEASE);
+        std::wstring report = L"RW allocation/read/write: ";
+        report += rwWorks ? L"PASS" : L"FAIL";
+        report += L" | RW-to-RX protection: ";
+        report += rxWorks ? L"PASS" : L"FAIL";
+        if (!rxWorks) report += L" (error " + std::to_wstring(protectError) + L")";
+        report += L". This does not establish JIT execution or Vita3K compatibility.";
+        memoryStatus_->Text = ref new Platform::String(report.c_str());
     }
 
     void ScanLibrary() {
@@ -167,6 +199,18 @@ protected:
         panel->Children->Append(libraryStatus_);
         libraryEntries_ = ref new StackPanel();
         panel->Children->Append(libraryEntries_);
+
+        panel->Children->Append(MakeText("Core feasibility diagnostics", 30));
+        panel->Children->Append(MakeText(
+            "Test whether the UWP process can allocate writable memory and change it to executable/readable. "
+            "No generated code is executed by this test.", 18));
+        auto memoryButton = MakeButton("Run memory compatibility probe");
+        memoryButton->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+            ProbeMemory();
+        });
+        panel->Children->Append(memoryButton);
+        memoryStatus_ = MakeText("Memory probe not run.", 18);
+        panel->Children->Append(memoryStatus_);
 
         panel->Children->Append(MakeText("Firmware", 30));
         panel->Children->Append(MakeText(
