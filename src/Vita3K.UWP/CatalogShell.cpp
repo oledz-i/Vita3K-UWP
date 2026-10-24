@@ -4,6 +4,7 @@
 #include "MenuMusic.h"
 #include "SfoReader.h"
 #include "GameFormats.h"
+#include "VulkanDznProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
 #include <algorithm>
@@ -812,6 +813,23 @@ void CatalogShell::Diagnostics() {
     libretroResult_ = Text(L"Libretro core not probed. No UWP-compatible core DLL bundled yet.", 17, true);
     libretroBox->Children->Append(libretroResult_);
     content_->Children->Append(Panel(libretroBox));
+
+    Section(L"Vulkan over Direct3D 12 / Mesa Dozen");
+    auto dzn = Vertical();
+    dzn->Children->Append(Text(
+        L"Mesa Dozen translates Vulkan to native D3D12 on Windows. "
+        L"On Xbox, a compatible Vulkan loader and Dozen ICD would have to "
+        L"be built for UWP and bundled in the signed APPX. "
+        L"A native D3D12 test frame is not evidence that Vulkan works.", 16, false, true));
+    auto dznResult = Text(L"No Vulkan / Dozen probe run on this Xbox.", 17, true);
+    auto dznButton = Button(L"Probe actual packaged Vulkan device");
+    dznButton->Click += ref new RoutedEventHandler(
+        [this,dznResult](Platform::Object^, RoutedEventArgs^) {
+            dznResult->Text = StringOf(ProbePackagedVulkan());
+        });
+    dzn->Children->Append(dznButton);
+    dzn->Children->Append(dznResult);
+    content_->Children->Append(Panel(dzn));
 
     Section(L"Upstream Vita3K memory allocator");
     auto core = Vertical();
