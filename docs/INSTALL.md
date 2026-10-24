@@ -12,9 +12,10 @@ On GitHub, open `oledz-i/Vita3K-UWP` → Actions → UWP development package. Ch
 2. Open the console's Xbox Device Portal from a computer on the same network.
 3. Use its app deployment page to upload the application APPX. Add the included x64 runtime dependencies if requested. Do not upload ARM or x86 dependencies.
 4. Deploy and launch **Vita3K UWP Development** from Dev Home.
-5. Expected result: the new **Discover** page with a featured banner and library shelves. Navigate to **Settings** to try five themes and four original menu tracks. Choose a game folder and inspect local results in **Library**.
-6. Navigate to **Developer** to run the upstream allocator test and initialize the D3D12 preview. The test should paint a native frame on Xbox; a successful Windows APPX build does not prove the console API will work.
-7. Record whether the interface launches, controller focus works, menu music plays, stored paths persist, and the app can resume and close normally. Do not expect game booting.
+5. Expected result: the new **Discover** page with a featured banner and library shelves. Navigate to **Settings** to try five themes, four original menu tracks and four interface cues (focus, select, back and swipe). Cues have an independent on/off setting and volume slider.
+6. Navigate the interface with Xbox controls, including **B** to return to the preceding page. Try scanning a folder containing extracted Vita games and supported file formats, or add an individual VPK/ZIP/PKG/VCI file. Open a card to see its input-header check. The test will not launch a game.
+7. Navigate to **Developer** to run the upstream allocator test and initialize the D3D12 preview. The test should paint a native frame on Xbox; a successful Windows APPX build does not prove the console API will work.
+8. Record whether the interface launches, controller focus works, menu music plays, stored paths and custom artwork persist, and the app can resume and close normally. **Do not expect game booting, even for homebrew:** the executable loader, CPU, kernel and Vita GXM renderer remain unavailable in the Xbox port.
 
 Developer Mode and Device Portal setup: https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/devkit-activation and https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal-xbox . Portal controls can differ across console versions. If certificate validation fails, record the exact portal error rather than disabling security checks or treating a successful build as a deployment guarantee.
 
