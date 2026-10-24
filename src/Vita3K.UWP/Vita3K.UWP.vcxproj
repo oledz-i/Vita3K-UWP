@@ -49,6 +49,18 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <CompileAsWinRT>true</CompileAsWinRT>
     </ClCompile>
+    <ClCompile Include="CatalogShell.cpp">
+      <CompileAsWinRT>true</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="MenuMusic.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="SfoReader.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
     <ClCompile Include="D3D12Host.cpp">
       <CompileAsWinRT>false</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
@@ -60,6 +72,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D3D12Host.h" />
+    <ClInclude Include="CatalogShell.h" />
+    <ClInclude Include="MenuMusic.h" />
+    <ClInclude Include="SfoReader.h" />
     <ClInclude Include="..\\..\\third_party\\vita3k\\mem\\include\\mem\\allocator.h" />
   </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
