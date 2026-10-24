@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "D3D12Host.h"
+#include "GameFormats.h"
 #include <collection.h>
 #include <ppltasks.h>
 #include <string>
@@ -13,7 +14,10 @@ struct LibraryGame {
     Platform::String^ key;
     Platform::String^ sourceType;
     Windows::Storage::StorageFolder^ directory;
+    Windows::Storage::StorageFile^ file;
     Windows::Storage::StorageFile^ icon;
+    vita3k_uwp::GameFormat format = vita3k_uwp::GameFormat::Unknown;
+    Platform::String^ validation = L"Awaiting source validation";
 };
 
 public ref class CatalogShell sealed : Windows::UI::Xaml::Controls::UserControl {
@@ -47,6 +51,7 @@ private:
     double musicVolume_ = 0.22;
     bool artworkScanBusy_ = false;
     bool bootstrapped_ = false;
+    unsigned libraryRevision_ = 0;
     Platform::String^ search_ = L"";
 
     Windows::UI::Color Bg() const;
@@ -78,6 +83,10 @@ private:
     Platform::String^ ArtworkUri(size_t index);
     void ConfigureCover(Windows::UI::Xaml::Controls::Border^ border, size_t index);
     void ChooseGameFolder();
+    void ChooseGameFile();
+    void CheckGameFile(size_t index, unsigned revision);
+    void CheckGameFolder(size_t index, unsigned revision);
+    void InspectLaunch(size_t index);
     void ChooseFirmware();
     void RestorePaths();
     void ScanGames();
