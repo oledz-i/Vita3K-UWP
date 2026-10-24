@@ -65,6 +65,10 @@
       <CompileAsWinRT>false</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
+    <ClCompile Include="VitaLibretroHost.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
     <ClCompile Include="D3D12Host.cpp">
       <CompileAsWinRT>false</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
@@ -76,6 +80,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D3D12Host.h" />
+    <ClInclude Include="VitaLibretroHost.h" />
     <ClInclude Include="CatalogShell.h" />
     <ClInclude Include="MenuMusic.h" />
     <ClInclude Include="SfoReader.h" />
