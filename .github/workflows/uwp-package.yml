@@ -71,6 +71,25 @@ jobs:
             pinned-core-commit.txt
           if-no-files-found: warn
           retention-days: 14
+  dozen-uwp-port-probe:
+    name: Attempt genuine Mesa Dozen Vulkan D3D12 UWP driver
+    if: github.ref == 'refs/heads/core-integration' || github.head_ref == 'core-integration'
+    runs-on: windows-2022
+    timeout-minutes: 55
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Attempt Mesa Dozen Windows Store/AppContainer build
+        shell: pwsh
+        run: ./scripts/probe-dozen-uwp.ps1
+      - name: Upload Mesa Vulkan-on-D3D12 source build diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mesa-dozen-xbox-uwp-port-probe
+          path: artifacts/dozen-port/
+          if-no-files-found: warn
+          retention-days: 14
   package:
     name: Build x64 development APPX
     runs-on: windows-2022
