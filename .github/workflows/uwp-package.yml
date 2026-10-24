@@ -1,7 +1,7 @@
 name: UWP development package
 on:
   push:
-    branches: [main]
+    branches: [main, core-integration]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
       - name: Upload development package and public certificate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: Vita3K-UWP-dev-shell-x64-${{ github.run_number }}
+          name: Vita3K-UWP-core-d3d12-x64-${{ github.run_number }}
           path: artifacts/package/
           if-no-files-found: error
           retention-days: 14
