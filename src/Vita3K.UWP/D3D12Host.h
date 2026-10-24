@@ -10,6 +10,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <string>
+#include <cstdint>
 
 class D3D12Host final {
 public:
@@ -20,6 +21,9 @@ public:
 
     bool Initialize(IUnknown* panel, unsigned width, unsigned height, std::wstring& result);
     bool DrawTestFrame(std::wstring& result);
+    bool PresentBgraFrame(const std::uint8_t* pixels, unsigned width, unsigned height,
+                          unsigned strideBytes, std::wstring& result);
+    bool DrawUploadTestFrame(std::wstring& result);
     void Shutdown();
     bool Ready() const { return swapChain_ != nullptr; }
 
@@ -33,6 +37,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> buffers_[kBufferCount];
     Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain_;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> frameUpload_;
+    unsigned width_ = 0;
+    unsigned height_ = 0;
     HANDLE fenceEvent_ = nullptr;
     UINT64 fenceValue_ = 0;
     UINT rtvIncrement_ = 0;
