@@ -42,9 +42,9 @@ try {
     "$($hash.Hash)  $($appx[0].Name)" | Set-Content "$packages/SHA256SUMS.txt"
     $commit = git -C $root rev-parse HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source commit.' }
-    @{source_commit=$commit; version="0.1.$BuildNumber.0"; architecture='x64'; kind='development-shell'; emulator_core_integrated=$false; certificate_thumbprint=$cert.Thumbprint} | ConvertTo-Json | Set-Content "$packages/build-info.json"
+    @{source_commit=$commit; version="0.1.$BuildNumber.0"; architecture='x64'; kind='core-memory-and-d3d12-bootstrap'; emulator_core_integrated=$false; vita3k_allocator_integrated=$true; d3d12_host_linked=$true; game_boot_supported=$false; certificate_thumbprint=$cert.Thumbprint} | ConvertTo-Json | Set-Content "$packages/build-info.json"
     if ($env:GITHUB_STEP_SUMMARY) {
-        "## UWP development shell`nBuilt signed x64 APPX **0.1.$BuildNumber.0** from $commit.`n`n**No Vita emulation or renderer is integrated.** Download the package artifact for APPX, dependencies, public test certificate and installation instructions. Xbox launch must be tested on hardware." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+        "## Vita3K UWP core/renderer integration`nBuilt signed x64 APPX **0.1.$BuildNumber.0** from $commit.`n`n**Genuine upstream Vita3K memory allocator and D3D12 presentation host are linked; full CPU/kernel/GXM renderer and game booting are not integrated.** Download the package artifact for APPX, dependencies, public test certificate and installation instructions. Xbox launch must be tested on hardware." | Out-File $env:GITHUB_STEP_SUMMARY -Append
     }
 } finally {
     [IO.File]::WriteAllText($manifestPath, $originalManifest)
