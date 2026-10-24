@@ -20,6 +20,8 @@ private:
     TextBlock^ gamesPath_;
     TextBlock^ firmwarePath_;
     TextBlock^ feedback_;
+    TextBlock^ libraryStatus_;
+    StackPanel^ libraryEntries_;
 
     TextBlock^ MakeText(Platform::String^ text, double size) {
         auto block = ref new TextBlock();
@@ -38,6 +40,39 @@ private:
         button->MinHeight = 52;
         button->MinWidth = 320;
         return button;
+    }
+
+    void ScanLibrary() {
+        auto access = StorageApplicationPermissions::FutureAccessList;
+        libraryEntries_->Children->Clear();
+        if (!access->ContainsItem("vita-games")) {
+            libraryStatus_->Text = "Select a game folder before scanning.";
+            return;
+        }
+        libraryStatus_->Text = "Reading accessible folder entries...";
+        create_task(access->GetFolderAsync("vita-games")).then([this](StorageFolder^ folder) {
+            return create_task(folder->GetItemsAsync(0, 100));
+        }).then([this](task<Windows::Foundation::Collections::IVectorView<IStorageItem^>^> operation) {
+            try {
+                auto items = operation.get();
+                unsigned int count = 0;
+                for (auto item : items) {
+                    // This is a directory preview, NOT Vita game detection.
+                    auto name = item->Name;
+                    if (item->IsOfType(StorageItemTypes::Folder)) {
+                        libraryEntries_->Children->Append(MakeText("[Folder] " + name, 17));
+                    } else {
+                        libraryEntries_->Children->Append(MakeText("[File] " + name, 17));
+                    }
+                    ++count;
+                }
+                libraryStatus_->Text = "Showing " + count.ToString() +
+                    " entries (maximum 100). Game identification and launching require the emulator core.";
+                if (count == 0) libraryStatus_->Text = "Folder is empty or contains no accessible items.";
+            } catch (Platform::Exception^ error) {
+                libraryStatus_->Text = "Could not read folder: " + error->Message;
+            }
+        }, task_continuation_context::use_current());
     }
 
     void RestoreSelections() {
@@ -71,7 +106,7 @@ private:
                 if (folder != nullptr) {
                     StorageApplicationPermissions::FutureAccessList->AddOrReplace("vita-games", folder);
                     gamesPath_->Text = "Game folder: " + folder->Path;
-                    feedback_->Text = "Folder permission saved. Game scanning requires the Vita3K core.";
+                    feedback_->Text = "Folder permission saved. You can preview accessible files below.";
                 }
             } catch (Platform::Exception^ error) {
                 feedback_->Text = "Folder selection failed: " + error->Message;
@@ -124,6 +159,15 @@ protected:
             ChooseGamesFolder();
         });
         panel->Children->Append(gamesButton);
+        auto scanButton = MakeButton("Preview game directory");
+        scanButton->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+            ScanLibrary();
+        });
+        panel->Children->Append(scanButton);
+        libraryStatus_ = MakeText("No directory scan performed.", 18);
+        panel->Children->Append(libraryStatus_);
+        libraryEntries_ = ref new StackPanel();
+        panel->Children->Append(libraryEntries_);
 
         panel->Children->Append(MakeText("Firmware", 30));
         panel->Children->Append(MakeText(
