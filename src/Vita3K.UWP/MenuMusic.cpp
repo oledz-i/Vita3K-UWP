@@ -73,4 +73,48 @@ std::vector<std::uint8_t> GenerateMenuWav(unsigned track) {
     }
     return wav;
 }
+
+std::vector<std::uint8_t> GenerateInterfaceCue(unsigned cue) {
+    // Warm two-tone glass taps instead of clicks, with 3 ms attack and
+    // 60-125 ms exponential release. No audio samples or copyrighted cues.
+    constexpr unsigned rate = 22050;
+    constexpr double tau = 6.283185307179586;
+    cue %= 4;
+    const double durations[4] = {0.095, 0.150, 0.130, 0.075};
+    const double startFrequencies[4] = {690, 590, 490, 840};
+    const double targetFrequencies[4] = {760, 900, 380, 630};
+    const auto count = static_cast<unsigned>(rate * durations[cue]);
+    std::vector<std::uint8_t> wav;
+    wav.reserve(44 + count * 2);
+    for (char c : "RIFF") if (c) wav.push_back(static_cast<std::uint8_t>(c));
+    append32(wav, 36 + count * 2);
+    for (char c : "WAVEfmt ") if (c) wav.push_back(static_cast<std::uint8_t>(c));
+    append32(wav, 16);
+    append16(wav, 1);
+    append16(wav, 1);
+    append32(wav, rate);
+    append32(wav, rate * 2);
+    append16(wav, 2);
+    append16(wav, 16);
+    for (char c : "data") if (c) wav.push_back(static_cast<std::uint8_t>(c));
+    append32(wav, count * 2);
+    double phase = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / rate;
+        const double progress = t / durations[cue];
+        const double freq = startFrequencies[cue] +
+            (targetFrequencies[cue] - startFrequencies[cue]) * progress;
+        phase += tau * freq / rate;
+        const double attack = std::min(1.0, t / 0.003);
+        const double release = std::exp(-5.6 * progress);
+        const double edgeFade = std::min(1.0, (durations[cue] - t) / 0.010);
+        const double tone = std::sin(phase) * .72 +
+            std::sin(phase * 2.005) * .16 + std::sin(phase * 3.01) * .045;
+        const double sample = std::max(-1.0, std::min(1.0,
+            tone * attack * release * edgeFade * 0.32));
+        append16(wav, static_cast<std::uint16_t>(
+            static_cast<std::int16_t>(sample * 32767)));
+    }
+    return wav;
+}
 } // namespace vita3k_uwp
