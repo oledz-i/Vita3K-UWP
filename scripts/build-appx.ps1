@@ -22,7 +22,7 @@ try {
     [xml]$manifest = $originalManifest
     $manifest.Package.Identity.Version = "0.1.$BuildNumber.0"
     $manifest.Save($manifestPath)
-    & $msbuild "$root/src/Vita3K.UWP/Vita3K.UWP.vcxproj" /restore /m /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=SideloadOnly "/p:AppxPackageDir=$packages\" /p:AppxPackageSigningEnabled=false "/bl:$logs/build.binlog"
+    & $msbuild "$root/src/Vita3K.UWP/Vita3K.UWP.vcxproj" /restore /m /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=SideloadOnly /p:AppxPackageExtension=.appx "/p:AppxPackageDir=$packages\" /p:AppxPackageSigningEnabled=false "/bl:$logs/build.binlog"
     if ($LASTEXITCODE -ne 0) { throw "MSBuild failed ($LASTEXITCODE)." }
     $appx = @(Get-ChildItem $packages -Recurse -Filter '*.appx' | Where-Object { $_.FullName -notmatch '[\\/]Dependencies[\\/]' })
     if ($appx.Count -ne 1) { throw "Expected exactly one application APPX; found $($appx.Count)." }
