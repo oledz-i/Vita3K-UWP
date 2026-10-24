@@ -38,7 +38,7 @@ jobs:
           ./catalog_native_smoke
   full-core-uwp-probe:
     name: Attempt genuine Vita3K libretro source UWP port
-    if: github.ref == 'refs/heads/core-integration'
+    if: github.ref == 'refs/heads/core-integration' || github.head_ref == 'core-integration'
     runs-on: windows-2022
     timeout-minutes: 60
     continue-on-error: true
