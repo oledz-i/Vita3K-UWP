@@ -98,12 +98,12 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
 }
 
 bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring& detail) {
+    systemDir_ = systemFolder;
     if (!Probe(detail)) return false;
     if (initialized_) {
         detail = L"Real Vita3K libretro retro_init already executed.";
         return true;
     }
-    systemDir_ = systemFolder;
     unsupportedVideo_ = false;
     if (!init_) return false;
     init_();
