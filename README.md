@@ -13,7 +13,7 @@
 
 ## Where things stand
 
-**This is a port foundation, not a playable emulator yet.** The repository contains a small native C++/CX UWP development shell and a GitHub Actions pipeline that builds an x64 APPX. The integration branch links and executes Vita3K's original bitmap memory allocator, plus a native D3D12 graphics host; the full Vita3K CPU, kernel, firmware services, and GXM renderer are not linked. There are no supported games, performance claims, or implemented emulation renderers in this port today.
+**This is a catalog frontend and port foundation, not a playable emulator yet.** The repository contains a small native C++/CX UWP development shell and a GitHub Actions pipeline that builds an x64 APPX. The integration branch links and executes Vita3K's original bitmap memory allocator, plus a native D3D12 graphics host; the full Vita3K CPU, kernel, firmware services, and GXM renderer are not linked. There are no supported games, performance claims, or implemented emulation renderers in this port today.
 
 | Area | Current status |
 | --- | --- |
@@ -23,7 +23,7 @@
 | D3D12 | Native device, flip swap chain, GPU clear and BGRA framebuffer upload; Vita GXM draw backend not implemented |
 | Vulkan / OpenGL | Existing upstream backends; Xbox feasibility research pending |
 | Game compatibility | Not available; upstream compatibility does not describe this port |
-| UI, controls, storage, audio | Basic UWP controls, saved game folder and firmware-file selection; game catalog/audio incomplete |
+| UI, controls, storage, audio | **Streaming-style Discover/Library/Settings UI**, five themes, four generated menu soundtracks plus custom audio, saved storage/firmware paths, game metadata and custom/SteamGridDB artwork; Xbox UI validation pending |
 
 ## Development builds
 
@@ -31,7 +31,11 @@ Open **[Actions → UWP development package](https://github.com/oledz-i/Vita3K-U
 
 The artifact contains a development-signed **APPX**, any generated runtime dependencies, a public test certificate, source-commit metadata, a SHA-256 checksum, and installation instructions. Artifacts expire after 14 days. No stable release is available. The workflow does not publish releases automatically.
 
-Read the **[installation guide](docs/INSTALL.md)** before deploying. These packages are not playable Vita emulators yet. On the integration build, use the memory allocator and D3D12 preview controls to report real Xbox behavior. APPX is the initial Xbox packaging format; an MSIX/desktop packaging target can be added separately if needed.
+Read the **[installation guide](docs/INSTALL.md)** before deploying. These packages are not playable Vita emulators yet. The integration build includes the full streaming-style **catalog frontend**, music and artwork options, Vita3K allocator tests and the D3D12 presentation test. See [frontend guide](docs/UI.md) to navigate the Xbox controls and report real console behavior. APPX is the initial Xbox packaging format; an MSIX/desktop packaging target can be added separately if needed.
+
+## Frontend and artwork
+
+The integration branch includes five visual themes, four original generated looping music tracks plus custom audio, a game catalog and local metadata reader for extracted Vita titles. SteamGridDB support requires the user's own API key and exact-title match; **automatic correct art for every title cannot be promised**. See [frontend documentation](docs/UI.md). Upstream CPU/kernel, installation and GXM rendering remain incomplete.
 
 ## Graphics direction
 
