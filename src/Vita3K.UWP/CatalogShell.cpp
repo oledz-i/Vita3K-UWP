@@ -714,3 +714,265 @@ void CatalogShell::Diagnostics() {
         BootRenderer();
     });
 }
+
+void CatalogShell::SaveTheme(int theme) {
+    if (theme < 0 || theme > 4) return;
+    theme_ = theme;
+    PutPref(L"theme", StringOf(std::to_wstring(theme)));
+    root_->Background = Gradient(Bg(), Glow());
+    navigation_->Background = Solid(Card());
+    auto footer = dynamic_cast<Border^>(root_->Children->GetAt(2));
+    if (footer != nullptr) footer->Background = Solid(Card());
+    if (status_ != nullptr) status_->Foreground = Solid(Muted());
+    BuildNavigation();
+    Render();
+    SetStatus(L"Theme saved. Your colors will be restored on the next launch.");
+}
+void CatalogShell::SetVolume(double value) {
+    musicVolume_ = std::max(0.0, std::min(1.0, value));
+    musicPlayer_->Volume = musicVolume_;
+    PutPref(L"music.volume", StringOf(std::to_wstring(musicVolume_)));
+}
+void CatalogShell::SetMusic(int track) {
+    if (track < 0 || track > 5) return;
+    track_ = track;
+    PutPref(L"music.track", StringOf(std::to_wstring(track)));
+    musicPlayer_->Stop();
+    if (track > 0 && track < 5) PlayBundledMusic(track);
+    if (track == 5) PlayCustomMusic();
+    Render();
+    SetStatus(track == 0 ? L"Menu music turned off." : L"Menu soundtrack saved.");
+}
+void CatalogShell::PlayBundledMusic(int track) {
+    auto bytes = vita3k_uwp::GenerateMenuWav(static_cast<unsigned>(track - 1));
+    auto data = ref new Platform::Array<unsigned char>(static_cast<unsigned>(bytes.size()));
+    std::memcpy(data->Data, bytes.data(), bytes.size());
+    auto stream = ref new InMemoryRandomAccessStream();
+    auto writer = ref new DataWriter(stream->GetOutputStreamAt(0));
+    writer->WriteBytes(data);
+    create_task(writer->StoreAsync()).then(
+        [this,writer,stream,track](task<unsigned int> work) {
+            try {
+                work.get();
+                if (track_ != track) return;
+                stream->Seek(0);
+                musicPlayer_->SetSource(stream, L"audio/wav");
+                musicPlayer_->Volume = musicVolume_;
+                musicPlayer_->Play();
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Menu audio error: " + e->Message);
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::PlayCustomMusic() {
+    auto future = StorageApplicationPermissions::FutureAccessList;
+    if (!future->ContainsItem(L"menu-track")) {
+        SetStatus(L"Select a custom audio file under Settings first.");
+        return;
+    }
+    create_task(future->GetFileAsync(L"menu-track")).then(
+        [this](StorageFile^ file) {
+            return create_task(file->OpenAsync(FileAccessMode::Read)).then(
+                [this,file](IRandomAccessStream^ stream) {
+                    if (track_ != 5) return;
+                    musicPlayer_->SetSource(stream, file->ContentType);
+                    musicPlayer_->Play();
+                    SetStatus(L"Playing custom menu audio: " + file->Name);
+                });
+        }).then([this](task<void> work) {
+            try { work.get(); }
+            catch (Platform::Exception^ e) { SetStatus(L"Custom audio failed: " + e->Message); }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::PickCustomMusic() {
+    auto picker = ref new FileOpenPicker();
+    picker->SuggestedStartLocation = PickerLocationId::MusicLibrary;
+    picker->FileTypeFilter->Append(L".mp3");
+    picker->FileTypeFilter->Append(L".wav");
+    picker->FileTypeFilter->Append(L".m4a");
+    create_task(picker->PickSingleFileAsync()).then(
+        [this](task<StorageFile^> work) {
+            try {
+                auto file = work.get();
+                if (file == nullptr) return;
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"menu-track", file);
+                SetMusic(5);
+            } catch (Platform::Exception^ e) { SetStatus(L"Music picker error: " + e->Message); }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::RestorePaths() {
+    auto future = StorageApplicationPermissions::FutureAccessList;
+    if (folderLabel_ != nullptr) {
+        folderLabel_->Text = future->ContainsItem(L"vita-games")
+            ? L"Game folder access saved." : L"No game folder chosen yet.";
+    }
+    if (firmwareLabel_ != nullptr) {
+        firmwareLabel_->Text = future->ContainsItem(L"vita-firmware")
+            ? L"Official firmware selection saved (not installed)."
+            : L"No firmware .PUP selected.";
+    }
+    if (future->ContainsItem(L"vita-games")) {
+        create_task(future->GetFolderAsync(L"vita-games")).then(
+            [this](task<StorageFolder^> work) {
+                try {
+                    auto folder = work.get();
+                    if (folderLabel_ != nullptr)
+                        folderLabel_->Text = L"Game folder: " + folder->Path;
+                } catch (Platform::Exception^) {
+                    if (folderLabel_ != nullptr)
+                        folderLabel_->Text = L"Game folder permission expired. Select again.";
+                }
+            }, task_continuation_context::use_current());
+    }
+    if (future->ContainsItem(L"vita-firmware")) {
+        create_task(future->GetFileAsync(L"vita-firmware")).then(
+            [this](task<StorageFile^> work) {
+                try {
+                    auto file = work.get();
+                    if (firmwareLabel_ != nullptr)
+                        firmwareLabel_->Text = L"Selected firmware: " + file->Name + L" (not installed)";
+                } catch (Platform::Exception^) {
+                    if (firmwareLabel_ != nullptr)
+                        firmwareLabel_->Text = L"Firmware permission expired. Select again.";
+                }
+            }, task_continuation_context::use_current());
+    }
+}
+void CatalogShell::ChooseGameFolder() {
+    auto picker = ref new FolderPicker();
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+    picker->FileTypeFilter->Append(L"*");
+    SetStatus(L"Select a directory containing legitimate Vita game data.");
+    create_task(picker->PickSingleFolderAsync()).then(
+        [this](task<StorageFolder^> work) {
+            try {
+                auto folder = work.get();
+                if (folder == nullptr) return;
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-games", folder);
+                SetStatus(L"Library folder access saved. Scanning selected storage...");
+                RestorePaths();
+                ScanGames();
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Game folder picker failed: " + e->Message);
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::ChooseFirmware() {
+    auto picker = ref new FileOpenPicker();
+    picker->SuggestedStartLocation = PickerLocationId::Downloads;
+    picker->FileTypeFilter->Append(L".PUP");
+    picker->FileTypeFilter->Append(L".pup");
+    SetStatus(L"Choose your official PS Vita firmware update .PUP file.");
+    create_task(picker->PickSingleFileAsync()).then(
+        [this](task<StorageFile^> work) {
+            try {
+                auto file = work.get();
+                if (file == nullptr) return;
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-firmware", file);
+                RestorePaths();
+                SetStatus(L"Firmware file selected. Installation is blocked until core integration.");
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Firmware picker failed: " + e->Message);
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::ScanGames() {
+    auto access = StorageApplicationPermissions::FutureAccessList;
+    if (!access->ContainsItem(L"vita-games")) {
+        SetStatus(L"Choose a game folder to populate your library.");
+        return;
+    }
+    SetStatus(L"Scanning local game files (up to 300 top-level items)...");
+    create_task(access->GetFolderAsync(L"vita-games")).then(
+        [](StorageFolder^ folder) {
+            return create_task(folder->GetItemsAsync(0, 300));
+        }).then([this](task<Windows::Foundation::Collections::IVectorView<IStorageItem^>^> work) {
+            try {
+                auto items = work.get();
+                games_.clear();
+                for (auto item : items) {
+                    const bool folder = item->IsOfType(StorageItemTypes::Folder);
+                    if (!folder && !LooksLikeGameFile(safe_cast<StorageFile^>(item))) continue;
+                    LibraryGame game;
+                    game.name = folder ? item->Name : PrettyFileName(item->Name);
+                    game.key = StableKey(item->Path);
+                    game.sourceType = folder ? L"GAME FOLDER" : L"ARCHIVE";
+                    game.directory = folder ? safe_cast<StorageFolder^>(item) : nullptr;
+                    game.icon = nullptr;
+                    games_.push_back(game);
+                }
+                SetStatus(StringOf(std::to_wstring(games_.size())) +
+                    L" library candidates found. Checking readable Vita metadata...");
+                Render();
+                for (size_t i = 0; i < games_.size(); ++i) {
+                    if (games_[i].directory != nullptr) ReadSfo(i, games_[i].directory);
+                }
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Unable to scan game directory: " + e->Message);
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::ReadSfo(size_t index, StorageFolder^ gameFolder) {
+    create_task(gameFolder->GetFolderAsync(L"sce_sys")).then(
+        [](StorageFolder^ sys) { return create_task(sys->GetFileAsync(L"param.sfo")); }
+    ).then([](StorageFile^ file) { return create_task(FileIO::ReadBufferAsync(file)); }
+    ).then([this,index](task<IBuffer^> work) {
+        try {
+            auto buffer = work.get();
+            auto reader = DataReader::FromBuffer(buffer);
+            auto bytes = ref new Platform::Array<unsigned char>(buffer->Length);
+            reader->ReadBytes(bytes);
+            std::vector<std::uint8_t> data(bytes->Data, bytes->Data + bytes->Length);
+            auto metadata = vita3k_uwp::ReadSfo(data);
+            if (index >= games_.size()) return;
+            if (!metadata.title.empty()) {
+                const int wideChars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                    metadata.title.data(), static_cast<int>(metadata.title.size()),
+                    nullptr, 0);
+                if (wideChars > 0 && wideChars < 2000) {
+                    std::wstring wide(static_cast<size_t>(wideChars), L'\0');
+                    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                        metadata.title.data(), static_cast<int>(metadata.title.size()),
+                        &wide[0], wideChars);
+                    games_[index].name = StringOf(wide);
+                }
+            }
+            Render();
+        } catch (Platform::Exception^) {
+            // A folder without a valid param.sfo is only a library candidate.
+        }
+    }, task_continuation_context::use_current());
+}
+void CatalogShell::ChooseCustomArtwork(size_t index) {
+    if (index >= games_.size()) return;
+    auto picker = ref new FileOpenPicker();
+    picker->SuggestedStartLocation = PickerLocationId::PicturesLibrary;
+    picker->FileTypeFilter->Append(L".png");
+    picker->FileTypeFilter->Append(L".jpg");
+    picker->FileTypeFilter->Append(L".jpeg");
+    const auto key = games_[index].key;
+    create_task(picker->PickSingleFileAsync()).then(
+        [this,key](task<StorageFile^> work) {
+            try {
+                auto file = work.get();
+                if (file == nullptr) return;
+                auto folderTask = create_task(ApplicationData::Current->LocalFolder->
+                    CreateFolderAsync(L"Artwork", CreationCollisionOption::OpenIfExists));
+                folderTask.then([this,file,key](StorageFolder^ dir) {
+                    auto filename = key + file->FileType;
+                    return create_task(file->CopyAsync(dir, filename, NameCollisionOption::ReplaceExisting));
+                }).then([this,key](task<StorageFile^> copied) {
+                    try {
+                        auto file = copied.get();
+                        PutPref(L"art.file." + key, file->Name);
+                        SetStatus(L"Custom artwork saved for " + file->Name);
+                        Render();
+                    } catch (Platform::Exception^ e) {
+                        SetStatus(L"Artwork copy failed: " + e->Message);
+                    }
+                }, task_continuation_context::use_current());
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Artwork picker failed: " + e->Message);
+            }
+        }, task_continuation_context::use_current());
+}
