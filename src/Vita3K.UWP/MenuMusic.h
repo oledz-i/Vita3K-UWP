@@ -5,4 +5,6 @@
 #include <vector>
 namespace vita3k_uwp {
 std::vector<std::uint8_t> GenerateMenuWav(unsigned track);
+// Short, original UI cues: focus (0), confirm (1), back (2), shelf swipe (3).
+std::vector<std::uint8_t> GenerateInterfaceCue(unsigned cue);
 }
