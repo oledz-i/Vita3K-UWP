@@ -66,8 +66,7 @@ private:
                     }
                     ++count;
                 }
-                libraryStatus_->Text = "Showing " + count.ToString() +
-                    " entries (maximum 100). Game identification and launching require the emulator core.";
+                libraryStatus_->Text = "Directory preview complete (up to 100 entries). Game identification and launching require the emulator core.";
                 if (count == 0) libraryStatus_->Text = "Folder is empty or contains no accessible items.";
             } catch (Platform::Exception^ error) {
                 libraryStatus_->Text = "Could not read folder: " + error->Message;
