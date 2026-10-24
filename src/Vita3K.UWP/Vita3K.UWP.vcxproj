@@ -92,6 +92,13 @@
     <ClInclude Include="GameFormats.h" />
     <ClInclude Include="..\\..\\third_party\\vita3k\\mem\\include\\mem\\allocator.h" />
   </ItemGroup>
+  <!-- A genuine UWP-built Vita3K libretro DLL can be packaged by core-port CI.
+       Never copy an arbitrary desktop Win32 DLL here and claim it works. -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\vita3k_libretro.dll')">
+    <Content Include="vita3k_libretro.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
   <ItemGroup><Image Include="Assets\*.png" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
