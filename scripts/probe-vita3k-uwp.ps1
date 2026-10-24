@@ -20,6 +20,7 @@ $notes = @(
   "Source revision: $actual",
   "Compiler target: Windows Store / x64 (NOT normal desktop Win32)",
   "Attempting full emulator build; no gameplay claim or UWP compatibility assumed.",
+  "vcpkg allows unsupported UWP ports experimentally; failures must still be examined and never treated as compatibility.",
   "Dependencies: Dynarmic CPU/JIT, PS Vita kernel/HLE, SDL3, shader tools, Vulkan/OpenGL, package/firmware loaders.",
   "Renderer: Mesa Dozen (dzn) is a potential Vulkan-over-D3D12 layer but is not bundled or verified for Xbox UWP.",
   "Prerequisites before gameplay: UWP core DLL links, Vulkan >=1.1 HW context using a compatible driver, UWP JIT/VM, Sony firmware installation, legal homebrew boot."
@@ -52,6 +53,7 @@ $cmdArgs = @(
   "-DBUILD_LIBRETRO=ON",
   "-DCMAKE_TOOLCHAIN_FILE=$vcpkg",
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
+  "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
   "-DUSE_LTO=NEVER",
   "-DVITA3K_FORCE_SYSTEM_BOOST=ON"
 )
