@@ -2,6 +2,7 @@
 #pragma once
 #include "D3D12Host.h"
 #include "GameFormats.h"
+#include "VitaLibretroHost.h"
 #include <collection.h>
 #include <ppltasks.h>
 #include <string>
@@ -40,10 +41,12 @@ private:
     Windows::UI::Xaml::Controls::TextBlock^ firmwareLabel_;
     Windows::UI::Xaml::Controls::TextBlock^ rendererResult_;
     Windows::UI::Xaml::Controls::TextBlock^ coreResult_;
+    Windows::UI::Xaml::Controls::TextBlock^ libretroResult_;
     Windows::UI::Xaml::Controls::TextBlock^ memoryResult_;
     Windows::UI::Xaml::Controls::SwapChainPanel^ renderSurface_;
     Windows::UI::Xaml::Controls::TextBox^ searchBox_;
     D3D12Host renderer_;
+    VitaLibretroHost libretro_;
     int page_ = 0;
     int selectedGame_ = -1;
     int theme_ = 0;
@@ -109,6 +112,7 @@ private:
     void FetchMissingArtwork(size_t index = 0);
     void ProbeMemory();
     void ProbeCore();
+    void ProbeLibretro(bool initialize);
     void BootRenderer();
     void PresentTestFrame();
     void SetStatus(Platform::String^ message);
