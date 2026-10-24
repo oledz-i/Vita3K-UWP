@@ -10,14 +10,14 @@ The package version is `0.1.<run number>.0` (run numbers must fit 0–65535). Ma
 
 ## Local Windows build
 
-Install Visual Studio 2022 with **Universal Windows Platform development**, C++ UWP build tools for x64 (v143), and **Windows SDK 10.0.22621.0**. Install Git, Python 3 and PowerShell 7. Then, from the repository root:
+Install Visual Studio 2022 with **Universal Windows Platform development**, C++ UWP build tools for x64 (v143), and **Windows SDK 10.0.22621.0**. Install Git, Python 3 and PowerShell 7. Then, from an elevated PowerShell session at the repository root:
 
 ```powershell
 python scripts/validate.py
 ./scripts/build-appx.ps1 -BuildNumber 1
 ```
 
-Output: `artifacts/package/`. Logs: `artifacts/logs/build.binlog`. Move previous package artifacts before another build; the script rejects a nonempty package directory to prevent stale packages from being uploaded. The original manifest is restored after building. The local script temporarily adds its development certificate to the current user's TrustedPeople store for signature verification and removes it afterward.
+Output: `artifacts/package/`. Logs: `artifacts/logs/build.binlog`. Move previous package artifacts before another build; the script rejects a nonempty package directory to prevent stale packages from being uploaded. The original manifest is restored after building. The local script temporarily adds its development certificate to the Local Machine TrustedPeople store for signature verification and removes it afterward.
 
 The project can also be opened directly at `src/Vita3K.UWP/Vita3K.UWP.vcxproj`. Only Release/x64 is configured. This small shell uses C++/CX for UWP activation and XAML status text. That is a bootstrap choice; it does not dictate the eventual emulator UI or the core's C++23 build configuration.
 

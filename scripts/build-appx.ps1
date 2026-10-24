@@ -31,8 +31,8 @@ try {
     & $signTool sign /fd SHA256 /s My /sha1 $cert.Thumbprint $appx[0].FullName
     if ($LASTEXITCODE -ne 0) { throw 'APPX signing failed.' }
     Export-Certificate -Cert $cert -FilePath "$packages/Development.cer" | Out-Null
-    # Trust only in the disposable build user store so signtool can validate the test signature.
-    Import-Certificate -FilePath "$packages/Development.cer" -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
+    # Trust only in the build machine's TrustedPeople store so signtool can validate the test signature.
+    Import-Certificate -FilePath "$packages/Development.cer" -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
     & $signTool verify /pa /v $appx[0].FullName
     if ($LASTEXITCODE -ne 0) { throw 'APPX signature verification failed.' }
     Copy-Item "$root/docs/INSTALL.md" "$packages/INSTALL.md"
@@ -49,7 +49,7 @@ try {
 } finally {
     [IO.File]::WriteAllText($manifestPath, $originalManifest)
     if ($cert) {
-        Remove-Item "Cert:\CurrentUser\TrustedPeople\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
+        Remove-Item "Cert:\LocalMachine\TrustedPeople\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
         Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue
     }
 }
