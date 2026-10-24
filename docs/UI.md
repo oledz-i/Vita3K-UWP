@@ -36,7 +36,7 @@ Four additional **original synthesized effects** complement the four music loops
 
 - **Focus:** gentle rising glass ping when a game card or setting gains focus
 - **Select:** brief two-tone confirmation on button presses and game cards
-- **Back:** falling soft cue when Xbox B / Escape / BrowserBack returns to a previous page
+- **Back:** falling soft cue when Xbox B / Escape returns to a previous page
 - **Shelf swipe:** airy descending cue at the end of a horizontal game-shelf scroll
 
 Choose **Settings → Interface sounds** to turn cues off or on, adjust their separate volume, or preview a selection cue. The sounds are independent of the home soundtrack and persist across launches. Xbox behavior needs hardware validation.
