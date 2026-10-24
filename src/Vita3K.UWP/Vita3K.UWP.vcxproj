@@ -40,10 +40,28 @@
       <WarningLevel>Level4</WarningLevel>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\\..\\..\\third_party\\vita3k\\mem\\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><GenerateWindowsMetadata>true</GenerateWindowsMetadata></Link>
+    <Link><SubSystem>Console</SubSystem><GenerateWindowsMetadata>true</GenerateWindowsMetadata><AdditionalDependencies>d3d12.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="main.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <CompileAsWinRT>true</CompileAsWinRT>
+    </ClCompile>
+    <ClCompile Include="D3D12Host.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="..\\..\\third_party\\vita3k\\mem\\src\\allocator.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D3D12Host.h" />
+    <ClInclude Include="..\\..\\third_party\\vita3k\\mem\\include\\mem\\allocator.h" />
+  </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
   <ItemGroup><Image Include="Assets\*.png" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
