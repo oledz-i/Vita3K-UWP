@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <cwctype>
 #include <string>
 #include <vector>
@@ -164,6 +165,12 @@ Button^ CatalogShell::Button(Platform::String^ label, bool highlighted) {
     button->Background = highlighted ? Solid(Accent()) : Solid(Card());
     button->Foreground = Solid(highlighted && theme_ != 3 ? Bg() :
                               (theme_ == 3 ? RgbColor(26, 48, 72) : Colors::White));
+    button->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        PlayCue(0);
+    });
+    button->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        PlayCue(1);
+    });
     return button;
 }
 StackPanel^ CatalogShell::Vertical(double spacing) {
@@ -196,6 +203,10 @@ CatalogShell::CatalogShell() {
         musicVolume_ = std::stod(Pref(L"music.volume", L"0.22")->Data());
     } catch (...) { musicVolume_ = 0.22; }
     musicVolume_ = std::max(0.0, std::min(1.0, musicVolume_));
+    uiSounds_ = !Pref(L"ui.sounds", L"1")->Equals(L"0");
+    try { uiSoundVolume_ = std::stod(Pref(L"ui.sound.volume", L"0.40")->Data()); }
+    catch (...) { uiSoundVolume_ = 0.40; }
+    uiSoundVolume_ = std::max(0.0, std::min(1.0, uiSoundVolume_));
 
     root_ = ref new Grid();
     root_->Background = Gradient(Bg(), Glow());
@@ -240,6 +251,17 @@ CatalogShell::CatalogShell() {
     musicPlayer_->IsHitTestVisible = false;
     Grid::SetRow(musicPlayer_, 2);
     root_->Children->Append(musicPlayer_);
+    for (unsigned cue = 0; cue < 4; ++cue) {
+        cuePlayers_[cue] = ref new MediaElement();
+        cuePlayers_[cue]->AutoPlay = false;
+        cuePlayers_[cue]->IsLooping = false;
+        cuePlayers_[cue]->Volume = uiSoundVolume_;
+        cuePlayers_[cue]->Width = 0;
+        cuePlayers_[cue]->Height = 0;
+        cuePlayers_[cue]->IsHitTestVisible = false;
+        Grid::SetRow(cuePlayers_[cue], 2);
+        root_->Children->Append(cuePlayers_[cue]);
+    }
 
     Content = root_;
     BuildNavigation();
@@ -248,6 +270,7 @@ CatalogShell::CatalogShell() {
     Loaded += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         if (bootstrapped_) return;
         bootstrapped_ = true;
+        PrepareCues();
         if (track_ > 0) {
             if (track_ == 5) PlayCustomMusic();
             else PlayBundledMusic(track_);
@@ -405,7 +428,11 @@ Button^ CatalogShell::MakeTile(size_t index) {
     inside->Children->Append(lower);
     imageBox->Child = inside;
     tile->Content = imageBox;
+    tile->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        PlayCue(0);
+    });
     tile->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
+        PlayCue(1);
         selectedGame_ = static_cast<int>(index);
         ShowPage(4);
     });
@@ -422,6 +449,18 @@ void CatalogShell::MakeShelf(Platform::String^ heading, const std::vector<size_t
     scroller->HorizontalScrollMode = ScrollMode::Enabled;
     scroller->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
     scroller->Content = shelf;
+    auto lastCell = std::make_shared<int>(0);
+    scroller->ViewChanged += ref new EventHandler<ScrollViewerViewChangedEventArgs^>(
+        [this, lastCell](Platform::Object^ sender, ScrollViewerViewChangedEventArgs^ event) {
+            if (event->IsIntermediate) return;
+            auto view = dynamic_cast<ScrollViewer^>(sender);
+            if (view == nullptr) return;
+            const int cell = static_cast<int>(view->HorizontalOffset / 150.0);
+            if (cell != *lastCell) {
+                *lastCell = cell;
+                PlayCue(3);
+            }
+        });
     content_->Children->Append(scroller);
 }
 void CatalogShell::Home() {
@@ -608,6 +647,37 @@ void CatalogShell::Settings() {
             SetVolume(e->NewValue / 100.0);
         });
     content_->Children->Append(volume);
+
+    Section(L"Interface sounds", L"Soft focus, confirmation, back and game-shelf swipe cues.");
+    auto soundRow = ref new StackPanel();
+    soundRow->Orientation = Orientation::Horizontal;
+    auto enabled = Button(uiSounds_ ? L"UI sounds: ON" : L"UI sounds: OFF", uiSounds_);
+    enabled->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        uiSounds_ = !uiSounds_;
+        SaveCueSettings();
+        Render();
+    });
+    soundRow->Children->Append(enabled);
+    auto preview = Button(L"Preview selection sound");
+    preview->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        PlayCue(1);
+    });
+    soundRow->Children->Append(preview);
+    content_->Children->Append(soundRow);
+    auto cueVolume = ref new Slider();
+    cueVolume->Minimum = 0;
+    cueVolume->Maximum = 100;
+    cueVolume->Value = uiSoundVolume_ * 100.0;
+    cueVolume->Width = 420;
+    cueVolume->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    cueVolume->ValueChanged += ref new RangeBaseValueChangedEventHandler(
+        [this](Platform::Object^, RangeBaseValueChangedEventArgs^ e) {
+            uiSoundVolume_ = std::max(0.0, std::min(1.0, e->NewValue / 100.0));
+            for (auto player : cuePlayers_) if (player != nullptr) player->Volume = uiSoundVolume_;
+            SaveCueSettings();
+        });
+    content_->Children->Append(Text(L"INTERFACE VOLUME", 14, true, true));
+    content_->Children->Append(cueVolume);
 
     Section(L"Storage and paths", L"Choose internal or external storage as Xbox UWP permits.");
     auto storage = Vertical();
@@ -1207,5 +1277,40 @@ void CatalogShell::PresentTestFrame() {
     }
     renderer_.DrawUploadTestFrame(output);
     rendererResult_->Text = StringOf(output);
+}
+
+void CatalogShell::SaveCueSettings() {
+    PutPref(L"ui.sounds", uiSounds_ ? L"1" : L"0");
+    PutPref(L"ui.sound.volume", StringOf(std::to_wstring(uiSoundVolume_)));
+}
+void CatalogShell::PlayCue(unsigned kind) {
+    if (!bootstrapped_ || !uiSounds_ || uiSoundVolume_ <= 0) return;
+    kind %= 4;
+    if (!cueReady_[kind] || cuePlayers_[kind] == nullptr) return;
+    // Dedicated player per cue means focus and confirm don't cut one another off.
+    cuePlayers_[kind]->Stop();
+    cuePlayers_[kind]->Play();
+}
+void CatalogShell::PrepareCues() {
+    for (unsigned kind = 0; kind < 4; ++kind) {
+        auto bytes = vita3k_uwp::GenerateInterfaceCue(kind);
+        auto buffer = ref new Platform::Array<unsigned char>(static_cast<unsigned>(bytes.size()));
+        std::memcpy(buffer->Data, bytes.data(), bytes.size());
+        cueStreams_[kind] = ref new InMemoryRandomAccessStream();
+        auto stream = cueStreams_[kind];
+        auto writer = ref new DataWriter(stream->GetOutputStreamAt(0));
+        writer->WriteBytes(buffer);
+        create_task(writer->StoreAsync()).then([this, writer, stream, kind](task<unsigned int> operation) {
+            try {
+                operation.get();
+                stream->Seek(0);
+                cuePlayers_[kind]->SetSource(stream, L"audio/wav");
+                cuePlayers_[kind]->Volume = uiSoundVolume_;
+                cueReady_[kind] = true;
+            } catch (Platform::Exception^) {
+                cueReady_[kind] = false;
+            }
+        }, task_continuation_context::use_current());
+    }
 }
 } // namespace Vita3KUWP
