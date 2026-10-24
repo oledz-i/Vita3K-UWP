@@ -3,6 +3,7 @@
 #include "CatalogShell.h"
 #include "MenuMusic.h"
 #include "SfoReader.h"
+#include "GameFormats.h"
 #include <mem/allocator.h>
 #include <windows.h>
 #include <algorithm>
@@ -71,10 +72,8 @@ Platform::String^ StableKey(Platform::String^ path) {
     return ref new Platform::String(buffer);
 }
 bool LooksLikeGameFile(StorageFile^ file) {
-    auto extension = file->FileType;
-    return extension->Equals(L".vpk") || extension->Equals(L".VPK") ||
-           extension->Equals(L".pkg") || extension->Equals(L".PKG") ||
-           extension->Equals(L".zip") || extension->Equals(L".ZIP");
+    return vita3k_uwp::ClassifyGameFile(std::wstring(file->Name->Data())) !=
+           vita3k_uwp::GameFormat::Unknown;
 }
 Platform::String^ PrettyFileName(Platform::String^ value) {
     std::wstring result(value->Data());
@@ -572,8 +571,15 @@ void CatalogShell::GameDetails() {
     auto actions = Vertical(4);
     actions->Width = 560;
     actions->Margin = Thickness(24, 0, 0, 0);
+    actions->Children->Append(Text(L"Source format: " + games_[index].sourceType, 20, true));
+    actions->Children->Append(Text(games_[index].validation, 16, false, true));
     actions->Children->Append(Text(L"Ready for your collection", 24, true));
     actions->Children->Append(Text(L"Game launching is unavailable until the full Vita3K CPU, kernel, firmware and GXM renderer have been integrated.", 17, false, true));
+    auto preflight = Button(L"Inspect game for launch readiness");
+    preflight->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+        InspectLaunch(index);
+    });
+    actions->Children->Append(preflight);
     auto custom = Button(L"Choose custom box art", true);
     custom->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
         ChooseCustomArtwork(index);
@@ -971,38 +977,116 @@ void CatalogShell::ChooseFirmware() {
 void CatalogShell::ScanGames() {
     auto access = StorageApplicationPermissions::FutureAccessList;
     if (!access->ContainsItem(L"vita-games")) {
-        SetStatus(L"Choose a game folder to populate your library.");
+        SetStatus(L"Select a folder containing your Vita VPK, ZIP, PKG, VCI or extracted games.");
         return;
     }
-    SetStatus(L"Scanning local game files (up to 300 top-level items)...");
+    SetStatus(L"Scanning up to 300 entries and checking supported Vita source formats...");
     create_task(access->GetFolderAsync(L"vita-games")).then(
         [](StorageFolder^ folder) {
             return create_task(folder->GetItemsAsync(0, 300));
         }).then([this](task<Windows::Foundation::Collections::IVectorView<IStorageItem^>^> work) {
             try {
                 auto items = work.get();
+                ++libraryRevision_;
+                const unsigned revision = libraryRevision_;
                 games_.clear();
                 for (auto item : items) {
-                    const bool folder = item->IsOfType(StorageItemTypes::Folder);
-                    if (!folder && !LooksLikeGameFile(safe_cast<StorageFile^>(item))) continue;
+                    const bool directory = item->IsOfType(StorageItemTypes::Folder);
+                    auto file = directory ? nullptr : safe_cast<StorageFile^>(item);
+                    const auto format = directory ? vita3k_uwp::GameFormat::GameFolder :
+                        vita3k_uwp::ClassifyGameFile(std::wstring(item->Name->Data()));
+                    if (format == vita3k_uwp::GameFormat::Unknown) continue;
                     LibraryGame game;
-                    game.name = folder ? item->Name : PrettyFileName(item->Name);
+                    game.name = directory ? item->Name : PrettyFileName(item->Name);
                     game.key = StableKey(item->Path);
-                    game.sourceType = folder ? L"GAME FOLDER" : L"ARCHIVE";
-                    game.directory = folder ? safe_cast<StorageFolder^>(item) : nullptr;
+                    game.sourceType = ref new Platform::String(vita3k_uwp::GameFormatLabel(format));
+                    game.format = format;
+                    game.validation = directory ? L"Checking for eboot.bin in game folder..." :
+                        L"Checking file signature...";
+                    game.directory = directory ? safe_cast<StorageFolder^>(item) : nullptr;
+                    game.file = file;
                     game.icon = nullptr;
                     games_.push_back(game);
                 }
                 SetStatus(StringOf(std::to_wstring(games_.size())) +
-                    L" library candidates found. Checking readable Vita metadata...");
+                    L" Vita-format candidates found. Checking game headers...");
                 Render();
                 for (size_t i = 0; i < games_.size(); ++i) {
-                    if (games_[i].directory != nullptr) ReadSfo(i, games_[i].directory);
+                    if (games_[i].directory != nullptr) {
+                        CheckGameFolder(i, revision);
+                        ReadSfo(i, games_[i].directory);
+                    } else {
+                        CheckGameFile(i, revision);
+                    }
                 }
             } catch (Platform::Exception^ e) {
-                SetStatus(L"Unable to scan game directory: " + e->Message);
+                SetStatus(L"Unable to scan Vita library: " + e->Message);
             }
         }, task_continuation_context::use_current());
+}
+void CatalogShell::CheckGameFolder(size_t index, unsigned revision) {
+    if (index >= games_.size() || revision != libraryRevision_) return;
+    auto folder = games_[index].directory;
+    if (folder == nullptr) return;
+    create_task(folder->GetFileAsync(L"eboot.bin")).then(
+        [this,index,revision](task<StorageFile^> work) {
+            if (revision != libraryRevision_ || index >= games_.size()) return;
+            try {
+                games_[index].file = work.get();
+                games_[index].validation = L"EBOOT.BIN present. Checking executable format...";
+                CheckGameFile(index, revision);
+            } catch (Platform::Exception^) {
+                games_[index].validation =
+                    L"Not an extracted Vita game root: eboot.bin is missing.";
+                Render();
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::CheckGameFile(size_t index, unsigned revision) {
+    if (revision != libraryRevision_ || index >= games_.size()) return;
+    auto file = games_[index].file;
+    if (file == nullptr) return;
+    const auto format = games_[index].format == vita3k_uwp::GameFormat::GameFolder ?
+        vita3k_uwp::GameFormat::ExecutableBin : games_[index].format;
+    // Read only a small header; never load an entire multi-gigabyte commercial PKG.
+    create_task(file->OpenAsync(FileAccessMode::Read)).then(
+        [this,index,revision,format](IRandomAccessStream^ stream) {
+            const auto bytes = static_cast<unsigned>(
+                std::min<std::uint64_t>(stream->Size, 64));
+            auto reader = ref new DataReader(stream->GetInputStreamAt(0));
+            return create_task(reader->LoadAsync(bytes)).then(
+                [this,index,revision,format,reader](unsigned loaded) {
+                    if (revision != libraryRevision_ || index >= games_.size()) return;
+                    auto buffer = ref new Platform::Array<unsigned char>(loaded);
+                    if (loaded > 0) reader->ReadBytes(buffer);
+                    const auto check = vita3k_uwp::CheckGameHeader(
+                        format, buffer->Data, static_cast<size_t>(loaded));
+                    std::wstring diagnostic;
+                    for (const char* p = check.diagnostic; *p; ++p)
+                        diagnostic.push_back(static_cast<wchar_t>(*p));
+                    games_[index].validation = StringOf(diagnostic);
+                    Render();
+                });
+        }).then([this,index,revision](task<void> work) {
+            try { work.get(); }
+            catch (Platform::Exception^ error) {
+                if (revision != libraryRevision_ || index >= games_.size()) return;
+                games_[index].validation = L"Unable to inspect game header: " + error->Message;
+                Render();
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::InspectLaunch(size_t index) {
+    if (index >= games_.size()) return;
+    PlayCue(1);
+    // This is a real source-file preflight, not an emulated boot or game process.
+    if (games_[index].file == nullptr) {
+        SetStatus(L"Boot preflight: game executable is missing or unreadable.");
+        return;
+    }
+    SetStatus(L"Input preflight: " + games_[index].validation +
+        L". Game boot is blocked: Dynarmic CPU, Vita kernel, executable loader "
+        L"and GXM renderer are not integrated in this UWP build.");
 }
 void CatalogShell::ReadSfo(size_t index, StorageFolder^ gameFolder) {
     create_task(gameFolder->GetFolderAsync(L"sce_sys")).then(
