@@ -2,6 +2,7 @@
 // Portable validation of metadata parsing and original generated audio.
 #include "../src/Vita3K.UWP/MenuMusic.h"
 #include "../src/Vita3K.UWP/SfoReader.h"
+#include "../src/Vita3K.UWP/GameFormats.h"
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -34,6 +35,43 @@ int main() {
         }
     }
 
+    for (unsigned cue = 0; cue < 4; ++cue) {
+        const auto wave = vita3k_uwp::GenerateInterfaceCue(cue);
+        assert(wave.size() > 44 + 500 && wave.size() < 44 + 22050);
+        assert(std::memcmp(wave.data(), "RIFF", 4) == 0);
+        assert(std::memcmp(wave.data() + 8, "WAVEfmt ", 8) == 0);
+        assert(std::memcmp(wave.data() + 36, "data", 4) == 0);
+        if (cue > 0) assert(wave != vita3k_uwp::GenerateInterfaceCue(0));
+    }
+
+    using vita3k_uwp::ClassifyGameFile;
+    using vita3k_uwp::CheckGameHeader;
+    using vita3k_uwp::FileStatus;
+    using vita3k_uwp::GameFormat;
+    assert(ClassifyGameFile(L"Homebrew.VPK") == GameFormat::Vpk);
+    assert(ClassifyGameFile(L"title.zip") == GameFormat::Zip);
+    assert(ClassifyGameFile(L"PCSE12345.PKG") == GameFormat::Pkg);
+    assert(ClassifyGameFile(L"cartridge.VCI") == GameFormat::Vci);
+    assert(ClassifyGameFile(L"eboot.bin") == GameFormat::ExecutableBin);
+    assert(ClassifyGameFile(L"random.bin") == GameFormat::Unknown);
+    assert(ClassifyGameFile(L"game.iso") == GameFormat::Unknown);
+
+    const std::uint8_t archive[] = {0x50, 0x4b, 0x03, 0x04};
+    const std::uint8_t pkg[] = {0x7f, 'P', 'K', 'G'};
+    const std::uint8_t invalid[] = {0, 0, 0, 0};
+    const std::uint8_t self[] = {'S', 'C', 'E', 0};
+    std::uint8_t elf[32] = {0x7f, 'E', 'L', 'F', 1, 1};
+    elf[18] = 40;  // ELF EM_ARM little-endian
+    assert(CheckGameHeader(GameFormat::Vpk, archive, 4).status == FileStatus::ValidHeader);
+    assert(CheckGameHeader(GameFormat::Zip, archive, 4).status == FileStatus::ValidHeader);
+    assert(CheckGameHeader(GameFormat::Pkg, pkg, 4).status == FileStatus::NeedsLicense);
+    assert(CheckGameHeader(GameFormat::Vci, archive, 4).status == FileStatus::NeedsInspection);
+    assert(CheckGameHeader(GameFormat::Vpk, invalid, 4).status == FileStatus::InvalidHeader);
+    assert(CheckGameHeader(GameFormat::Pkg, invalid, 4).status == FileStatus::InvalidHeader);
+    assert(CheckGameHeader(GameFormat::ExecutableBin, self, 4).status == FileStatus::EncryptedExecutable);
+    assert(CheckGameHeader(GameFormat::ExecutableBin, elf, sizeof(elf)).status == FileStatus::ValidHeader);
+    assert(CheckGameHeader(GameFormat::ExecutableBin, invalid, 4).status == FileStatus::InvalidHeader);
+
     // Build one minimal valid PSF with TITLE and TITLE_ID.
     std::vector<std::uint8_t> sfo(128, 0);
     write32(sfo, 0, 0x46535000);
@@ -60,5 +98,5 @@ int main() {
     assert(info.title.empty());
     assert(info.titleId.empty());
 
-    std::cout << "Vita SFO parsing and all four original soundtracks: PASS\n";
+    std::cout << "Vita format checks, SFO parsing, 4 soundtracks and 4 UI cues: PASS\n";
 }
