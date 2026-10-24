@@ -1,0 +1,18 @@
+{
+  "primary_upstream": {
+    "repository": "https://github.com/Vita3K/Vita3K.git",
+    "commit": "fa296cc043742692ea3a51ff0a82e5683b201f72"
+  },
+  "libretro_candidate": {
+    "repository": "https://github.com/WizzardSK/vita3k-libretro.git",
+    "branch": "libretro",
+    "commit": "ab4891a3f53a22264f88233a3238f0e887104cb3",
+    "status": "desktop-core-source-only; UWP port unproven"
+  },
+  "vulkan_on_d3d12": {
+    "project": "Mesa Dozen (dzn)",
+    "reference": "https://docs.mesa3d.org/",
+    "status": "Vulkan-over-D3D12 driver confirmed on Windows; Xbox UWP not verified"
+  },
+  "security": "No Sony firmware, game data, license files, private build keys, or downloaded executable DLLs vendored"
+}
