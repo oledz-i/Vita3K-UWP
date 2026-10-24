@@ -602,6 +602,19 @@ void CatalogShell::GameDetails() {
         InspectLaunch(index);
     });
     actions->Children->Append(preflight);
+    if (games_[index].format == vita3k_uwp::GameFormat::Pkg) {
+        auto licenseToken = L"vita-license-" + games_[index].key;
+        const bool hasLicense = StorageApplicationPermissions::FutureAccessList->ContainsItem(licenseToken);
+        actions->Children->Append(Text(hasLicense ?
+            L"PKG license file selected. Decryption not available until the core is linked." :
+            L"PKG content usually requires its matching license from a legitimately owned Vita game.",
+            15, false, true));
+        auto license = Button(L"Choose matching owned PKG license file");
+        license->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+            ChooseLicenseForGame(index);
+        });
+        actions->Children->Append(license);
+    }
     auto custom = Button(L"Choose custom box art", true);
     custom->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
         ChooseCustomArtwork(index);
@@ -1103,12 +1116,43 @@ void CatalogShell::CheckGameFile(size_t index, unsigned revision) {
             }
         }, task_continuation_context::use_current());
 }
+
+void CatalogShell::ChooseLicenseForGame(size_t index) {
+    if (index >= games_.size() || games_[index].format != vita3k_uwp::GameFormat::Pkg) return;
+    const auto title = games_[index].name;
+    const auto token = L"vita-license-" + games_[index].key;
+    auto picker = ref new FileOpenPicker();
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+    picker->FileTypeFilter->Append(L".rif");
+    picker->FileTypeFilter->Append(L".zrif");
+    picker->FileTypeFilter->Append(L".bin");
+    create_task(picker->PickSingleFileAsync()).then(
+        [this,token,title](task<StorageFile^> work) {
+            try {
+                auto file = work.get();
+                if (file == nullptr) return;
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(token, file);
+                SetStatus(L"License file access saved for " + title +
+                    L". PKG installation and decryption are not implemented.");
+                Render();
+            } catch (Platform::Exception^ error) {
+                SetStatus(L"Could not select PKG license: " + error->Message);
+            }
+        }, task_continuation_context::use_current());
+}
 void CatalogShell::InspectLaunch(size_t index) {
     if (index >= games_.size()) return;
     PlayCue(1);
     // This is a real source-file preflight, not an emulated boot or game process.
     if (games_[index].file == nullptr) {
         SetStatus(L"Boot preflight: game executable is missing or unreadable.");
+        return;
+    }
+    if (games_[index].format == vita3k_uwp::GameFormat::Pkg &&
+        !StorageApplicationPermissions::FutureAccessList->ContainsItem(
+            L"vita-license-" + games_[index].key)) {
+        SetStatus(L"PKG needs the title's matching legitimate license. "
+            L"The Vita3K CPU, installer, kernel and GXM renderer are still missing.");
         return;
     }
     SetStatus(L"Input preflight: " + games_[index].validation +
