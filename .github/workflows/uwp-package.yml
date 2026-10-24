@@ -27,6 +27,14 @@ jobs:
             third_party/vita3k/mem/src/allocator.cpp \
             -o upstream_allocator_smoke
           ./upstream_allocator_smoke
+      - name: Validate Vita metadata parser and menu soundtrack generation
+        run: |
+          g++ -std=c++20 -Wall -Wextra -pedantic \
+            tests/catalog_native_smoke.cpp \
+            src/Vita3K.UWP/SfoReader.cpp \
+            src/Vita3K.UWP/MenuMusic.cpp \
+            -o catalog_native_smoke
+          ./catalog_native_smoke
   package:
     name: Build x64 development APPX
     runs-on: windows-2022
