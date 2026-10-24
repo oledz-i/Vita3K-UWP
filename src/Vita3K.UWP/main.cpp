@@ -3,6 +3,9 @@
 // Selecting firmware does NOT install it or imply the Vita3K core is present.
 #include <collection.h>
 #include <ppltasks.h>
+#include <mem/allocator.h>
+#include "D3D12Host.h"
+#include <string>
 #include <windows.h>
 #include <string>
 
@@ -17,6 +20,7 @@ using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Media;
 
 namespace Vita3KUWP {
+static D3D12Host nativeRenderer;
 public ref class App sealed : Application {
 private:
     TextBlock^ gamesPath_;
@@ -24,6 +28,8 @@ private:
     TextBlock^ feedback_;
     TextBlock^ libraryStatus_;
     TextBlock^ memoryStatus_;
+    TextBlock^ coreStatus_;
+    TextBlock^ rendererStatus_;
     StackPanel^ libraryEntries_;
 
     TextBlock^ MakeText(Platform::String^ text, double size) {
@@ -43,6 +49,42 @@ private:
         button->MinHeight = 52;
         button->MinWidth = 320;
         return button;
+    }
+
+    void CheckUpstreamMemoryCore() {
+        // This executes a real, unmodified Vita3K memory allocator imported from
+        // the pinned upstream revision. It does not initialize the full emulator.
+        BitmapAllocator bitmap(64);
+        std::uint32_t count = 4;
+        const int first = bitmap.allocate_from(0, count);
+        const int freeAfterFirst = bitmap.free_slot_count(0, 64);
+        const int second = bitmap.allocate_at(8, 2);
+        bitmap.free(0, 4);
+        const int freeAfterRelease = bitmap.free_slot_count(0, 64);
+        const bool passed = first == 0 && count == 4 &&
+            freeAfterFirst == 60 && second == 0 && freeAfterRelease == 62;
+        coreStatus_->Text = passed
+            ? "Vita3K upstream memory allocator: PASS (actual upstream code executed)"
+            : "Vita3K upstream memory allocator: FAIL (core integration blocked)";
+    }
+
+    void BootRenderer(SwapChainPanel^ surface) {
+        if (rendererStatus_ == nullptr) return;
+        std::wstring result;
+        const bool created = nativeRenderer.Initialize(
+            reinterpret_cast<IUnknown*>(surface), 960, 544, result);
+        if (created) {
+            std::wstring frameResult;
+            const bool presented = nativeRenderer.DrawTestFrame(frameResult);
+            rendererStatus_->Text = ref new Platform::String(
+                (std::wstring(L"D3D12: ") + frameResult).c_str());
+            if (!presented) {
+                feedback_->Text = "Native renderer failed to present; check the result above.";
+            }
+        } else {
+            rendererStatus_->Text = ref new Platform::String(
+                (std::wstring(L"D3D12 initialization error: ") + result).c_str());
+        }
     }
 
     void ProbeMemory() {
@@ -173,12 +215,13 @@ protected:
         panel->Margin = Thickness(64);
         panel->MaxWidth = 1000;
         panel->Children->Append(MakeText("Vita3K UWP", 44));
-        auto phase = MakeText("PRE-ALPHA  /  STORAGE SETUP", 20);
+        auto phase = MakeText("PRE-ALPHA  /  NATIVE CORE + D3D12 INTEGRATION", 20);
         phase->Foreground = ref new SolidColorBrush(Colors::DeepSkyBlue);
         panel->Children->Append(phase);
         panel->Children->Append(MakeText(
-            "The emulator core and GPU renderer are not integrated yet. Games cannot boot in this build. "
-            "These controls prepare persistent file access for future integration.", 21));
+            "Genuine Vita3K memory code and native D3D12 presentation are now linked. "
+            "The complete Vita3K CPU/kernel, Vita GXM renderer, firmware installation and game launching "
+            "are not integrated. Games cannot boot in this build.", 21));
 
         panel->Children->Append(MakeText("Game library", 30));
         panel->Children->Append(MakeText(
@@ -212,6 +255,39 @@ protected:
         memoryStatus_ = MakeText("Memory probe not run.", 18);
         panel->Children->Append(memoryStatus_);
 
+        panel->Children->Append(MakeText("Upstream core integration", 30));
+        panel->Children->Append(MakeText(
+            "Vita3K's original bitmap allocator is compiled into this Xbox UWP package. "
+            "This test runs allocation and release using the upstream implementation. "
+            "Dynarmic CPU, kernel, firmware services and full emulator initialization remain pending.", 18));
+        auto coreButton = MakeButton("Run real Vita3K memory component");
+        coreButton->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+            CheckUpstreamMemoryCore();
+        });
+        panel->Children->Append(coreButton);
+        coreStatus_ = MakeText("Core component has not been exercised.", 18);
+        panel->Children->Append(coreStatus_);
+
+        panel->Children->Append(MakeText("D3D12 graphics bootstrap", 30));
+        panel->Children->Append(MakeText(
+            "The preview below is an actual Direct3D 12 GPU clear, not a rendered PS Vita frame. "
+            "Its job is to prove a working native presentation path before GXM integration.", 18));
+        auto surface = ref new SwapChainPanel();
+        surface->Width = 960;
+        surface->Height = 544;
+        surface->Margin = Thickness(0, 12, 0, 12);
+        panel->Children->Append(surface);
+        rendererStatus_ = MakeText("Waiting for D3D12 initialization...", 18);
+        panel->Children->Append(rendererStatus_);
+        surface->Loaded += ref new RoutedEventHandler([this, surface](Platform::Object^, RoutedEventArgs^) {
+            BootRenderer(surface);
+        });
+        auto retry = MakeButton("Retry D3D12 presentation");
+        retry->Click += ref new RoutedEventHandler([this, surface](Platform::Object^, RoutedEventArgs^) {
+            BootRenderer(surface);
+        });
+        panel->Children->Append(retry);
+
         panel->Children->Append(MakeText("Firmware", 30));
         panel->Children->Append(MakeText(
             "Obtain the official PS Vita system firmware from Sony using a separate device, "
@@ -227,8 +303,8 @@ protected:
         feedback_ = MakeText("Ready for storage setup.", 18);
         panel->Children->Append(feedback_);
         panel->Children->Append(MakeText(
-            "Next engineering gates: core dependency build, UWP executable-memory diagnostics, "
-            "D3D12 rendering, then a homebrew boot test. No commercial-game compatibility is claimed.", 17));
+            "Next engineering gates: Dynarmic and Vita3K kernel linking, Vita GXM graphics translation "
+            "to D3D12, firmware services, then a homebrew boot test. No game compatibility is claimed.", 17));
         auto scroll = ref new ScrollViewer();
         scroll->Content = panel;
         scroll->Background = ref new SolidColorBrush(ColorHelper::FromArgb(255, 12, 18, 30));
