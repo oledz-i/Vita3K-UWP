@@ -36,6 +36,19 @@ In a development build that does **not** contain a native UWP Vita3K DLL, the ne
 
 Upstream Mesa information: https://docs.mesa3d.org/ . Khronos lists Dozen as Vulkan-on-DX12: https://dev.vulkan.org/porting . UWP DLL requirements: https://learn.microsoft.com/en-us/cpp/porting/how-to-use-existing-cpp-code-in-a-universal-windows-platform-app .
 
+## First real UWP compilation result and JIT evidence
+
+The first complete source checkout for the pinned Vita3K libretro fork **succeeded** on Windows CI. Its initial Windows Store CMake attempt failed **before any Vita CPU or renderer source was built** because vcpkg marked `boost-filesystem` as `!uwp`. This is a real dependency restriction, not a Vita3K runtime crash. The follow-up CI experiment explicitly passes `VCPKG_INSTALL_OPTIONS=--allow-unsupported`; an unsupported package must still compile and function to count as progress. A successful Windows desktop build or forced vcpkg install is **not** evidence of Xbox compatibility.
+
+From the working UWP Dynarmic port in `katakishi0/eden-xbox`, two important Xbox preconditions emerged:
+
+- Declare `<Capability Name="codeGeneration" />` in the APPX manifest. The integration build now does so.
+- Use UWP `VirtualAllocFromApp` / `VirtualProtectFromApp` with writable memory becoming readable+executable (W^X); do **not** assume desktop `VirtualProtect` works in an Xbox sandbox.
+
+The **Developer** page now includes an **on-demand generated x64 machine-code test**: it allocates a page using the *FromApp* APIs, emits the small native x64 `mov eax,42; ret` function, changes the page to RX and calls the machine code to see whether it returns 42. This runs **only** if the user explicitly selects the test. It is not Vita guest code or Dynarmic, and actual Xbox execution has not been observed yet. An Xbox code-integrity denial could terminate the app; begin with the nonexecuting memory test.
+
+A separate precedent for Mesa-on-Xbox exists in the `katakishi0/eden-xbox` and `XboxEmuPorts/Cemu-UWP` codebases. Investigate the Vita3K libretro OpenGL backend over Mesa Gallium D3D12 **as a fallback to Dozen**, rather than presuming a Vulkan ICD is already available.
+
 ## Remaining technical gates
 
 1. **Compile actual Vita3K for UWP:** ensure SDL3, Dynarmic's JIT and allocator, emulated kernel, FFmpeg, libcurl, OpenSSL, shader libraries and the Vita filesystem build and link for Xbox's Windows Store API family.
