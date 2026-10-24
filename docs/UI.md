@@ -7,9 +7,9 @@ The frontend on the `core-integration` branch is a **real native UWP UI**, rathe
 | Page | What it does |
 | --- | --- |
 | Discover | Cinematic welcome banner, library shelves, quick actions |
-| Library | Search local entries, rescan a selected game folder, find missing cover art |
-| Game details | Preview a candidate title, replace its cover art, request an exact SteamGridDB match |
-| Settings | Choose theme, menu soundtrack, volume, folder, firmware selection, artwork API key |
+| Library | Search local entries, add individual game files, scan an accessible folder, verify file headers and find missing cover art |
+| Game details | Preview detected format and validation result, select an owned PKG license, manage cover art and inspect boot blockers |
+| Settings | Change theme, music, UI click/focus sounds, sound effect volume, storage, firmware selection and art key |
 | Developer | Run real Vita3K bitmap allocator tests and D3D12 clear / BGRA upload |
 
 No game shown in the library can be booted by this build. The app does not contain the Dynarmic CPU, Vita kernel and firmware installer, GXM renderer, or shader translator needed to launch software.
@@ -30,11 +30,24 @@ Colors are saved locally and applied immediately. The UI uses the Windows **Sego
 
 **Settings → Home menu soundtrack** offers four original, programmatically generated ambient loops: **Ambient Drift**, **Neon Pulse**, **Stardust**, and **Tidal Blue**. They contain no copyrighted console themes or external soundtrack files. You can also select **Off** or supply your own supported MP3/WAV/M4A file using the Xbox picker. Set a separate menu music volume. The custom file uses UWP's FutureAccessList to retain permission where supported.
 
+## Navigation audio and Xbox B button
+
+Four additional **original synthesized effects** complement the four music loops:
+
+- **Focus:** gentle rising glass ping when a game card or setting gains focus
+- **Select:** brief two-tone confirmation on button presses and game cards
+- **Back:** falling soft cue when Xbox B / Escape / BrowserBack returns to a previous page
+- **Shelf swipe:** airy descending cue at the end of a horizontal game-shelf scroll
+
+Choose **Settings → Interface sounds** to turn cues off or on, adjust their separate volume, or preview a selection cue. The sounds are independent of the home soundtrack and persist across launches. Xbox behavior needs hardware validation.
+
 ## Game discovery and metadata
 
-Choose a folder using **Settings → Storage and paths** or the Discover shortcut. The app remembers the granted folder access (Xbox UWP picker limitations and attached drive visibility vary). A scan reads up to 300 top-level entries: `.vpk`, `.pkg`, `.zip`, and subfolders. An extracted title's `sce_sys/param.sfo` is read when present to recover the title, and its `sce_sys/icon0.png` can be shown as a local icon fallback. Folder entries are *candidates*; the scan cannot validate a complete game or launch anything.
+Choose a folder using **Settings → Storage and paths** or the Discover shortcut. The app remembers the granted folder access (Xbox UWP picker limitations and attached drive visibility vary). A scan reads up to 300 top-level entries: **`.vpk`, `.zip`, `.pkg`, `.vci`, `eboot.bin`, and subfolders**. Alternatively, **Add Vita file** from Discover or Library opens a file picker and remembers up to 64 individual files. Selected files are stored using Xbox UWP access tokens. Sources on disconnected USB/external drives will not load until available again. An extracted title's `sce_sys/param.sfo` is read when present to recover the title, and its `sce_sys/icon0.png` can be shown as a local icon fallback. Folder entries are *candidates*: the app checks for `eboot.bin` and validates the first 64 bytes of that executable. The app checks ZIP/VPK and Sony PKG signatures, identifies ARM ELF or Sony SELF headers, and marks VCI images for further inspection by the missing upstream VCI parser. It does **not** decode, decompress, decrypt, install, or execute any game. A recognized file extension is not proof of valid game content.
 
-A future version should handle deeper trees, Vita title IDs within package archives, corrupted metadata, installed content discovery, and robust migration of library paths.
+**PKG:** The Game Details page can save permission to an owner-supplied `.rif`, `.zrif` or `work.bin` license file, but has no decryption or license-validation engine. **Commercial games:** The original Vita3K emulator can run some legitimately dumped commercial titles, but this UWP port cannot launch any titles yet. Older Vitamin VPK dumps are not supported by upstream Vita3K.
+
+A future version must install package contents into a Vita filesystem, parse full VCI/archive structures, handle nested directories, map SELF and ELF modules, integrate Dynarmic CPU/kernel and GPU subsystems, and then add reliable per-title compatibility checks.
 
 ## Artwork
 
@@ -67,11 +80,11 @@ The full upstream settings list will only become effective once those subsystems
 
 ## Test checklist
 
-- Confirm Discover, Library, Settings and Developer pages can be navigated using an Xbox controller.
+- Confirm Discover, Library, Settings and Developer pages can be navigated using an Xbox controller. Press **B** to go back.
 - Select all five themes; restart to confirm persistence.
-- Switch all four music loops; change volume and disable sound.
+- Switch all four music loops, then test focus/click/back/shelf sounds, cue volume, and the UI sounds toggle.
 - Select storage on the internal drive or attached storage that the picker exposes.
-- Scan a directory with extracted Vita title metadata and `.vpk` packages.
+- Scan extracted `sce_sys/param.sfo` / `eboot.bin` game directories and test `.vpk`, `.zip`, `.pkg` and `.vci` candidates. Try adding an individual file.
 - Select your own cover, and optionally try SteamGridDB with your key.
 - Run the memory component test and D3D12 clear/framebuffer preview.
 - Send the source commit, package version, Xbox model and exact failures; avoid exposing secrets or private file paths.
