@@ -38,13 +38,13 @@ if (!$vs) { throw 'Visual Studio C++ tools unavailable' }
 $vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvarsall.bat'
 $env:PATH = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer;$env:PATH"
 $env:VSLANG = "1033"
-foreach ($line in (& cmd.exe /c "`"`"$vcvars`" x64 uwp >nul && set`"")) {
+foreach ($line in (& cmd.exe /c "`"$vcvars`" x64 uwp >nul && set")) {
     if ($line -match "^([^=]+)=(.*)$") { Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2] }
 }
 if ($env:LIB -notmatch 'x64\\store') {
     throw 'Store CRT not active; refusing misleading desktop Dozen build'
 }
-$storeLib = (Join-Path $env:VCToolsInstallDir 'lib/x64/store').Replace('\\','/')
+$storeLib = (Join-Path $env:VCToolsInstallDir 'lib/x64/store').Replace('\','/')
 if (!(Test-Path $storeLib)) { throw 'UWP Store CRT libraries missing' }
 $env:PATH = "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$env:PATH"
 
@@ -56,7 +56,7 @@ $meson = Join-Path $venv 'Scripts/meson.exe'
 $ninja = Join-Path $venv 'Scripts/ninja.exe'
 
 $cross = Join-Path $work 'uwp-x64.ini'
-$lib = $storeLib.Replace('\\','/')
+$lib = $storeLib.Replace('\','/')
 $crossText = @"
 [binaries]
 c = 'cl'
