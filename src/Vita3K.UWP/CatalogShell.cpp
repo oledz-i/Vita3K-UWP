@@ -541,3 +541,176 @@ void CatalogShell::Render() {
     default: Home(); break;
     }
 }
+
+void CatalogShell::Settings() {
+    Banner(L"PERSONALIZE YOUR EXPERIENCE", L"Your Vita. Your atmosphere.",
+        L"Change the entire interface, choose a menu soundtrack, manage folders and artwork.");
+    Section(L"Appearance", L"Five visual palettes with distinct accent colors.");
+    const wchar_t* styles[] = {
+        L"ONYX / Violet night", L"AURORA / Teal haze", L"EMBER / Warm cinema",
+        L"GLACIER / Arctic daylight", L"ORBIT / Cosmic purple"
+    };
+    auto colors = ref new StackPanel();
+    colors->Orientation = Orientation::Horizontal;
+    for (int i = 0; i < 5; ++i) {
+        auto b = Button(ref new Platform::String(styles[i]), theme_ == i);
+        b->MinHeight = 74;
+        b->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) { SaveTheme(i); });
+        colors->Children->Append(b);
+    }
+    content_->Children->Append(colors);
+    Section(L"Home menu soundtrack", L"Original loopable music, your own audio, or silence.");
+    const wchar_t* names[] = {
+        L"Off", L"Ambient Drift", L"Neon Pulse", L"Stardust", L"Tidal Blue", L"Custom track"
+    };
+    auto music = ref new StackPanel();
+    music->Orientation = Orientation::Horizontal;
+    for (int i = 0; i < 6; ++i) {
+        auto b = Button(ref new Platform::String(names[i]), track_ == i);
+        b->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) {
+            if (i == 5) PickCustomMusic();
+            else SetMusic(i);
+        });
+        music->Children->Append(b);
+    }
+    content_->Children->Append(music);
+    content_->Children->Append(Text(L"MUSIC VOLUME", 14, true, true));
+    auto volume = ref new Slider();
+    volume->Minimum = 0;
+    volume->Maximum = 100;
+    volume->Value = musicVolume_ * 100;
+    volume->Width = 420;
+    volume->HorizontalAlignment = HorizontalAlignment::Left;
+    volume->ValueChanged += ref new RangeBaseValueChangedEventHandler(
+        [this](Platform::Object^, RangeBaseValueChangedEventArgs^ e) {
+            SetVolume(e->NewValue / 100.0);
+        });
+    content_->Children->Append(volume);
+
+    Section(L"Storage and paths", L"Choose internal or external storage as Xbox UWP permits.");
+    auto storage = Vertical();
+    folderLabel_ = Text(L"Game library: not selected", 17, false, true);
+    storage->Children->Append(folderLabel_);
+    auto choose = Button(L"Choose game folder", true);
+    choose->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ChooseGameFolder();
+    });
+    storage->Children->Append(choose);
+    storage->Children->Append(Text(
+        L"Application data: " + ApplicationData::Current->LocalFolder->Path, 14, false, true));
+    firmwareLabel_ = Text(L"Firmware file: not selected", 17, false, true);
+    storage->Children->Append(firmwareLabel_);
+    storage->Children->Append(Text(
+        L"Obtain an official PS Vita update .PUP from Sony using another device, transfer "
+        L"it to accessible storage, and select it here. This saves your file selection "
+        L"but does not install firmware: the full emulator core is not integrated.", 15, false, true));
+    auto fw = Button(L"Choose official firmware .PUP");
+    fw->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ChooseFirmware();
+    });
+    storage->Children->Append(fw);
+    content_->Children->Append(Panel(storage));
+    Section(L"Game artwork", L"Use original cover images or bring in your own.");
+    auto art = Vertical();
+    art->Children->Append(Text(
+        L"SteamGridDB cover matching requires a personal API key. The search uses each "
+        L"game's title and only accepts an exact title match, to avoid mismatched artwork. "
+        L"If no match is available, your game keeps its themed cover.", 16, false, true));
+    auto password = ref new PasswordBox();
+    password->PlaceholderText = L"SteamGridDB API key (saved in Windows PasswordVault)";
+    password->Height = 48;
+    password->Width = 540;
+    password->HorizontalAlignment = HorizontalAlignment::Left;
+    art->Children->Append(password);
+    auto buttons = ref new StackPanel();
+    buttons->Orientation = Orientation::Horizontal;
+    auto save = Button(L"Save key", true);
+    save->Click += ref new RoutedEventHandler([this,password](Platform::Object^, RoutedEventArgs^) {
+        SaveApiKey(password->Password);
+        password->Password = L"";
+    });
+    buttons->Children->Append(save);
+    auto fetch = Button(L"Get missing covers");
+    fetch->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        FetchMissingArtwork();
+    });
+    buttons->Children->Append(fetch);
+    art->Children->Append(buttons);
+    art->Children->Append(Text(
+        ApiKey()->IsEmpty() ? L"No API key saved yet." : L"SteamGridDB API key saved.",
+        14, false, true));
+    art->Children->Append(Text(
+        L"Select a game card to import a custom PNG or JPEG. Custom artwork takes priority.",
+        14, false, true));
+    content_->Children->Append(Panel(art));
+
+    Section(L"Vita3K core settings", L"Full settings parity is planned, not simulated.");
+    auto advanced = Vertical();
+    advanced->Children->Append(Text(
+        L"CPU/Dynarmic, GPU backend, shader cache, filtering, render scale, anisotropy, "
+        L"VSync, language, controller remapping, rear touch, audio emulation, "
+        L"logging and game overrides require the Vita3K core.", 16, false, true));
+    advanced->Children->Append(Text(
+        L"These will become editable settings once they can actually affect game execution. "
+        L"The current active GPU path is D3D12 presentation only, not Vita GXM.", 15, false, true));
+    content_->Children->Append(Panel(advanced));
+    RestorePaths();
+}
+void CatalogShell::Diagnostics() {
+    Banner(L"UNDER THE HOOD", L"Developer laboratory.",
+        L"Real Vita3K memory code and native D3D12 presentation diagnostics.");
+    Section(L"Upstream Vita3K memory allocator");
+    auto core = Vertical();
+    core->Children->Append(Text(
+        L"This runs upstream bitmap allocation, reservation and release routines. "
+        L"It is not a Dynarmic emulator boot.", 16, false, true));
+    auto test = Button(L"Run real upstream memory test", true);
+    test->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ProbeCore();
+    });
+    core->Children->Append(test);
+    coreResult_ = Text(L"Not tested on this Xbox.", 17, true);
+    core->Children->Append(coreResult_);
+    content_->Children->Append(Panel(core));
+
+    Section(L"Virtual address space and JIT permissions");
+    auto memory = Vertical();
+    memory->Children->Append(Text(
+        L"Check read/write pages, RW-to-RX protection and a reserved 4 GiB guest address "
+        L"range. This does not execute generated ARM instructions.", 16, false, true));
+    auto probe = Button(L"Probe memory compatibility");
+    probe->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ProbeMemory();
+    });
+    memory->Children->Append(probe);
+    memoryResult_ = Text(L"Not tested on this Xbox.", 17, true);
+    memory->Children->Append(memoryResult_);
+    content_->Children->Append(Panel(memory));
+
+    Section(L"Direct3D 12 renderer");
+    auto graphics = Vertical();
+    graphics->Children->Append(Text(
+        L"This display uses a D3D12 device, command queue, swap chain and GPU upload. "
+        L"It cannot render PS Vita games until the GXM command and shader pipeline exists.",
+        16, false, true));
+    renderSurface_ = ref new SwapChainPanel();
+    renderSurface_->Width = 960;
+    renderSurface_->Height = 544;
+    renderSurface_->Margin = Thickness(0, 10, 0, 10);
+    graphics->Children->Append(renderSurface_);
+    rendererResult_ = Text(L"Renderer not initialized.", 16, true);
+    graphics->Children->Append(rendererResult_);
+    auto actions = ref new StackPanel();
+    actions->Orientation = Orientation::Horizontal;
+    auto initialize = Button(L"Initialize D3D12", true);
+    initialize->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { BootRenderer(); });
+    actions->Children->Append(initialize);
+    auto upload = Button(L"Present generated framebuffer");
+    upload->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { PresentTestFrame(); });
+    actions->Children->Append(upload);
+    graphics->Children->Append(actions);
+    content_->Children->Append(Panel(graphics));
+    renderSurface_->Loaded += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        BootRenderer();
+    });
+}
