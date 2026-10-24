@@ -473,6 +473,11 @@ void CatalogShell::Home() {
         ChooseGameFolder();
     });
     shortcuts->Children->Append(add);
+    auto chooseFile = Button(L"Add Vita file");
+    chooseFile->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ChooseGameFile();
+    });
+    shortcuts->Children->Append(chooseFile);
     auto browse = Button(L"Browse library");
     browse->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ShowPage(1);
@@ -534,6 +539,11 @@ void CatalogShell::Library() {
     auto choose = Button(L"Change library folder", true);
     choose->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseGameFolder(); });
     actions->Children->Append(choose);
+    auto importFile = Button(L"Add VPK / ZIP / PKG / VCI");
+    importFile->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ChooseGameFile();
+    });
+    actions->Children->Append(importFile);
     auto refresh = Button(L"Rescan games");
     refresh->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ScanGames(); });
     actions->Children->Append(refresh);
@@ -977,7 +987,11 @@ void CatalogShell::ChooseFirmware() {
 void CatalogShell::ScanGames() {
     auto access = StorageApplicationPermissions::FutureAccessList;
     if (!access->ContainsItem(L"vita-games")) {
-        SetStatus(L"Select a folder containing your Vita VPK, ZIP, PKG, VCI or extracted games.");
+        const auto revision = ++libraryRevision_;
+        games_.clear();
+        RestorePinnedGameFiles(revision);
+        Render();
+        SetStatus(L"Choose a folder or add individual Vita VPK, ZIP, PKG, VCI or eboot.bin files.");
         return;
     }
     SetStatus(L"Scanning up to 300 entries and checking supported Vita source formats...");
@@ -1019,6 +1033,7 @@ void CatalogShell::ScanGames() {
                         CheckGameFile(i, revision);
                     }
                 }
+                RestorePinnedGameFiles(revision);
             } catch (Platform::Exception^ e) {
                 SetStatus(L"Unable to scan Vita library: " + e->Message);
             }
@@ -1088,13 +1103,90 @@ void CatalogShell::InspectLaunch(size_t index) {
         L". Game boot is blocked: Dynarmic CPU, Vita kernel, executable loader "
         L"and GXM renderer are not integrated in this UWP build.");
 }
+
+void CatalogShell::ChooseGameFile() {
+    auto picker = ref new FileOpenPicker();
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+    picker->FileTypeFilter->Append(L".vpk");
+    picker->FileTypeFilter->Append(L".zip");
+    picker->FileTypeFilter->Append(L".pkg");
+    picker->FileTypeFilter->Append(L".vci");
+    picker->FileTypeFilter->Append(L".bin");
+    create_task(picker->PickSingleFileAsync()).then(
+        [this](task<StorageFile^> result) {
+            try {
+                auto file = result.get();
+                if (file == nullptr) return;
+                const auto type = vita3k_uwp::ClassifyGameFile(std::wstring(file->Name->Data()));
+                if (type == vita3k_uwp::GameFormat::Unknown) {
+                    SetStatus(L"Unsupported filename. Choose VPK, ZIP, PKG, VCI or eboot.bin.");
+                    return;
+                }
+                const auto countString = Pref(L"vita.file.count", L"0");
+                unsigned count = 0;
+                try { count = static_cast<unsigned>(std::stoul(countString->Data())); }
+                catch (...) { count = 0; }
+                if (count >= 64) {
+                    SetStatus(L"64 individually selected file slots used. Choose a containing folder.");
+                    return;
+                }
+                const auto token = L"vita-file-" + StringOf(std::to_wstring(count));
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(token, file);
+                PutPref(L"vita.file.count", StringOf(std::to_wstring(count + 1)));
+                SetStatus(L"Saved access to " + file->Name + L". Scanning the library...");
+                ScanGames();
+            } catch (Platform::Exception^ error) {
+                SetStatus(L"Failed to add game file: " + error->Message);
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::RestorePinnedGameFiles(unsigned revision) {
+    unsigned count = 0;
+    try { count = static_cast<unsigned>(std::stoul(Pref(L"vita.file.count", L"0")->Data())); }
+    catch (...) { count = 0; }
+    const auto access = StorageApplicationPermissions::FutureAccessList;
+    for (unsigned n = 0; n < std::min(count, 64u); ++n) {
+        const auto token = L"vita-file-" + StringOf(std::to_wstring(n));
+        if (!access->ContainsItem(token)) continue;
+        create_task(access->GetFileAsync(token)).then(
+            [this,revision](task<StorageFile^> work) {
+                if (revision != libraryRevision_) return;
+                try {
+                    auto file = work.get();
+                    if (file == nullptr) return;
+                    const auto format = vita3k_uwp::ClassifyGameFile(std::wstring(file->Name->Data()));
+                    if (format == vita3k_uwp::GameFormat::Unknown) return;
+                    const auto id = StableKey(file->Path);
+                    for (const auto& existing : games_) {
+                        if (existing.key->Equals(id)) return;
+                    }
+                    LibraryGame game;
+                    game.name = PrettyFileName(file->Name);
+                    game.key = id;
+                    game.sourceType = ref new Platform::String(vita3k_uwp::GameFormatLabel(format));
+                    game.format = format;
+                    game.validation = L"Checking selected file header...";
+                    game.directory = nullptr;
+                    game.file = file;
+                    game.icon = nullptr;
+                    games_.push_back(game);
+                    const size_t index = games_.size() - 1;
+                    CheckGameFile(index, revision);
+                    Render();
+                } catch (Platform::Exception^) {
+                    // A pinned file may be on a disconnected external drive.
+                }
+            }, task_continuation_context::use_current());
+    }
+}
 void CatalogShell::ReadSfo(size_t index, StorageFolder^ gameFolder) {
+    const unsigned revision = libraryRevision_;
     create_task(gameFolder->GetFolderAsync(L"sce_sys")).then(
-        [this,index](StorageFolder^ sys) {
+        [this,index,revision](StorageFolder^ sys) {
             create_task(sys->GetFileAsync(L"icon0.png")).then(
-                [this,index](task<StorageFile^> icon) {
+                [this,index,revision](task<StorageFile^> icon) {
                     try {
-                        if (index >= games_.size()) return;
+                        if (index >= games_.size() || revision != libraryRevision_) return;
                         games_[index].icon = icon.get();
                         Render();
                     } catch (Platform::Exception^) {}
@@ -1102,8 +1194,9 @@ void CatalogShell::ReadSfo(size_t index, StorageFolder^ gameFolder) {
             return create_task(sys->GetFileAsync(L"param.sfo"));
         }
     ).then([](StorageFile^ file) { return create_task(FileIO::ReadBufferAsync(file)); }
-    ).then([this,index](task<IBuffer^> work) {
+    ).then([this,index,revision](task<IBuffer^> work) {
         try {
+            if (revision != libraryRevision_) return;
             auto buffer = work.get();
             auto reader = DataReader::FromBuffer(buffer);
             auto bytes = ref new Platform::Array<unsigned char>(buffer->Length);
