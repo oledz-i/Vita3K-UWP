@@ -26,6 +26,11 @@ private:
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
     Windows::UI::Xaml::Controls::MediaElement^ musicPlayer_;
+    Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[4] = {};
+    Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[4] = {};
+    bool cueReady_[4] = {};
+    bool uiSounds_ = true;
+    double uiSoundVolume_ = 0.40;
     Windows::UI::Xaml::Controls::TextBlock^ status_;
     Windows::UI::Xaml::Controls::TextBlock^ folderLabel_;
     Windows::UI::Xaml::Controls::TextBlock^ firmwareLabel_;
@@ -81,6 +86,9 @@ private:
     void SaveTheme(int theme);
     void SetMusic(int track);
     void PlayBundledMusic(int track);
+    void PrepareCues();
+    void PlayCue(unsigned kind);
+    void SaveCueSettings();
     void PlayCustomMusic();
     void PickCustomMusic();
     void SetVolume(double volume);
