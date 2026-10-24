@@ -11,6 +11,22 @@ concurrency:
   group: uwp-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  upstream-memory-regression:
+    name: Execute pinned Vita3K allocator regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Compile and execute authentic Vita3K allocator
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror -pedantic \
+            -Ithird_party/vita3k/mem/include \
+            tests/upstream_allocator_smoke.cpp \
+            third_party/vita3k/mem/src/allocator.cpp \
+            -o upstream_allocator_smoke
+          ./upstream_allocator_smoke
   package:
     name: Build x64 development APPX
     runs-on: windows-2022
