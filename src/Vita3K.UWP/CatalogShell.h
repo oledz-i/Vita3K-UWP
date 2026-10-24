@@ -84,6 +84,7 @@ private:
     void ConfigureCover(Windows::UI::Xaml::Controls::Border^ border, size_t index);
     void ChooseGameFolder();
     void ChooseGameFile();
+    void RestorePinnedGameFiles(unsigned revision);
     void CheckGameFile(size_t index, unsigned revision);
     void CheckGameFolder(size_t index, unsigned revision);
     void InspectLaunch(size_t index);
