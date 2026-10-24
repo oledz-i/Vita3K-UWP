@@ -112,7 +112,18 @@ private:
         report += L" | RW-to-RX protection: ";
         report += rxWorks ? L"PASS" : L"FAIL";
         if (!rxWorks) report += L" (error " + std::to_wstring(protectError) + L")";
-        report += L". This does not establish JIT execution or Vita3K compatibility.";
+        // Vita3K's memory manager reserves a 4 GiB guest address space.
+        // This is VA space, not 4 GiB of physically committed RAM.
+        const SIZE_T guestBytes = static_cast<SIZE_T>(1ULL << 32);
+        void* guestRegion = VirtualAlloc(nullptr, guestBytes, MEM_RESERVE, PAGE_NOACCESS);
+        const DWORD guestError = guestRegion ? 0 : GetLastError();
+        if (guestRegion != nullptr) VirtualFree(guestRegion, 0, MEM_RELEASE);
+        report += L" | 4 GiB VA reservation: ";
+        report += guestRegion ? L"PASS" : L"FAIL";
+        if (guestRegion == nullptr) {
+            report += L" (error " + std::to_wstring(guestError) + L")";
+        }
+        report += L". A reservation does not commit 4 GiB of RAM or establish JIT compatibility.";
         memoryStatus_->Text = ref new Platform::String(report.c_str());
     }
 
@@ -245,8 +256,8 @@ protected:
 
         panel->Children->Append(MakeText("Core feasibility diagnostics", 30));
         panel->Children->Append(MakeText(
-            "Test whether the UWP process can allocate writable memory and change it to executable/readable. "
-            "No generated code is executed by this test.", 18));
+            "Test writable, readable and executable page protections, plus Vita3K's 4 GiB virtual "
+            "address reservation. The diagnostic does not execute generated CPU code.", 18));
         auto memoryButton = MakeButton("Run memory compatibility probe");
         memoryButton->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
             ProbeMemory();
@@ -270,8 +281,8 @@ protected:
 
         panel->Children->Append(MakeText("D3D12 graphics bootstrap", 30));
         panel->Children->Append(MakeText(
-            "The preview below is an actual Direct3D 12 GPU clear, not a rendered PS Vita frame. "
-            "Its job is to prove a working native presentation path before GXM integration.", 18));
+            "The preview supports a native GPU clear and CPU-produced BGRA framebuffer upload "
+            "through D3D12. Neither is a rendered PS Vita frame; next is connecting Vita GXM.", 18));
         auto surface = ref new SwapChainPanel();
         surface->Width = 960;
         surface->Height = 544;
@@ -287,6 +298,13 @@ protected:
             BootRenderer(surface);
         });
         panel->Children->Append(retry);
+        auto uploadButton = MakeButton("Present CPU-generated framebuffer");
+        uploadButton->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+            std::wstring message;
+            nativeRenderer.DrawUploadTestFrame(message);
+            rendererStatus_->Text = ref new Platform::String(message.c_str());
+        });
+        panel->Children->Append(uploadButton);
 
         panel->Children->Append(MakeText("Firmware", 30));
         panel->Children->Append(MakeText(
