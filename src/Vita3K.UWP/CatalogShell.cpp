@@ -174,7 +174,7 @@ StackPanel^ CatalogShell::Vertical(double spacing) {
 }
 Border^ CatalogShell::Panel(UIElement^ child, double pad) {
     auto border = ref new Border();
-    border->CornerRadius = CornerRadius(14);
+    border->CornerRadius = Windows::UI::Xaml::CornerRadius(14);
     border->Padding = Thickness(pad);
     border->Margin = Thickness(0, 9, 0, 16);
     border->Background = Solid(Card());
@@ -359,7 +359,7 @@ Button^ CatalogShell::MakeTile(size_t index) {
     tile->Background = Solid(Colors::Transparent);
 
     auto imageBox = ref new Border();
-    imageBox->CornerRadius = CornerRadius(12);
+    imageBox->CornerRadius = Windows::UI::Xaml::CornerRadius(12);
     imageBox->Width = 203;
     imageBox->Height = 290;
     ConfigureCover(imageBox, index);
