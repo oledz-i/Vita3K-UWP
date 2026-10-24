@@ -790,7 +790,29 @@ void CatalogShell::Settings() {
 }
 void CatalogShell::Diagnostics() {
     Banner(L"UNDER THE HOOD", L"Developer laboratory.",
-        L"Real Vita3K memory code and native D3D12 presentation diagnostics.");
+        L"Real Vita3K upstream code, libretro core ABI and D3D12 diagnostics.");
+    Section(L"Experimental real Vita3K libretro core");
+    auto libretroBox = Vertical();
+    libretroBox->Children->Append(Text(
+        L"This probes a genuine Vita3K libretro DLL packaged inside the APPX. "
+        L"Unlike a memory or loading-screen test, it checks the exported core API. "
+        L"The desktop DLL cannot automatically run as UWP. Game execution needs a "
+        L"successfully ported core and working Vulkan graphics (possibly Mesa Dozen).",
+        16, false, true));
+    auto probeCore = Button(L"Check for actual Vita3K core", true);
+    probeCore->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ProbeLibretro(false);
+    });
+    libretroBox->Children->Append(probeCore);
+    auto initCore = Button(L"Attempt genuine core initialization (experimental)");
+    initCore->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ProbeLibretro(true);
+    });
+    libretroBox->Children->Append(initCore);
+    libretroResult_ = Text(L"Libretro core not probed. No UWP-compatible core DLL bundled yet.", 17, true);
+    libretroBox->Children->Append(libretroResult_);
+    content_->Children->Append(Panel(libretroBox));
+
     Section(L"Upstream Vita3K memory allocator");
     auto core = Vertical();
     core->Children->Append(Text(
@@ -1439,6 +1461,47 @@ void CatalogShell::FetchArtwork(size_t index, bool continueBatch) {
                 if (continueBatch) FetchMissingArtwork(index + 1);
             }
         }, task_continuation_context::use_current());
+}
+
+void CatalogShell::ProbeLibretro(bool initialize) {
+    if (libretroResult_ == nullptr) return;
+    std::wstring report;
+    if (initialize) {
+        // The Vita3K libretro core needs a writable private filesystem.
+        // Never try to write into the read-only APPX install directory.
+        const auto folder = ApplicationData::Current->LocalFolder;
+        create_task(folder->CreateFolderAsync(L"Vita3KSystem",
+            CreationCollisionOption::OpenIfExists)).then(
+            [this](task<StorageFolder^> work) {
+                if (libretroResult_ == nullptr) return;
+                try {
+                    auto system = work.get();
+                    const auto path = system->Path;
+                    const int bytes = WideCharToMultiByte(CP_UTF8, 0, path->Data(), -1,
+                        nullptr, 0, nullptr, nullptr);
+                    if (bytes <= 0) {
+                        libretroResult_->Text = L"Cannot encode the UWP Vita3K system path.";
+                        return;
+                    }
+                    std::string narrow(static_cast<size_t>(bytes), '\\0');
+                    WideCharToMultiByte(CP_UTF8, 0, path->Data(), -1,
+                        &narrow[0], bytes, nullptr, nullptr);
+                    std::wstring detail;
+                    const bool loaded = libretro_.Initialize(narrow, detail);
+                    libretroResult_->Text = StringOf(detail);
+                    SetStatus(loaded ? L"Real Vita3K libretro initialization returned. "
+                        L"No game execution or Vulkan context is available." :
+                        L"Real Vita3K core initialization blocked. See developer report.");
+                } catch (Platform::Exception^ e) {
+                    libretroResult_->Text = L"Cannot create private Vita3K system directory: " + e->Message;
+                }
+            }, task_continuation_context::use_current());
+    } else {
+        const bool loaded = libretro_.Probe(report);
+        libretroResult_->Text = StringOf(report);
+        SetStatus(loaded ? L"Actual Vita3K core C ABI loaded; GPU and games untested." :
+            L"Packaged native Vita3K core not present or not UWP compatible.");
+    }
 }
 void CatalogShell::ProbeCore() {
     BitmapAllocator bitmap(64);
