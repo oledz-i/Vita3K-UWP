@@ -23,6 +23,7 @@ public:
 private:
     std::vector<LibraryGame> games_;
     Windows::UI::Xaml::Controls::Grid^ root_;
+    Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
     Windows::UI::Xaml::Controls::MediaElement^ musicPlayer_;
     Windows::UI::Xaml::Controls::TextBlock^ status_;
