@@ -40,10 +40,70 @@
       <WarningLevel>Level4</WarningLevel>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\\..\\..\\third_party\\vita3k\\mem\\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><GenerateWindowsMetadata>true</GenerateWindowsMetadata></Link>
+    <Link><SubSystem>Console</SubSystem><GenerateWindowsMetadata>true</GenerateWindowsMetadata><AdditionalDependencies>d3d12.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="main.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <CompileAsWinRT>true</CompileAsWinRT>
+    </ClCompile>
+    <ClCompile Include="CatalogShell.cpp">
+      <CompileAsWinRT>true</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="MenuMusic.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="GameFormats.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="SfoReader.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="UwpJitProbe.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="VulkanDznProbe.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="VitaLibretroHost.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="D3D12Host.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="..\\..\\third_party\\vita3k\\mem\\src\\allocator.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D3D12Host.h" />
+    <ClInclude Include="VitaLibretroHost.h" />
+    <ClInclude Include="VulkanDznProbe.h" />
+    <ClInclude Include="UwpJitProbe.h" />
+    <ClInclude Include="CatalogShell.h" />
+    <ClInclude Include="MenuMusic.h" />
+    <ClInclude Include="SfoReader.h" />
+    <ClInclude Include="GameFormats.h" />
+    <ClInclude Include="..\\..\\third_party\\vita3k\\mem\\include\\mem\\allocator.h" />
+  </ItemGroup>
+  <!-- A genuine UWP-built Vita3K libretro DLL can be packaged by core-port CI.
+       Never copy an arbitrary desktop Win32 DLL here and claim it works. -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\vita3k_libretro.dll')">
+    <Content Include="vita3k_libretro.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
   <ItemGroup><Image Include="Assets\*.png" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

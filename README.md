@@ -13,31 +13,45 @@
 
 ## Where things stand
 
-**This is a port foundation, not a playable emulator yet.** The repository contains a small native C++/CX UWP development shell and a GitHub Actions pipeline that builds an x64 APPX. The shell displays project status; Vita3K's emulation core is not linked into it. There are no supported games, performance claims, or implemented emulation renderers in this port today.
+**This is a catalog frontend and port foundation, not a playable emulator yet.** The repository contains a small native C++/CX UWP development shell and a GitHub Actions pipeline that builds an x64 APPX. The integration branch links and executes Vita3K's original bitmap memory allocator, plus a native D3D12 graphics host; the full Vita3K CPU, kernel, firmware services, and GXM renderer are not linked. There are no supported games, performance claims, or implemented emulation renderers in this port today.
 
 | Area | Current status |
 | --- | --- |
-| UWP application and packaging | Development shell and automated APPX workflow |
+| UWP application and packaging | Signed x64 APPX with native D3D12 and real upstream memory allocator on `core-integration` |
 | Xbox Series X\|S | Primary target; hardware installation and launch need testing |
-| Vita3K core | Upstream reviewed and revision pinned; integration pending |
-| D3D12 | Planned dedicated native Xbox renderer; not implemented |
+| Vita3K core | Upstream bitmap allocator imported and linked; Dynarmic, kernel and full boot pending |
+| D3D12 | Native device, flip swap chain, GPU clear and BGRA framebuffer upload; Vita GXM draw backend not implemented |
 | Vulkan / OpenGL | Existing upstream backends; Xbox feasibility research pending |
 | Game compatibility | Not available; upstream compatibility does not describe this port |
-| UI, controls, storage, audio | Product requirements and core integration pending |
+| UI, controls, storage, audio | **Discover/Library/Settings UI**, five themes, four generated soundtracks plus four UI focus/select/back/swipe cues, folder + individual game pickers, saved firmware and owned PKG license selection, game metadata and custom/SteamGridDB artwork; Xbox UI validation pending |
 
 ## Development builds
 
-Open **[Actions → UWP development package](https://github.com/oledz-i/Vita3K-UWP/actions/workflows/uwp-package.yml)** and choose a successful run. Download `Vita3K-UWP-dev-shell-x64-<run number>` from its Artifacts section. GitHub may require sign-in. Builds run on pushes to `main`, pull requests, and manual dispatch.
+Open **[Actions → UWP development package](https://github.com/oledz-i/Vita3K-UWP/actions/workflows/uwp-package.yml)** and choose a successful run. Download `Vita3K-UWP-core-d3d12-x64-<run number>` from a successful `core-integration` run (or the separately named shell artifact from `main`). GitHub may require sign-in. Builds run on pushes to `main`, pull requests, and manual dispatch.
 
 The artifact contains a development-signed **APPX**, any generated runtime dependencies, a public test certificate, source-commit metadata, a SHA-256 checksum, and installation instructions. Artifacts expire after 14 days. No stable release is available. The workflow does not publish releases automatically.
 
-Read the **[installation guide](docs/INSTALL.md)** before deploying. These packages test the app foundation only; installing one will not let you play Vita games. APPX is the initial Xbox packaging format; an MSIX/desktop packaging target can be added separately if needed.
+Read the **[installation guide](docs/INSTALL.md)** before deploying. These packages are not playable Vita emulators yet. The integration build includes the full streaming-style **catalog frontend**, music and artwork options, Vita3K allocator tests and the D3D12 presentation test. See [frontend guide](docs/UI.md) and [real core port guide](docs/CORE_PORT.md) to navigate the Xbox controls and report real console behavior. APPX is the initial Xbox packaging format; an MSIX/desktop packaging target can be added separately if needed.
+
+## Frontend and artwork
+
+The integration branch includes five visual themes, four original menu loops, four original UI interaction sounds with separate volume, and Xbox B/back navigation. The library recognizes **VPK, ZIP, PKG, VCI, eboot.bin, and extracted game folders**. It checks file headers without loading multi-gigabyte files, and lets users select their own PKG license file for later installation support. **These files cannot be installed or launched yet.** SteamGridDB support requires the user's own API key and exact-title match; **automatic correct art for every title cannot be promised**. See [frontend documentation](docs/UI.md). Upstream CPU/kernel, installation and GXM rendering remain incomplete.
+
+## Real upstream Vita3K core port (in progress)
+
+The `core-integration` branch now pins an **existing full Vita3K libretro emulator core** from [WizzardSK/vita3k-libretro](https://github.com/WizzardSK/vita3k-libretro), derived from the Vita3K source tree. A separate Windows CI job attempts to compile this *actual* source for the Windows Store API family, including the CPU and existing Vulkan backend. The source build is **not** equivalent to game booting or an Xbox-compatible binary until the port passes all platform checks.
+
+The UWP app now has a native libretro C ABI loader/initializer and a Vulkan 1.1 hardware-device test in the Developer page. The loader works **only for DLLs already bundled in and signed with the APPX**; it cannot load random desktop DLLs from a games folder. **No full UWP core DLL or Mesa Dozen ICD is bundled in the standard package**, so those probes are expected to report missing components. See [core and Dozen technical status](docs/CORE_PORT.md).
+
+## Homebrew and game-boot status
+
+**Neither homebrew nor commercial Vita software boots in the Xbox UWP port yet.** Recognizing a file, storing a license or rendering a BGRA test frame is not a game boot. Upstream Vita3K supports homebrew and some commercial titles, but the port must still integrate its Dynarmic CPU implementation, Vita ELF/SELF executable loader, kernel/module services, filesystem and Vulkan-on-Direct3D12 graphics on Xbox. A standalone Vita3K or libretro DLL cannot be copied into UWP and assumed to work because the required graphics backends and platform dependencies are different. See [roadmap](docs/ROADMAP.md).
 
 ## Graphics direction
 
 The goal is a dedicated **D3D12** backend for Xbox and retention of **Vulkan** and **OpenGL** where the host supports them. Upstream's renderer is not a drop-in Xbox component: Xbox exposes DirectX, and a loader DLL alone cannot provide a native Vulkan/OpenGL driver. Translation layers are a separate research task with capability, performance and UWP compatibility requirements.
 
-See the [renderer matrix and implementation plan](docs/RENDERERS.md). A D3D12 device or clear-screen demo will not be described as a completed Vita GPU backend.
+See the [renderer matrix and implementation plan](docs/RENDERERS.md). The native D3D12 device, clear and CPU BGRA upload paths are graphics plumbing, not an implementation of the Vita GXM command/draw backend.
 
 ## Building and helping
 

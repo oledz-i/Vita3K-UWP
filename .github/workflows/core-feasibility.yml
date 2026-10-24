@@ -1,0 +1,47 @@
+name: Vita3K core integration feasibility
+on:
+  push:
+    branches: [core-integration]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  upstream:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Fetch pinned upstream source
+        shell: pwsh
+        run: ./scripts/fetch-upstream.ps1
+      - name: Verify actual Vita3K core sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content upstream.lock.json -Raw | ConvertFrom-Json
+          $actual = (git -C upstream rev-parse HEAD).Trim()
+          if ($actual -ne $lock.commit) { throw "Upstream revision mismatch: $actual" }
+          foreach ($path in @('vita3k/cpu/src/cpu.cpp','vita3k/mem/src/mem.cpp','vita3k/renderer/include/renderer/state.h','CMakeLists.txt')) {
+            if (-not (Test-Path "upstream/$path")) { throw "Missing upstream source: $path" }
+          }
+          "Pinned upstream source verified: $actual" | Out-File -FilePath upstream-source-report.txt
+      - name: Audit core entry points and platform dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $paths = @('upstream/vita3k/cpu','upstream/vita3k/mem','upstream/vita3k/renderer')
+          foreach ($path in $paths) {
+            "=== $path ===" | Out-File core-audit.txt -Append
+            Get-ChildItem $path -Recurse -Include '*.cpp','*.h' -File |
+              Select-String -Pattern 'VirtualAlloc|VirtualProtect|dynarmic|vkCreateInstance|glCreateShader|CreateFile' |
+              Select-Object -First 80 Path,LineNumber,Line |
+              Out-String -Width 220 | Out-File core-audit.txt -Append
+          }
+      - name: Upload feasibility report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vita3k-core-source-audit
+          path: |
+            upstream-source-report.txt
+            core-audit.txt
+          if-no-files-found: error

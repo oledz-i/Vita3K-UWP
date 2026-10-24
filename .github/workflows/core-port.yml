@@ -1,0 +1,45 @@
+name: Real Vita3K libretro core UWP port attempt
+on:
+  workflow_dispatch:
+  push:
+    branches: [core-integration]
+    paths:
+      - .github/workflows/core-port.yml
+      - core-candidates.lock.json
+      - scripts/probe-vita3k-uwp.ps1
+permissions:
+  contents: read
+jobs:
+  uwp-core-configure:
+    name: Compile real Vita3K core for UWP (feasibility)
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Fetch pinned genuine libretro Vita3K source including submodules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content core-candidates.lock.json -Raw | ConvertFrom-Json
+          git clone --branch $lock.libretro_candidate.branch --depth 25 $lock.libretro_candidate.repository upstream-core
+          if ($LASTEXITCODE -ne 0) { throw 'Git clone failed' }
+          git -C upstream-core checkout --detach $lock.libretro_candidate.commit
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned libretro checkout failed' }
+          git -C upstream-core submodule update --init --recursive --depth 1
+          if ($LASTEXITCODE -ne 0) { throw 'Submodule retrieval failed' }
+          $actual = (git -C upstream-core rev-parse HEAD).Trim()
+          if ($actual -ne $lock.libretro_candidate.commit) { throw 'Pinned core SHA mismatch' }
+          Set-Content -Path pinned-core-commit.txt -Value $actual
+      - name: Inspect Vita3K port dependencies and try UWP CMake configure
+        shell: pwsh
+        run: ./scripts/probe-vita3k-uwp.ps1
+      - name: Upload port compilation and dependency report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vita3k-real-core-uwp-probe
+          path: |
+            artifacts/core-port/
+            pinned-core-commit.txt
+          if-no-files-found: warn
+          retention-days: 14

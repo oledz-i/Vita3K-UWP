@@ -1,10 +1,10 @@
 # Renderer strategy
 
-Three backend goals are tracked separately. None is implemented in this UWP port yet.
+Three full emulator backend goals are tracked separately. The integration branch contains a **native D3D12 presentation host** (device, queue, swap chain, GPU clear, and BGRA framebuffer upload), but no Vita GXM renderer backend or shader translator yet.
 
 | Backend | Reviewed upstream | Windows desktop potential | Xbox UWP plan |
 | --- | --- | --- | --- |
-| D3D12 | No backend in the reviewed renderer source list | New implementation | Primary dedicated native backend, planned |
+| D3D12 | No backend in the reviewed renderer source list | New implementation | **Presentation/bootstrap implemented**; PS Vita GPU rendering and shader translation pending |
 | Vulkan | Implemented upstream | Retain on a supported Vulkan host | No native driver path assumed; translation feasibility unproven |
 | OpenGL | Implemented upstream | Retain on a supported OpenGL host | No native driver path assumed; translation feasibility unproven |
 
@@ -12,13 +12,13 @@ Microsoft documents D3D12 feature level **11.0** for UWP on Series X|S. API vers
 
 ## Dedicated D3D12 work
 
-1. Prove UWP device creation, CoreWindow/SwapChainPanel presentation, resize, suspend/resume and device-loss recovery on Series S.
+1. **Code present; on-device testing pending:** UWP device creation, SwapChainPanel composition, clear and BGRA buffer upload. Resize, suspend/resume and device-loss recovery remain unfinished.
 2. Integrate with upstream `renderer::State` and the GXM command pipeline; map draws, render targets, textures, samplers and synchronization.
 3. Add shader translation appropriate to D3D12/HLSL and validate Vita-specific semantics. Existing GLSL/SPIR-V generation is useful reference material, not a complete D3D12 shader solution.
 4. Implement descriptors, resource transitions, upload allocation, fences, pipeline caching, surface aliasing and readbacks.
 5. Compare homebrew output with upstream; then document per-title correctness and performance with precise revisions and hardware.
 
-A device probe or triangle is an infrastructure milestone, not a functioning emulator backend.
+A D3D12 clear or CPU framebuffer copy is an infrastructure milestone, not a functioning emulator backend. The current host does **not** understand Vita GXM draw commands.
 
 ## Vulkan / OpenGL research
 
