@@ -23,7 +23,7 @@
 | D3D12 | Native device, flip swap chain, GPU clear and BGRA framebuffer upload; Vita GXM draw backend not implemented |
 | Vulkan / OpenGL | Existing upstream backends; Xbox feasibility research pending |
 | Game compatibility | Not available; upstream compatibility does not describe this port |
-| UI, controls, storage, audio | **Streaming-style Discover/Library/Settings UI**, five themes, four generated menu soundtracks plus custom audio, saved storage/firmware paths, game metadata and custom/SteamGridDB artwork; Xbox UI validation pending |
+| UI, controls, storage, audio | **Discover/Library/Settings UI**, five themes, four generated soundtracks plus four UI focus/select/back/swipe cues, folder + individual game pickers, saved firmware and owned PKG license selection, game metadata and custom/SteamGridDB artwork; Xbox UI validation pending |
 
 ## Development builds
 
@@ -35,7 +35,11 @@ Read the **[installation guide](docs/INSTALL.md)** before deploying. These packa
 
 ## Frontend and artwork
 
-The integration branch includes five visual themes, four original generated looping music tracks plus custom audio, a game catalog and local metadata reader for extracted Vita titles. SteamGridDB support requires the user's own API key and exact-title match; **automatic correct art for every title cannot be promised**. See [frontend documentation](docs/UI.md). Upstream CPU/kernel, installation and GXM rendering remain incomplete.
+The integration branch includes five visual themes, four original menu loops, four original UI interaction sounds with separate volume, and Xbox B/back navigation. The library recognizes **VPK, ZIP, PKG, VCI, eboot.bin, and extracted game folders**. It checks file headers without loading multi-gigabyte files, and lets users select their own PKG license file for later installation support. **These files cannot be installed or launched yet.** SteamGridDB support requires the user's own API key and exact-title match; **automatic correct art for every title cannot be promised**. See [frontend documentation](docs/UI.md). Upstream CPU/kernel, installation and GXM rendering remain incomplete.
+
+## Homebrew and game-boot status
+
+**Neither homebrew nor commercial Vita software boots in the Xbox UWP port yet.** Recognizing a file, storing a license or rendering a BGRA test frame is not a game boot. Upstream Vita3K supports homebrew and some commercial titles, but the port must still integrate its Dynarmic CPU implementation, Vita ELF/SELF executable loader, kernel/module services, filesystem and GXM GPU rendering on Xbox. A standalone Vita3K or libretro DLL cannot be copied into UWP and assumed to work because the required graphics backends and platform dependencies are different. See [roadmap](docs/ROADMAP.md).
 
 ## Graphics direction
 
