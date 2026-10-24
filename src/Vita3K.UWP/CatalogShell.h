@@ -41,6 +41,7 @@ private:
     int track_ = 1;
     double musicVolume_ = 0.22;
     bool artworkScanBusy_ = false;
+    bool bootstrapped_ = false;
     Platform::String^ search_ = L"";
 
     Windows::UI::Color Bg() const;
