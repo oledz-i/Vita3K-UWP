@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a packaging, launch or port problem
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "This is a development shell, not a playable emulator. Report port issues here; never attach game files, keys or private certificates."
+  - type: input
+    id: build
+    attributes:
+      label: Build version and source commit
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and operating system version
+      placeholder: Xbox Series S, console OS version, or Windows version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, expected result and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error code and relevant logs
+      description: Remove account details and private paths before sharing.

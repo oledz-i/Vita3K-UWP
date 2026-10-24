@@ -1,0 +1,9 @@
+.vs/
+build/
+artifacts/
+upstream/
+*.user
+*.pfx
+*.p12
+*.binlog
+__pycache__/

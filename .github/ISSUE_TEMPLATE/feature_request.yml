@@ -1,0 +1,15 @@
+name: Feature request
+description: Propose a focused port improvement
+title: "[Feature] "
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed feature and user benefit
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Platform constraints and supporting sources
+      description: Distinguish native Xbox support from desktop or translation-layer support.

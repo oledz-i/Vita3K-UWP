@@ -1,2 +1,54 @@
-# Vita3K-UWP
-An experimental PSVita Emulator for Xbox Dev Mode. (Do NOT expect the greatest of performances for quite a while)
+<p align="center"><img src="docs/assets/banner.svg" alt="Vita3K UWP — A new home for Vita emulation" width="100%"></p>
+
+<p align="center">
+  <a href="https://github.com/oledz-i/Vita3K-UWP/actions/workflows/uwp-package.yml"><img src="https://github.com/oledz-i/Vita3K-UWP/actions/workflows/uwp-package.yml/badge.svg" alt="UWP package build"></a>
+  <img src="https://img.shields.io/badge/stage-pre--alpha-38bdf8" alt="Pre-alpha">
+  <img src="https://img.shields.io/badge/target-Xbox%20Dev%20Mode-107c10" alt="Xbox Dev Mode target">
+  <a href="COPYING.txt"><img src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue" alt="GPL license"></a>
+</p>
+
+<p align="center"><b>An independent, experimental Vita3K port targeting Xbox Series X|S through UWP.</b><br>Native console foundations. Open development. Built on the work of the Vita3K community.</p>
+
+<p align="center"><a href="docs/BUILDING.md">Build</a> · <a href="docs/INSTALL.md">Install the shell</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="docs/RENDERERS.md">Renderers</a> · <a href="docs/UPSTREAM.md">Upstream research</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
+
+## Where things stand
+
+**This is a port foundation, not a playable emulator yet.** The repository contains a small native C++/CX UWP development shell and a GitHub Actions pipeline that builds an x64 APPX. The shell displays project status; Vita3K's emulation core is not linked into it. There are no supported games, performance claims, or implemented emulation renderers in this port today.
+
+| Area | Current status |
+| --- | --- |
+| UWP application and packaging | Development shell and automated APPX workflow |
+| Xbox Series X\|S | Primary target; hardware installation and launch need testing |
+| Vita3K core | Upstream reviewed and revision pinned; integration pending |
+| D3D12 | Planned dedicated native Xbox renderer; not implemented |
+| Vulkan / OpenGL | Existing upstream backends; Xbox feasibility research pending |
+| Game compatibility | Not available; upstream compatibility does not describe this port |
+| UI, controls, storage, audio | Product requirements and core integration pending |
+
+## Development builds
+
+Open **[Actions → UWP development package](https://github.com/oledz-i/Vita3K-UWP/actions/workflows/uwp-package.yml)** and choose a successful run. Download `Vita3K-UWP-dev-shell-x64-<run number>` from its Artifacts section. GitHub may require sign-in. Builds run on pushes to `main`, pull requests, and manual dispatch.
+
+The artifact contains a development-signed **APPX**, any generated runtime dependencies, a public test certificate, source-commit metadata, a SHA-256 checksum, and installation instructions. Artifacts expire after 14 days. No stable release is available. The workflow does not publish releases automatically.
+
+Read the **[installation guide](docs/INSTALL.md)** before deploying. These packages test the app foundation only; installing one will not let you play Vita games. APPX is the initial Xbox packaging format; an MSIX/desktop packaging target can be added separately if needed.
+
+## Graphics direction
+
+The goal is a dedicated **D3D12** backend for Xbox and retention of **Vulkan** and **OpenGL** where the host supports them. Upstream's renderer is not a drop-in Xbox component: Xbox exposes DirectX, and a loader DLL alone cannot provide a native Vulkan/OpenGL driver. Translation layers are a separate research task with capability, performance and UWP compatibility requirements.
+
+See the [renderer matrix and implementation plan](docs/RENDERERS.md). A D3D12 device or clear-screen demo will not be described as a completed Vita GPU backend.
+
+## Building and helping
+
+The shell uses Visual Studio 2022, C++ UWP tools, and Windows SDK 10.0.22621.0. The hosted workflow uses `windows-2022`; you do not need to register a self-hosted runner or provide signing secrets. See [BUILDING.md](docs/BUILDING.md) for the local command and [CONTRIBUTING.md](CONTRIBUTING.md) for scope and issue reporting.
+
+Useful first contributions include reproducible Xbox launch reports, UWP dependency audits, JIT/memory feasibility tests, and D3D12 capability investigations. Please report port issues **in this repository**, not to upstream Vita3K.
+
+## Credits and licensing
+
+The planned emulation foundation is **[Vita3K](https://github.com/Vita3K/Vita3K)**. Full credit belongs to its developers and dependency authors for their existing emulator. Our reviewed upstream revision and source map are in [UPSTREAM.md](docs/UPSTREAM.md).
+
+New original code here is GPL-2.0-or-later; upstream and dependencies retain their own licenses and notices. See [COPYING.txt](COPYING.txt) and [NOTICE.md](NOTICE.md). No games, firmware, keys, or proprietary SDK files are included.
+
+This is an independent community project, not an official Vita3K release and not affiliated with or endorsed by Sony or Microsoft. PlayStation and Xbox names belong to their respective owners.
