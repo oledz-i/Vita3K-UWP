@@ -269,8 +269,7 @@ CatalogShell::CatalogShell() {
                 if (page_ == 0) return;
                 const auto code = e->VirtualKey;
                 if (code == Windows::System::VirtualKey::GamepadB ||
-                    code == Windows::System::VirtualKey::Escape ||
-                    code == Windows::System::VirtualKey::BrowserBack) {
+                    code == Windows::System::VirtualKey::Escape) {
                     PlayCue(2);
                     ShowPage(page_ == 4 ? 1 : 0);
                 }
