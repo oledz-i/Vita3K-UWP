@@ -47,7 +47,7 @@ From the working UWP Dynarmic port in `katakishi0/eden-xbox`, two important Xbox
 
 The **Developer** page now includes an **on-demand generated x64 machine-code test**: it allocates a page using the *FromApp* APIs, emits the small native x64 `mov eax,42; ret` function, changes the page to RX and calls the machine code to see whether it returns 42. This runs **only** if the user explicitly selects the test. It is not Vita guest code or Dynarmic, and actual Xbox execution has not been observed yet. An Xbox code-integrity denial could terminate the app; begin with the nonexecuting memory test.
 
-A separate precedent for Mesa-on-Xbox exists in the `katakishi0/eden-xbox` and `XboxEmuPorts/Cemu-UWP` codebases. Investigate the Vita3K libretro OpenGL backend over Mesa Gallium D3D12 **as a fallback to Dozen**, rather than presuming a Vulkan ICD is already available.
+A separate precedent for Mesa-on-Xbox exists in the `katakishi0/eden-xbox` and `XboxEmuPorts/Cemu-UWP` codebases. **Graphics version mismatch is a hard gate:** Vita3K documents OpenGL **4.4** as its minimum, whereas stock Mesa's D3D12 Gallium driver documents OpenGL **3.3**. Consequently, **stock Mesa D3D12 OpenGL is not a working Vita3K fallback** without significant OpenGL-version/extension work. Dozen Vulkan-on-D3D12 is the more promising unmodified renderer path, although it must actually enumerate a UWP device and implement Vita3K's required capabilities.
 
 ## Remaining technical gates
 
