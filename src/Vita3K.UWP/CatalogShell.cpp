@@ -245,11 +245,15 @@ CatalogShell::CatalogShell() {
     BuildNavigation();
     Render();
     RestorePaths();
-    if (track_ > 0) {
-        if (track_ == 5) PlayCustomMusic();
-        else PlayBundledMusic(track_);
-    }
-    ScanGames();
+    Loaded += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        if (bootstrapped_) return;
+        bootstrapped_ = true;
+        if (track_ > 0) {
+            if (track_ == 5) PlayCustomMusic();
+            else PlayBundledMusic(track_);
+        }
+        ScanGames();
+    });
 }
 void CatalogShell::BuildNavigation() {
     auto navigation = ref new StackPanel();
@@ -298,6 +302,7 @@ void CatalogShell::BuildNavigation() {
 }
 void CatalogShell::ShowPage(int nextPage) {
     if (nextPage < 0 || nextPage > 4) nextPage = 0;
+    if (page_ == 3 && nextPage != 3) renderer_.Shutdown();
     page_ = nextPage;
     BuildNavigation();
     Render();
@@ -347,6 +352,19 @@ void CatalogShell::ConfigureCover(Border^ cover, size_t index) {
         } catch (Platform::Exception^) {
             cover->Background = Gradient(Card(), Glow());
         }
+    } else if (index < games_.size() && games_[index].icon != nullptr) {
+        // Local icon0.png is a fallback only. It is not mislabeled as box art.
+        auto bitmap = ref new BitmapImage();
+        auto brush = ref new ImageBrush();
+        brush->ImageSource = bitmap;
+        brush->Stretch = Stretch::Uniform;
+        cover->Background = brush;
+        auto icon = games_[index].icon;
+        create_task(icon->OpenAsync(FileAccessMode::Read)).then(
+            [bitmap](task<IRandomAccessStream^> opened) {
+                try { bitmap->SetSource(opened.get()); }
+                catch (Platform::Exception^) {}
+            }, task_continuation_context::use_current());
     }
 }
 Button^ CatalogShell::MakeTile(size_t index) {
@@ -918,7 +936,17 @@ void CatalogShell::ScanGames() {
 }
 void CatalogShell::ReadSfo(size_t index, StorageFolder^ gameFolder) {
     create_task(gameFolder->GetFolderAsync(L"sce_sys")).then(
-        [](StorageFolder^ sys) { return create_task(sys->GetFileAsync(L"param.sfo")); }
+        [this,index](StorageFolder^ sys) {
+            create_task(sys->GetFileAsync(L"icon0.png")).then(
+                [this,index](task<StorageFile^> icon) {
+                    try {
+                        if (index >= games_.size()) return;
+                        games_[index].icon = icon.get();
+                        Render();
+                    } catch (Platform::Exception^) {}
+                }, task_continuation_context::use_current());
+            return create_task(sys->GetFileAsync(L"param.sfo"));
+        }
     ).then([](StorageFile^ file) { return create_task(FileIO::ReadBufferAsync(file)); }
     ).then([this,index](task<IBuffer^> work) {
         try {
