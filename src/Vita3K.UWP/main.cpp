@@ -43,7 +43,7 @@ protected:
 };
 }
 
-[MTAThread]
+[Platform::MTAThread]
 int main(Platform::Array<Platform::String^>^) {
     Application::Start(ref new ApplicationInitializationCallback([](ApplicationInitializationCallbackParams^) {
         ref new Vita3KUWP::App();
