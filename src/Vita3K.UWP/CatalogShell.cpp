@@ -32,7 +32,7 @@ using namespace Windows::UI::Xaml::Media::Imaging;
 
 namespace Vita3KUWP {
 namespace {
-Color RGB(unsigned r, unsigned g, unsigned b) {
+Color RgbColor(unsigned r, unsigned g, unsigned b) {
     return ColorHelper::FromArgb(255, static_cast<unsigned char>(r),
         static_cast<unsigned char>(g), static_cast<unsigned char>(b));
 }
@@ -50,8 +50,12 @@ Platform::String^ StringOf(const std::wstring& value) {
 bool ContainsIgnoreCase(Platform::String^ source, Platform::String^ search) {
     if (search == nullptr || search->IsEmpty()) return true;
     std::wstring a(source->Data()), b(search->Data());
-    std::transform(a.begin(), a.end(), a.begin(), towlower);
-    std::transform(b.begin(), b.end(), b.begin(), towlower);
+    std::transform(a.begin(), a.end(), a.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(towlower(c));
+    });
+    std::transform(b.begin(), b.end(), b.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(towlower(c));
+    });
     return a.find(b) != std::wstring::npos;
 }
 Platform::String^ StableKey(Platform::String^ path) {
@@ -81,42 +85,42 @@ Platform::String^ PrettyFileName(Platform::String^ value) {
 }
 Color CatalogShell::Bg() const {
     switch(theme_) {
-    case 1: return RGB(5, 24, 35);       // Aurora
-    case 2: return RGB(28, 12, 19);      // Ember
-    case 3: return RGB(233, 241, 251);   // Glacier / light
-    case 4: return RGB(17, 14, 39);      // Orbit
-    default: return RGB(9, 13, 24);      // Onyx
+    case 1: return RgbColor(5, 24, 35);       // Aurora
+    case 2: return RgbColor(28, 12, 19);      // Ember
+    case 3: return RgbColor(233, 241, 251);   // Glacier / light
+    case 4: return RgbColor(17, 14, 39);      // Orbit
+    default: return RgbColor(9, 13, 24);      // Onyx
     }
 }
 Color CatalogShell::Card() const {
     switch(theme_) {
-    case 1: return RGB(17, 49, 60);
-    case 2: return RGB(61, 31, 41);
-    case 3: return RGB(255, 255, 255);
-    case 4: return RGB(37, 30, 72);
-    default: return RGB(28, 35, 52);
+    case 1: return RgbColor(17, 49, 60);
+    case 2: return RgbColor(61, 31, 41);
+    case 3: return RgbColor(255, 255, 255);
+    case 4: return RgbColor(37, 30, 72);
+    default: return RgbColor(28, 35, 52);
     }
 }
 Color CatalogShell::Accent() const {
     switch(theme_) {
-    case 1: return RGB(58, 225, 199);
-    case 2: return RGB(255, 147, 101);
-    case 3: return RGB(28, 106, 209);
-    case 4: return RGB(183, 138, 255);
-    default: return RGB(130, 111, 255);
+    case 1: return RgbColor(58, 225, 199);
+    case 2: return RgbColor(255, 147, 101);
+    case 3: return RgbColor(28, 106, 209);
+    case 4: return RgbColor(183, 138, 255);
+    default: return RgbColor(130, 111, 255);
     }
 }
 Color CatalogShell::Glow() const {
     switch(theme_) {
-    case 1: return RGB(10, 72, 85);
-    case 2: return RGB(112, 37, 48);
-    case 3: return RGB(201, 225, 246);
-    case 4: return RGB(72, 44, 120);
-    default: return RGB(53, 39, 93);
+    case 1: return RgbColor(10, 72, 85);
+    case 2: return RgbColor(112, 37, 48);
+    case 3: return RgbColor(201, 225, 246);
+    case 4: return RgbColor(72, 44, 120);
+    default: return RgbColor(53, 39, 93);
     }
 }
 Color CatalogShell::Muted() const {
-    return theme_ == 3 ? RGB(65, 82, 114) : RGB(170, 186, 210);
+    return theme_ == 3 ? RgbColor(65, 82, 114) : RgbColor(170, 186, 210);
 }
 Brush^ CatalogShell::Solid(Color value) {
     return ref new SolidColorBrush(value);
@@ -139,9 +143,9 @@ TextBlock^ CatalogShell::Text(Platform::String^ value, double size, bool bold, b
     auto t = ref new TextBlock();
     t->Text = value;
     t->FontSize = size;
-    t->FontFamily = ref new FontFamily(L"Segoe UI");
+    t->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
     t->FontWeight = bold ? FontWeights::SemiBold : FontWeights::Normal;
-    t->Foreground = Solid(muted ? Muted() : (theme_ == 3 ? RGB(23, 39, 65) : Colors::White));
+    t->Foreground = Solid(muted ? Muted() : (theme_ == 3 ? RgbColor(23, 39, 65) : Colors::White));
     t->TextWrapping = TextWrapping::Wrap;
     t->Margin = Thickness(0, 3, 0, 3);
     return t;
@@ -152,14 +156,14 @@ Button^ CatalogShell::Button(Platform::String^ label, bool highlighted) {
     button->Padding = Thickness(20, 13, 20, 13);
     button->Margin = Thickness(0, 4, 12, 4);
     button->MinHeight = 48;
-    button->FontFamily = ref new FontFamily(L"Segoe UI");
+    button->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
     button->FontWeight = FontWeights::SemiBold;
     button->FontSize = 16;
     button->BorderThickness = Thickness(1);
     button->BorderBrush = Solid(highlighted ? Accent() : Muted());
     button->Background = highlighted ? Solid(Accent()) : Solid(Card());
     button->Foreground = Solid(highlighted && theme_ != 3 ? Bg() :
-                              (theme_ == 3 ? RGB(26, 48, 72) : Colors::White));
+                              (theme_ == 3 ? RgbColor(26, 48, 72) : Colors::White));
     return button;
 }
 StackPanel^ CatalogShell::Vertical(double spacing) {
@@ -250,17 +254,17 @@ CatalogShell::CatalogShell() {
 void CatalogShell::BuildNavigation() {
     auto navigation = ref new StackPanel();
     navigation->Orientation = Orientation::Horizontal;
-    navigation->VerticalAlignment = VerticalAlignment::Center;
+    navigation->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     navigation->Margin = Thickness(46, 0, 36, 0);
 
     auto wordmark = Text(L"VITA3K", 27, true);
     wordmark->Foreground = Solid(Accent());
-    wordmark->VerticalAlignment = VerticalAlignment::Center;
+    wordmark->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     wordmark->Margin = Thickness(0, 0, 7, 0);
     navigation->Children->Append(wordmark);
 
     auto sub = Text(L"UWP  /  XBOX", 12, true, true);
-    sub->VerticalAlignment = VerticalAlignment::Center;
+    sub->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     sub->Margin = Thickness(0, 4, 48, 0);
     navigation->Children->Append(sub);
 
@@ -282,9 +286,9 @@ void CatalogShell::BuildNavigation() {
     searchBox_->Width = 260;
     searchBox_->Height = 44;
     searchBox_->Margin = Thickness(20, 2, 0, 0);
-    searchBox_->VerticalAlignment = VerticalAlignment::Center;
+    searchBox_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     searchBox_->Background = Solid(Bg());
-    searchBox_->Foreground = Solid(theme_ == 3 ? RGB(20, 40, 70) : Colors::White);
+    searchBox_->Foreground = Solid(theme_ == 3 ? RgbColor(20, 40, 70) : Colors::White);
     searchBox_->TextChanged += ref new TextChangedEventHandler([this](Platform::Object^, TextChangedEventArgs^) {
         search_ = searchBox_->Text;
         if (page_ == 0 || page_ == 1) Render();
@@ -363,21 +367,21 @@ Button^ CatalogShell::MakeTile(size_t index) {
     auto inside = ref new Grid();
     auto top = Text(L"PS VITA", 12, true);
     top->Foreground = Solid(Colors::White);
-    top->HorizontalAlignment = HorizontalAlignment::Left;
-    top->VerticalAlignment = VerticalAlignment::Top;
+    top->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    top->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
     top->Margin = Thickness(14);
     inside->Children->Append(top);
     auto lower = ref new Border();
     lower->Background = ref new SolidColorBrush(ColorHelper::FromArgb(224, 9, 13, 24));
     lower->Padding = Thickness(12);
-    lower->VerticalAlignment = VerticalAlignment::Bottom;
+    lower->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
     auto lowerText = Vertical();
     auto label = Text(games_[index].name, 16, true);
     label->Foreground = Solid(Colors::White);
     label->MaxHeight = 46;
     lowerText->Children->Append(label);
     auto kind = Text(games_[index].sourceType + L"  /  NOT PLAYABLE YET", 11, false);
-    kind->Foreground = Solid(RGB(198, 205, 225));
+    kind->Foreground = Solid(RgbColor(198, 205, 225));
     lowerText->Children->Append(kind);
     lower->Child = lowerText;
     inside->Children->Append(lower);
@@ -580,7 +584,7 @@ void CatalogShell::Settings() {
     volume->Maximum = 100;
     volume->Value = musicVolume_ * 100;
     volume->Width = 420;
-    volume->HorizontalAlignment = HorizontalAlignment::Left;
+    volume->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     volume->ValueChanged += ref new RangeBaseValueChangedEventHandler(
         [this](Platform::Object^, RangeBaseValueChangedEventArgs^ e) {
             SetVolume(e->NewValue / 100.0);
@@ -620,7 +624,7 @@ void CatalogShell::Settings() {
     password->PlaceholderText = L"SteamGridDB API key (saved in Windows PasswordVault)";
     password->Height = 48;
     password->Width = 540;
-    password->HorizontalAlignment = HorizontalAlignment::Left;
+    password->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     art->Children->Append(password);
     auto buttons = ref new StackPanel();
     buttons->Orientation = Orientation::Horizontal;
