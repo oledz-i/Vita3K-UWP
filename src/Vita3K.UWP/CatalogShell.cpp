@@ -976,3 +976,204 @@ void CatalogShell::ChooseCustomArtwork(size_t index) {
             }
         }, task_continuation_context::use_current());
 }
+
+void CatalogShell::SaveApiKey(Platform::String^ value) {
+    try {
+        auto vault = ref new Windows::Security::Credentials::PasswordVault();
+        try {
+            auto old = vault->Retrieve(L"Vita3KUWP.SteamGridDB", L"apikey");
+            vault->Remove(old);
+        } catch (Platform::Exception^) {}
+        if (!value->IsEmpty()) {
+            vault->Add(ref new Windows::Security::Credentials::PasswordCredential(
+                L"Vita3KUWP.SteamGridDB", L"apikey", value));
+            SetStatus(L"SteamGridDB API key saved securely in Windows PasswordVault.");
+        } else {
+            SetStatus(L"SteamGridDB API key cleared.");
+        }
+        Render();
+    } catch (Platform::Exception^ e) {
+        SetStatus(L"Could not save artwork API key: " + e->Message);
+    }
+}
+Platform::String^ CatalogShell::ApiKey() {
+    try {
+        auto vault = ref new Windows::Security::Credentials::PasswordVault();
+        auto cred = vault->Retrieve(L"Vita3KUWP.SteamGridDB", L"apikey");
+        cred->RetrievePassword();
+        return cred->Password;
+    } catch (Platform::Exception^) {
+        return L"";
+    }
+}
+void CatalogShell::FetchMissingArtwork(size_t index) {
+    if (index == 0) {
+        if (artworkScanBusy_) {
+            SetStatus(L"Artwork lookup is already running.");
+            return;
+        }
+        if (ApiKey()->IsEmpty()) {
+            SetStatus(L"Save your SteamGridDB API key in Settings to search covers.");
+            return;
+        }
+        artworkScanBusy_ = true;
+        SetStatus(L"Looking for matching game artwork...");
+    }
+    while (index < games_.size() && !ArtworkUri(index)->IsEmpty()) ++index;
+    if (index == games_.size()) {
+        artworkScanBusy_ = false;
+        SetStatus(L"Artwork scan finished. Missing/ambiguous covers use themed placeholders.");
+        Render();
+        return;
+    }
+    FetchArtwork(index, true);
+}
+void CatalogShell::FetchArtwork(size_t index, bool continueBatch) {
+    if (index >= games_.size()) {
+        if (continueBatch) { artworkScanBusy_ = false; }
+        return;
+    }
+    const auto key = ApiKey();
+    if (key->IsEmpty()) {
+        SetStatus(L"Enter a SteamGridDB API key under Settings first.");
+        if (continueBatch) artworkScanBusy_ = false;
+        return;
+    }
+    auto client = ref new Windows::Web::Http::HttpClient();
+    client->DefaultRequestHeaders->TryAppendWithoutValidation(L"Authorization", L"Bearer " + key);
+    const auto title = games_[index].name;
+    const auto gameKey = games_[index].key;
+    auto searchUri = ref new Uri(
+        L"https://www.steamgriddb.com/api/v2/search/autocomplete/" + Uri::EscapeComponent(title));
+    SetStatus(L"Searching SteamGridDB for: " + title);
+
+    create_task(client->GetStringAsync(searchUri)).then(
+        [this,client,index,gameKey,title,continueBatch](task<Platform::String^> search) {
+            try {
+                auto response = Windows::Data::Json::JsonObject::Parse(search.get());
+                const auto list = response->GetNamedArray(L"data");
+                unsigned gameId = 0;
+                // Do not associate loosely matched art with a completely different title.
+                std::wstring desired(title->Data());
+                std::transform(desired.begin(), desired.end(), desired.begin(),
+                    [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+                for (unsigned i = 0; i < list->Size; ++i) {
+                    auto item = list->GetAt(i)->GetObject();
+                    std::wstring candidate(item->GetNamedString(L"name")->Data());
+                    std::transform(candidate.begin(), candidate.end(), candidate.begin(),
+                        [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+                    if (candidate == desired) {
+                        gameId = static_cast<unsigned>(item->GetNamedNumber(L"id"));
+                        break;
+                    }
+                }
+                if (gameId == 0) {
+                    SetStatus(L"No exact SteamGridDB match found for: " + title);
+                    if (continueBatch) FetchMissingArtwork(index + 1);
+                    return;
+                }
+                auto imageUri = ref new Uri(
+                    L"https://www.steamgriddb.com/api/v2/grids/game/" +
+                    StringOf(std::to_wstring(gameId)) + L"?dimensions=600x900&types=static");
+                create_task(client->GetStringAsync(imageUri)).then(
+                    [this,index,gameKey,title,continueBatch,client](task<Platform::String^> art) {
+                        try {
+                            auto response = Windows::Data::Json::JsonObject::Parse(art.get());
+                            auto list = response->GetNamedArray(L"data");
+                            if (list->Size == 0) {
+                                SetStatus(L"No portrait covers found for: " + title);
+                            } else {
+                                auto item = list->GetAt(0)->GetObject();
+                                const auto uri = item->GetNamedString(L"url");
+                                std::wstring raw(uri->Data());
+                                if (raw.find(L"https://") == 0 &&
+                                    raw.find(L"steamgriddb.com") != std::wstring::npos) {
+                                    PutPref(L"art.remote." + gameKey, uri);
+                                    SetStatus(L"SteamGridDB art saved for: " + title);
+                                    Render();
+                                } else {
+                                    SetStatus(L"Artwork provider returned an unsupported image URL.");
+                                }
+                            }
+                        } catch (Platform::Exception^ e) {
+                            SetStatus(L"Art lookup failed for " + title + L": " + e->Message);
+                        }
+                        if (continueBatch) FetchMissingArtwork(index + 1);
+                    }, task_continuation_context::use_current());
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Artwork search failed for " + title + L": " + e->Message);
+                if (continueBatch) FetchMissingArtwork(index + 1);
+            }
+        }, task_continuation_context::use_current());
+}
+void CatalogShell::ProbeCore() {
+    BitmapAllocator bitmap(64);
+    std::uint32_t count = 4;
+    const int first = bitmap.allocate_from(0, count);
+    const int left = bitmap.free_slot_count(0, 64);
+    const int reserved = bitmap.allocate_at(8, 2);
+    bitmap.free(0, 4);
+    const int afterFree = bitmap.free_slot_count(0, 64);
+    const bool okay = first == 0 && count == 4 && left == 60 &&
+        reserved == 0 && afterFree == 62;
+    if (coreResult_ != nullptr)
+        coreResult_->Text = okay ?
+            L"PASS  /  Original Vita3K memory allocator executed." :
+            L"FAIL  /  Upstream Vita3K allocator returned unexpected results.";
+}
+void CatalogShell::ProbeMemory() {
+    const SIZE_T length = 4096;
+    void* page = VirtualAlloc(nullptr, length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!page) {
+        if (memoryResult_ != nullptr)
+            memoryResult_->Text = L"RW allocation failed. Windows error: " +
+                StringOf(std::to_wstring(GetLastError()));
+        return;
+    }
+    volatile unsigned char* bytes = static_cast<volatile unsigned char*>(page);
+    bytes[0] = 0x5a;
+    const bool writable = bytes[0] == 0x5a;
+    DWORD oldProtect = 0;
+    const BOOL executable = VirtualProtect(page, length, PAGE_EXECUTE_READ, &oldProtect);
+    const DWORD protectError = executable ? 0 : GetLastError();
+    if (executable) {
+        DWORD ignored = 0;
+        VirtualProtect(page, length, PAGE_READWRITE, &ignored);
+    }
+    VirtualFree(page, 0, MEM_RELEASE);
+    constexpr SIZE_T guestSize = static_cast<SIZE_T>(1ULL << 32);
+    void* guest = VirtualAlloc(nullptr, guestSize, MEM_RESERVE, PAGE_NOACCESS);
+    const DWORD reserveError = guest ? 0 : GetLastError();
+    if (guest) VirtualFree(guest, 0, MEM_RELEASE);
+    std::wstring result = L"RW page: ";
+    result += writable ? L"PASS" : L"FAIL";
+    result += L"  /  RW-to-RX: ";
+    result += executable ? L"PASS" : L"FAIL";
+    if (!executable) result += L" (error " + std::to_wstring(protectError) + L")";
+    result += L"  /  4 GiB virtual reserve: ";
+    result += guest ? L"PASS" : L"FAIL";
+    if (!guest) result += L" (error " + std::to_wstring(reserveError) + L")";
+    result += L". This is not Dynarmic/JIT compatibility proof.";
+    if (memoryResult_ != nullptr) memoryResult_->Text = StringOf(result);
+}
+void CatalogShell::BootRenderer() {
+    if (renderSurface_ == nullptr || rendererResult_ == nullptr) return;
+    std::wstring output;
+    const bool initialized = renderer_.Initialize(
+        reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, output);
+    if (initialized) renderer_.DrawTestFrame(output);
+    rendererResult_->Text = StringOf(output);
+    SetStatus(initialized ? L"Native D3D12 device created. Check renderer status for present result." :
+                            L"Native D3D12 initialization failed; see developer results.");
+}
+void CatalogShell::PresentTestFrame() {
+    if (rendererResult_ == nullptr) return;
+    std::wstring output;
+    if (!renderer_.Ready()) {
+        rendererResult_->Text = L"Initialize D3D12 first.";
+        return;
+    }
+    renderer_.DrawUploadTestFrame(output);
+    rendererResult_->Text = StringOf(output);
+}
+} // namespace Vita3KUWP
