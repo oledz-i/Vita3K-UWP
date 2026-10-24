@@ -5,6 +5,7 @@
 #include "SfoReader.h"
 #include "GameFormats.h"
 #include "VulkanDznProbe.h"
+#include "UwpJitProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
 #include <algorithm>
@@ -857,6 +858,21 @@ void CatalogShell::Diagnostics() {
     memory->Children->Append(probe);
     memoryResult_ = Text(L"Not tested on this Xbox.", 17, true);
     memory->Children->Append(memoryResult_);
+    auto jitDescription = Text(
+        L"JIT liveness runs a tiny native x64 function generated into a writable page, "
+        L"then switches it to executable-only/readable via VirtualProtectFromApp. "
+        L"Only run this on the Xbox after testing the normal memory probe. "
+        L"An Xbox code-integrity policy could terminate the app instead of returning an error. "
+        L"Passing is not proof that the Vita CPU or Dynarmic works.", 15, false, true);
+    memory->Children->Append(jitDescription);
+    auto jitButton = Button(L"Execute on-demand JIT machine-code test");
+    auto jitReport = Text(L"Generated machine code has not been executed.", 16, true);
+    jitButton->Click += ref new RoutedEventHandler(
+        [this,jitReport](Platform::Object^, RoutedEventArgs^) {
+            jitReport->Text = StringOf(RunUwpJitLivenessProbe());
+        });
+    memory->Children->Append(jitButton);
+    memory->Children->Append(jitReport);
     content_->Children->Append(Panel(memory));
 
     Section(L"Direct3D 12 renderer");
@@ -1538,7 +1554,7 @@ void CatalogShell::ProbeCore() {
 }
 void CatalogShell::ProbeMemory() {
     const SIZE_T length = 4096;
-    void* page = VirtualAlloc(nullptr, length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    void* page = VirtualAllocFromApp(nullptr, length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!page) {
         if (memoryResult_ != nullptr)
             memoryResult_->Text = L"RW allocation failed. Windows error: " +
@@ -1549,15 +1565,15 @@ void CatalogShell::ProbeMemory() {
     bytes[0] = 0x5a;
     const bool writable = bytes[0] == 0x5a;
     DWORD oldProtect = 0;
-    const BOOL executable = VirtualProtect(page, length, PAGE_EXECUTE_READ, &oldProtect);
+    const BOOL executable = VirtualProtectFromApp(page, length, PAGE_EXECUTE_READ, &oldProtect);
     const DWORD protectError = executable ? 0 : GetLastError();
     if (executable) {
         DWORD ignored = 0;
-        VirtualProtect(page, length, PAGE_READWRITE, &ignored);
+        VirtualProtectFromApp(page, length, PAGE_READWRITE, &ignored);
     }
     VirtualFree(page, 0, MEM_RELEASE);
     constexpr SIZE_T guestSize = static_cast<SIZE_T>(1ULL << 32);
-    void* guest = VirtualAlloc(nullptr, guestSize, MEM_RESERVE, PAGE_NOACCESS);
+    void* guest = VirtualAllocFromApp(nullptr, guestSize, MEM_RESERVE, PAGE_NOACCESS);
     const DWORD reserveError = guest ? 0 : GetLastError();
     if (guest) VirtualFree(guest, 0, MEM_RELEASE);
     std::wstring result = L"RW page: ";
