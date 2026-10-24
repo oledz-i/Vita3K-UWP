@@ -10,4 +10,5 @@
       <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#0C121E" />
     </uap:VisualElements>
   </Application></Applications>
+  <Capabilities><Capability Name="internetClient" /></Capabilities>
 </Package>
