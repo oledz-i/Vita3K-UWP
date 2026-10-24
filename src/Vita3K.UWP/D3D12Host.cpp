@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "D3D12Host.h"
 #include <windows.ui.xaml.media.dxinterop.h>
+#include <vector>
+#include <cstring>
 
 using Microsoft::WRL::ComPtr;
 
@@ -18,6 +20,9 @@ void D3D12Host::Shutdown() {
         CloseHandle(fenceEvent_);
         fenceEvent_ = nullptr;
     }
+    frameUpload_.Reset();
+    width_ = 0;
+    height_ = 0;
     fence_.Reset();
     for (auto& buffer : buffers_) buffer.Reset();
     rtvHeap_.Reset();
@@ -110,6 +115,8 @@ bool D3D12Host::Initialize(IUnknown* panel, unsigned width, unsigned height, std
         return Fail(L"CreateEventExW", HRESULT_FROM_WIN32(GetLastError()), result);
     }
 
+    width_ = width;
+    height_ = height;
     result = L"D3D12 device, command queue, 2-buffer flip swap chain and RTVs initialized";
     return true;
 }
@@ -169,4 +176,114 @@ bool D3D12Host::DrawTestFrame(std::wstring& result) {
 
     result = L"D3D12 clear and swap-chain present succeeded (graphics bootstrap; no Vita draws)";
     return true;
+}
+
+bool D3D12Host::PresentBgraFrame(const std::uint8_t* pixels, unsigned width,
+                                 unsigned height, unsigned strideBytes, std::wstring& result) {
+    if (!Ready() || pixels == nullptr || width == 0 || height == 0 ||
+        width != width_ || height != height_ || strideBytes < width * 4u) {
+        result = L"Invalid BGRA source frame or graphics device not ready";
+        return false;
+    }
+
+    // D3D12 requires the buffer copy pitch to be aligned to 256 bytes.
+    const unsigned rowPitch = (width * 4u + 255u) & ~255u;
+    const UINT64 uploadBytes = static_cast<UINT64>(rowPitch) * height;
+    if (!frameUpload_) {
+        D3D12_HEAP_PROPERTIES heap = {};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = uploadBytes;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        const HRESULT hr = device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(frameUpload_.GetAddressOf()));
+        if (FAILED(hr)) return Fail(L"Create framebuffer upload resource", hr, result);
+    }
+
+    D3D12_RANGE emptyReadRange = { 0, 0 };
+    void* destination = nullptr;
+    HRESULT hr = frameUpload_->Map(0, &emptyReadRange, &destination);
+    if (FAILED(hr)) return Fail(L"Map framebuffer upload", hr, result);
+    for (unsigned y = 0; y < height; ++y) {
+        std::memcpy(static_cast<std::uint8_t*>(destination) +
+                        static_cast<size_t>(y) * rowPitch,
+                    pixels + static_cast<size_t>(y) * strideBytes, width * 4u);
+    }
+    D3D12_RANGE writtenRange = { 0, static_cast<SIZE_T>(uploadBytes) };
+    frameUpload_->Unmap(0, &writtenRange);
+
+    hr = allocator_->Reset();
+    if (FAILED(hr)) return Fail(L"Framebuffer allocator reset", hr, result);
+    hr = commands_->Reset(allocator_.Get(), nullptr);
+    if (FAILED(hr)) return Fail(L"Framebuffer command list reset", hr, result);
+
+    const UINT frame = swapChain_->GetCurrentBackBufferIndex();
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = buffers_[frame].Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    commands_->ResourceBarrier(1, &barrier);
+
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = frameUpload_.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Offset = 0;
+    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    src.PlacedFootprint.Footprint.Width = width;
+    src.PlacedFootprint.Footprint.Height = height;
+    src.PlacedFootprint.Footprint.Depth = 1;
+    src.PlacedFootprint.Footprint.RowPitch = rowPitch;
+
+    D3D12_TEXTURE_COPY_LOCATION dst = {};
+    dst.pResource = buffers_[frame].Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    commands_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    commands_->ResourceBarrier(1, &barrier);
+    hr = commands_->Close();
+    if (FAILED(hr)) return Fail(L"Framebuffer command list close", hr, result);
+    ID3D12CommandList* lists[] = { commands_.Get() };
+    queue_->ExecuteCommandLists(1, lists);
+    hr = swapChain_->Present(1, 0);
+    if (FAILED(hr)) return Fail(L"Framebuffer Present", hr, result);
+    if (!WaitForGpu(result)) return false;
+
+    result = L"BGRA framebuffer upload, copy and GPU presentation succeeded (not Vita GPU rendering)";
+    return true;
+}
+
+bool D3D12Host::DrawUploadTestFrame(std::wstring& result) {
+    if (!Ready()) {
+        result = L"D3D12 must initialize before framebuffer upload";
+        return false;
+    }
+    std::vector<std::uint8_t> pixels(static_cast<size_t>(width_) * height_ * 4u);
+    for (unsigned y = 0; y < height_; ++y) {
+        for (unsigned x = 0; x < width_; ++x) {
+            auto* p = &pixels[(static_cast<size_t>(y) * width_ + x) * 4u];
+            p[0] = static_cast<std::uint8_t>(25 + (160u * x) / width_); // blue
+            p[1] = static_cast<std::uint8_t>(20 + (110u * y) / height_); // green
+            p[2] = static_cast<std::uint8_t>(40 + (110u * x) / width_); // red
+            p[3] = 255;
+            if (y > height_ / 2 - 5 && y < height_ / 2 + 5) {
+                p[0] = 255; p[1] = 210; p[2] = 70;
+            }
+        }
+    }
+    return PresentBgraFrame(pixels.data(), width_, height_, width_ * 4u, result);
 }
