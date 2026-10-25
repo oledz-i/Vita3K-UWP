@@ -342,15 +342,20 @@ void CatalogShell::BuildNavigation() {
     rail->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
     rail->Width = 100;
     rail->Margin = Thickness(0, 25, 0, 0);
-    auto wordmark = Text(L"V", 39, true);
-    wordmark->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
-    wordmark->Foreground = Solid(Accent());
-    wordmark->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-    rail->Children->Append(wordmark);
-    auto tiny = Text(L"3K", 11, true, true);
-    tiny->CharacterSpacing = 260;
-    tiny->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-    rail->Children->Append(tiny);
+    // Use the Vita handheld artwork already packaged as the app's icon.
+    // The old giant V/3K text was a placeholder, not the project identity.
+    auto appLogo = ref new Image();
+    appLogo->Width = 68;
+    appLogo->Height = 68;
+    appLogo->Stretch = Stretch::Uniform;
+    appLogo->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    appLogo->Source = ref new BitmapImage(ref new Uri(L"ms-appx:///Assets/Square150x150Logo.png"));
+    rail->Children->Append(appLogo);
+    auto brandName = Text(L"vita3k", 14, true);
+    brandName->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
+    brandName->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    brandName->Margin = Thickness(0, 5, 0, 0);
+    rail->Children->Append(brandName);
     auto spacer = ref new Border();
     spacer->Height = 76;
     rail->Children->Append(spacer);
