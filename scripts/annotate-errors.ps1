@@ -21,6 +21,12 @@ function Compress-Line([string]$line) {
 }
 
 $sections = @()
+$buildLog = Join-Path $dir 'build.log'
+if (Test-Path $buildLog) {
+  $primary = @(Select-String -Path $buildLog -Pattern 'error\s+(?:C|D|LNK|MSB)\d+|fatal error|CMake Error' |
+    ForEach-Object { Compress-Line $_.Line } | Select-Object -Unique)
+  if ($primary.Count) { $sections += [pscustomobject]@{ Name = 'build.log errors'; Lines = $primary } }
+}
 foreach ($name in @('keepgoing-top-causes.txt', 'keepgoing-errors.txt', 'errors-summary.txt', 'build-tail.txt', 'configure-tail.txt')) {
   $p = Join-Path $dir $name
   if (!(Test-Path $p)) { continue }

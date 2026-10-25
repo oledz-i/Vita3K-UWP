@@ -129,6 +129,10 @@ jobs:
           path: artifacts/core-port/
           if-no-files-found: warn
           retention-days: 14
+      - name: Publish primary build errors as annotations
+        if: failure()
+        shell: pwsh
+        run: ./scripts/annotate-errors.ps1
       - name: Compile downstream core modules to collect remaining errors
         if: failure()
         shell: pwsh
