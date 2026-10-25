@@ -7,6 +7,10 @@ on:
       - .github/workflows/core-port.yml
       - core-candidates.lock.json
       - scripts/probe-vita3k-uwp.ps1
+      - scripts/patch-vita3k-uwp.py
+concurrency:
+  group: full-core-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

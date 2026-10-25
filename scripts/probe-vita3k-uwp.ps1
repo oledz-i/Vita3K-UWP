@@ -56,6 +56,8 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 '@)
 [IO.File]::WriteAllText($externalCmake, $external)
 
+& python "$root/scripts/patch-vita3k-uwp.py" "$upstream" 2>&1 | Tee-Object -FilePath (Join-Path $out 'filesystem-port.log')
+if ($LASTEXITCODE -ne 0) { throw 'Pinned filesystem port failed' }
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
 "Starting Windows Store CMake configure..." | Add-Content -Path (Join-Path $out 'assessment.txt')
