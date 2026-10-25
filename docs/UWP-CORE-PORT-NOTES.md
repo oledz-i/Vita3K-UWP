@@ -80,3 +80,23 @@ The libretro wrapper's separate desktop VEH trace hook is also guarded on UWP,
 matching the utility logger fix while preserving ordinary core trace logging.
 These source changes applied cleanly to the pinned source; firmware extraction
 has not been exercised here because no firmware/game data or Xbox is attached.
+
+## Guest memory fault recovery (run 40163302619)
+
+The next build reached mem.cpp and failed only on its
+AddVectoredExceptionHandler call. Unlike the optional logging hooks, this
+callback implements protected guest-memory invalidation and cannot be dropped.
+
+The UWP adapter installs the same access-violation callback through
+SetUnhandledExceptionFilter, which Microsoft documents for UWP and permits to
+return EXCEPTION_CONTINUE_EXECUTION after a handled exception. The new shared
+helper rejects execute faults, noncontinuable exceptions and malformed records,
+chains unrelated faults, and restores the previous filter during core teardown.
+
+Before compiling the core, Windows CI builds and runs a native test with UWP
+API-family declarations enabled. Two guest-like worker threads fault on a
+read-only write and a no-access read, respectively; the test requires both
+instructions to resume and verifies delegation and filter restoration. The test
+uses the exact header copied into Vita3K. It is not an AppContainer/Xbox test:
+platform exception boundaries, debuggers, and other installed filters can alter
+delivery, so Xbox validation is still necessary.

@@ -377,3 +377,33 @@ text = text.replace(old, '''#ifdef VITA3K_UWP
 ''' + old, 1)
 core.write_text(text)
 print('Connected staged firmware installation to UWP game loading; skipped installed components.')
+
+# UWP cannot register a vectored handler. Its supported process top-level
+# filter can resume a handled protection fault. Preserve the real callback and
+# protect-tree invalidation; never replace guest fault handling with a no-op.
+import shutil
+helper = pathlib.Path(__file__).resolve().parent.parent / 'src/platform/UwpMemoryFaultHandler.h'
+shutil.copyfile(helper, source / 'vita3k/mem/include/mem/uwp_fault_handler.h')
+text = memory.read_text()
+old = '#include <Windows.h>'
+assert old in text
+text = text.replace(old, old + '\n#ifdef VITA3K_UWP\n#include <mem/uwp_fault_handler.h>\n#endif', 1)
+old = '''    if (!AddVectoredExceptionHandler(1, exception_handler)) {
+        LOG_CRITICAL("Failed to register an exception handler");
+    }'''
+assert old in text
+text = text.replace(old, '''#ifdef VITA3K_UWP
+    vita3k_uwp::MemoryFaultHandler::Install([](uint8_t *addr, bool write) noexcept {
+        return access_violation_handler && access_violation_handler(addr, write);
+    });
+#else
+''' + old + '\n#endif', 1)
+old = 'void deinit_mem(MemState &state) {\n'
+assert old in text
+text = text.replace(old, old + '''#ifdef VITA3K_UWP
+    vita3k_uwp::MemoryFaultHandler::Remove();
+    access_violation_handler = {};
+#endif
+''', 1)
+memory.write_text(text)
+print('Preserved guest memory fault recovery using the UWP top-level exception filter.')

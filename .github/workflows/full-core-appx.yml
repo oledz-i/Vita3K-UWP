@@ -11,6 +11,8 @@ on:
       - scripts/patch-vita3k-uwp.py
       - scripts/fix-sdl-uwp-vcxproj.ps1
       - scripts/uwp-core-flags.cmake
+      - scripts/test-uwp-memory-faults.ps1
+      - tests/uwp-memory-fault-test.cpp
       - scripts/apply-onyx-dynarmic.ps1
       - core-candidates.lock.json
       - render-abi.lock.json
@@ -43,6 +45,9 @@ jobs:
             foreach ($parseIssue in $parseErrors) { $invalid += "$($_.Name): $parseIssue" }
           }
           if ($invalid.Count) { throw ($invalid -join "`n") }
+      - name: Verify protected guest memory faults can resume
+        shell: pwsh
+        run: ./scripts/test-uwp-memory-faults.ps1
       - name: Fetch pinned libretro Vita3K source with submodules
         shell: pwsh
         run: |
