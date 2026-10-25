@@ -16,6 +16,8 @@ on:
       - scripts/uwp-core-flags.cmake
       - scripts/test-uwp-memory-faults.ps1
       - tests/uwp-memory-fault-test.cpp
+      - tests/uwp-path-format-test.cpp
+      - scripts/test-uwp-path-format.ps1
       - scripts/apply-onyx-dynarmic.ps1
       - core-candidates.lock.json
       - render-abi.lock.json

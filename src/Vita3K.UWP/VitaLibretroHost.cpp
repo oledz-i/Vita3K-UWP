@@ -115,6 +115,10 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
 
 bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring& detail) {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
+    if (initialized_) {
+        detail = L"Vita3K core is already initialized.";
+        return true;
+    }
     systemDir_ = systemFolder.c_str();
     // Keep frontend diagnostics outside the core's firmware directory so they
     // survive load failures. The caller passes LocalFolder/Vita3KSystem.
@@ -122,10 +126,6 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
     if (parent != std::string::npos)
         runtimeLogPath_ = FromUtf8((systemDir_.substr(0, parent + 1) + "vita3k-runtime.log").c_str());
     if (!Probe(detail)) return false;
-    if (initialized_) {
-        detail = L"Vita3K core is already initialized.";
-        return true;
-    }
     unsupportedVideo_ = false;
     if (!init_) return false;
     if (!audio_.Start()) {
@@ -157,6 +157,7 @@ void VitaLibretroHost::UnloadGame() {
     gameLoaded_ = false;
     sampleBuffer_.clear();
     framesExecuted_ = 0;
+    framePresented_ = false;
 }
 bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wstring& detail) {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
@@ -329,8 +330,12 @@ void __cdecl VitaLibretroHost::Video(
     const void* data, unsigned width, unsigned height, std::size_t) {
     if (!active_ || data != RETRO_HW_FRAME_BUFFER_VALID) return;
     std::string error;
-    if (!active_->vulkan_.Present(width, height, error) && !error.empty())
+    if (active_->vulkan_.Present(width, height, error)) {
+        if (!active_->framePresented_.exchange(true))
+            Log(1, "First core video frame presented: %u x %u.\n", width, height);
+    } else if (!error.empty()) {
         Log(3, "Vulkan frame readback failed: %s\n", error.c_str());
+    }
 }
 void __cdecl VitaLibretroHost::Audio(std::int16_t left, std::int16_t right) {
     if (!active_) return;

@@ -89,6 +89,7 @@ private:
 
     std::recursive_mutex lifecycleMutex_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> framePresented_{false};
     std::thread runThread_;
     VitaVulkanBridge vulkan_;
     CoreAudio audio_;
