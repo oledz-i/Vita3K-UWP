@@ -188,7 +188,7 @@ replace('vita3k/renderer/src/vulkan/renderer.cpp',
 # vita3k/cpu/src/cpu.cpp, GPL-2.0-or-later. UWP executable-memory allocation
 # can fail too: preserve kernel thread creation's existing null-CPU error path.
 replace('vita3k/cpu/src/cpu.cpp', '#include <cpu/functions.h>',
-        '#include <cpu/functions.h>\n#include <exception>')
+        '#include <cpu/functions.h>\n#include <exception>\n#include <util/log.h>')
 replace('vita3k/cpu/src/cpu.cpp',
         '    state->cpu = std::make_unique<DynarmicCPU>(state.get(), processor_id, cpu_opt);',
 '''#ifdef VITA3K_UWP
