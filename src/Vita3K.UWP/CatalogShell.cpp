@@ -311,10 +311,27 @@ CatalogShell::CatalogShell() {
             });
     }
 
+    Application::Current->Suspending += ref new SuspendingEventHandler(
+        [this](Platform::Object^, SuspendingEventArgs^ args) {
+            auto deferral = args->SuspendingOperation->GetDeferral();
+            create_task([this,deferral] {
+                libretro_.StopRunning();
+                deferral->Complete();
+            });
+        });
     Content = root_;
     Window::Current->CoreWindow->KeyDown +=
         ref new TypedEventHandler<Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^>(
             [this](Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^ e) {
+                if (libretro_.Running()) {
+                    // B belongs to the game, not frontend navigation. Escape
+                    // is an explicit desktop stop action while testing a core.
+                    if (e->VirtualKey == Windows::System::VirtualKey::Escape) {
+                        libretro_.StopRunning();
+                        SetStatus(L"Game execution stopped.");
+                    }
+                    return;
+                }
                 if (page_ == 0) return;
                 const auto code = e->VirtualKey;
                 if (code == Windows::System::VirtualKey::GamepadB ||
@@ -1688,6 +1705,7 @@ void CatalogShell::AttemptBoot(size_t index) {
                 std::wstring detail;
                 if (!libretro_.Initialize(system, detail)) return detail;
                 if (!libretro_.LoadGame(content, detail)) return detail;
+                if (!libretro_.StartRunning(detail)) return detail;
                 return detail;
             }).then([this](task<std::wstring> result) {
                 try { SetStatus(StringOf(result.get())); }

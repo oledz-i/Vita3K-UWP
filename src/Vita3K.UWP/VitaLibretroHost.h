@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <string>
 #include <mutex>
+#include <atomic>
+#include <thread>
 #include <Xinput.h>
 #include "CoreAudio.h"
 
@@ -31,6 +33,9 @@ public:
     bool LoadGame(const std::string& readableContentPath, std::wstring& detail);
     // retro_run advances guest CPU and graphics only after LoadGame succeeds.
     bool RunFrame(std::wstring& detail);
+    bool StartRunning(std::wstring& detail);
+    void StopRunning();
+    bool Running() const { return running_.load(); }
     void UnloadGame();
     std::wstring RecentLog() const;
     void Shutdown();
@@ -80,6 +85,8 @@ private:
     static void __cdecl PollInput();
     static std::int16_t __cdecl Input(unsigned port, unsigned device, unsigned index, unsigned id);
 
+    std::atomic<bool> running_{false};
+    std::thread runThread_;
     CoreAudio audio_;
     std::vector<std::int16_t> sampleBuffer_;
     XINPUT_STATE inputState_{};

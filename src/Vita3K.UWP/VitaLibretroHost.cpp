@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <string>
+#include <chrono>
 #pragma comment(lib, "xinputuap.lib")
 
 VitaLibretroHost* VitaLibretroHost::active_ = nullptr;
@@ -138,6 +139,7 @@ std::wstring VitaLibretroHost::RecentLog() const {
     return FromUtf8(latestCoreLogs_.c_str());
 }
 void VitaLibretroHost::UnloadGame() {
+    StopRunning();
     if (gameLoaded_ && unloadGame_) unloadGame_();
     gameLoaded_ = false;
     sampleBuffer_.clear();
@@ -178,6 +180,7 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     return true;
 }
 bool VitaLibretroHost::RunFrame(std::wstring& detail) {
+    if (running_.load()) { detail = L"Core is already advancing on its execution thread."; return false; }
     if (!gameLoaded_ || !runFrame_) {
         detail = L"No Vita game is loaded.";
         return false;
@@ -188,6 +191,43 @@ bool VitaLibretroHost::RunFrame(std::wstring& detail) {
         std::to_wstring(framesExecuted_) +
         L". Verify a Vita guest thread and real rendered frames before "
         L"calling this gameplay.";
+    return true;
+}
+void VitaLibretroHost::StopRunning() {
+    running_.store(false);
+    if (runThread_.joinable()) runThread_.join();
+}
+bool VitaLibretroHost::StartRunning(std::wstring& detail) {
+    if (running_.load()) { detail = L"Vita3K session is already running."; return true; }
+    StopRunning();
+    if (!gameLoaded_ || !runFrame_ || unsupportedVideo_) {
+        detail = L"Cannot run: game loading and hardware context initialization must succeed first. " + RecentLog();
+        return false;
+    }
+    running_.store(true);
+    try {
+        runThread_ = std::thread([this] {
+            // The pinned core reports 60 Hz. Pace frames without running the
+            // guest on the XAML dispatcher or spinning to catch up after stalls.
+            constexpr auto period = std::chrono::microseconds(16667);
+            try {
+                while (running_.load()) {
+                    const auto start = std::chrono::steady_clock::now();
+                    runFrame_();
+                    ++framesExecuted_;
+                    std::this_thread::sleep_until(start + period);
+                }
+            } catch (...) {
+                Log(3, "Core frame execution threw an exception; session stopped.\n");
+                running_.store(false);
+            }
+        });
+    } catch (...) {
+        running_.store(false);
+        detail = L"Could not create the core execution thread.";
+        return false;
+    }
+    detail = L"Vita3K execution started. View + Menu stops the session. Visible game output requires the Vulkan interface.";
     return true;
 }
 void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
@@ -264,6 +304,11 @@ void __cdecl VitaLibretroHost::PollInput() {
     // Take one coherent controller snapshot for the emulated frame.
     active_->inputConnected_ = XInputGetState(0, &active_->inputState_) == ERROR_SUCCESS;
     if (!active_->inputConnected_) active_->inputState_ = {};
+    const auto buttons = active_->inputState_.Gamepad.wButtons;
+    if ((buttons & (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START)) ==
+        (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START)) {
+        active_->running_.store(false);
+    }
 }
 std::int16_t __cdecl VitaLibretroHost::Input(
     unsigned port, unsigned device, unsigned index, unsigned id) {
