@@ -98,6 +98,20 @@ original = original.replace(
 )
 filesystem.write_text(original)
 
+# The libretro install/load/firmware paths pass errors to std::filesystem.
+# Boost error_code cannot bind to the std::error_code overload. These three
+# files consistently use the error codes for fs:: operations.
+for relative in (
+    "vita3k/libretro/libretro_vita3k.cpp",
+    "vita3k/libretro/libretro_game_loader.cpp",
+    "vita3k/libretro/libretro_installer.cpp",
+):
+    file = source / relative
+    data = file.read_text()
+    assert "boost::system::error_code" in data, f"Expected upstream fs error type in {relative}"
+    data = data.replace("boost::system::error_code", "std::error_code")
+    file.write_text(data)
+
 print("Applied experimental genuine Vita3K WindowsStore std::filesystem port patch.")
 print(f"Removed manifest dependencies: {', '.join(sorted(existing & removed))}")
 print("Emulator CPU, Vita kernel, package loader, GXM, and graphics code kept intact.")
