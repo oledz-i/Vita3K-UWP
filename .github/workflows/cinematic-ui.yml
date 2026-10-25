@@ -1,0 +1,70 @@
+name: Vita3K Cinematic Xbox UI
+on:
+  push:
+    branches: [cinematic-ui-overhaul]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: cinematic-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  appx-with-onyx-dozen:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Reuse verified Onyx Mesa UWP GPU build from prior successful run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh run download 40146146144 --repo oledz-i/Vita3K-UWP --name onyx-mesa-dozen-uwp --dir artifacts/onyx-cached-gpu
+          if ($LASTEXITCODE -ne 0) { throw 'Could not retrieve the actual Onyx-patched Mesa UWP build' }
+          foreach ($dll in @('vulkan_dzn.dll', 'dxil.dll')) {
+            $from = Join-Path 'artifacts/onyx-cached-gpu' $dll
+            if (!(Test-Path $from)) { throw "$dll missing from the Onyx source-compiled GPU artifact" }
+            Copy-Item $from (Join-Path 'src/Vita3K.UWP' $dll)
+          }
+          Get-FileHash 'src/Vita3K.UWP/vulkan_dzn.dll','src/Vita3K.UWP/dxil.dll'
+      - name: Check source correctness and synthesized audio
+        shell: pwsh
+        run: |
+          python scripts/validate.py
+          if ($LASTEXITCODE -ne 0) { throw 'Project source validation failed' }
+      - name: Compile and sign cinematic UI plus genuine Onyx Dozen DLL
+        shell: pwsh
+        run: ./scripts/build-appx.ps1 -BuildNumber ${{ github.run_number }}
+      - name: Verify both source-built GPU DLLs are inside signed APPX
+        shell: pwsh
+        run: |
+          $appx = @(Get-ChildItem artifacts/package -Recurse -Filter '*.appx' |
+            Where-Object { $_.FullName -notmatch '[\\/]Dependencies[\\/]' })
+          if ($appx.Count -ne 1) { throw 'Expected one application APPX' }
+          Copy-Item $appx[0].FullName "$env:RUNNER_TEMP/appx-contents.zip"
+          Add-Type -AssemblyName System.IO.Compression
+          $archive = [IO.Compression.ZipFile]::OpenRead("$env:RUNNER_TEMP/appx-contents.zip")
+          try {
+            $entries = @($archive.Entries | ForEach-Object FullName)
+            foreach ($file in @('vulkan_dzn.dll','dxil.dll')) {
+              if (!($entries | Where-Object { $_ -ieq $file -or $_ -ilike "*/$file" })) {
+                throw "$file was not found in the signed APPX"
+              }
+            }
+          } finally { $archive.Dispose() }
+      - name: Publish signed Xbox UI + Vulkan prototype
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-Cinematic-UI-Onyx-Dozen-x64-${{ github.run_number }}
+          path: artifacts/package/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Collect MSBuild logs on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-Cinematic-UI-Compile-Logs-${{ github.run_number }}
+          path: artifacts/logs/
+          if-no-files-found: warn
