@@ -5,6 +5,9 @@
 // loaded directly via the Vulkan Installable Client Driver (ICD) ABI.
 // This probe does not render frames or claim Vita GXM integration.
 #include "VulkanDznProbe.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <algorithm>
 #include <cstdint>
