@@ -17,6 +17,9 @@ blocked dependent Vita3K libraries. No working emulator DLL was produced.
 - Optional sparse-file/volume probes conservatively return unsupported on UWP;
   archive decryption and ordinary file caching remain present. Sparse cache
   files may occupy more storage.
+- Keep guest networking on Winsock 2 instead of the desktop Winsock 1 DLL.
+- Unload Vita3K renderer allocations before destroying the borrowed Vulkan
+  device, including partial initialization failures.
 - Capture MSVC Dxxxx and MSBuild MSBxxxx errors in ERROR-LOG.txt. D8016 was
   present in the full log but missed by the earlier summary filter.
 

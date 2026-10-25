@@ -143,8 +143,10 @@ std::wstring VitaLibretroHost::RecentLog() const {
 void VitaLibretroHost::UnloadGame() {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     StopRunning();
-    vulkan_.Shutdown();
+    // retro_unload_game stops the guest/render threads and frees the core's
+    // Vulkan allocations. Its shared device must remain alive until it returns.
     if (gameLoaded_ && unloadGame_) unloadGame_();
+    vulkan_.Shutdown();
     gameLoaded_ = false;
     sampleBuffer_.clear();
     framesExecuted_ = 0;

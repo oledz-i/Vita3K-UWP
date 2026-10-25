@@ -19,7 +19,7 @@ on:
       - src/**
 concurrency:
   group: full-core-appx-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 permissions:
   contents: read
   actions: read

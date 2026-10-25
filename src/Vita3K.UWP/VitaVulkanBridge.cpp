@@ -73,7 +73,12 @@ bool VitaVulkanBridge::Initialize(std::string& error) {
         reset_ = true;
         callback_.context_reset();
         return true;
-    } catch (const std::exception& e) { error = e.what(); Shutdown(); return false; }
+    } catch (const std::exception& e) {
+        error = e.what();
+        // The caller unloads the core before Shutdown. A partially initialized
+        // renderer can still own allocations on this device after context_reset.
+        return false;
+    }
 }
 void VitaVulkanBridge::SetImage(void* p, const retro_vulkan_image* image, uint32_t count, const VkSemaphore* waits, uint32_t family) {
     auto& self = *static_cast<VitaVulkanBridge*>(p);
@@ -178,5 +183,6 @@ void VitaVulkanBridge::Shutdown() {
     } catch (...) {}
     device_ = VK_NULL_HANDLE; instance_ = VK_NULL_HANDLE; queue_ = VK_NULL_HANDLE; haveImage_ = false;
     negotiation_ = nullptr; callback_ = {}; waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE;
-    if (icd_) FreeLibrary(icd_); icd_ = nullptr; ipa_ = nullptr; dpa_ = nullptr;
+    if (icd_) FreeLibrary(icd_);
+    icd_ = nullptr; ipa_ = nullptr; dpa_ = nullptr;
 }

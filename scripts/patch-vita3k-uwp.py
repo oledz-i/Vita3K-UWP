@@ -244,3 +244,15 @@ assert old in text
 text = text.replace(old, '    return holes;\n#endif\n}\n\nbool holes_supported', 1)
 lazy.write_text(text)
 print('Adapted native filesystem paths and excluded desktop window/console/sparse-volume helpers on Xbox.')
+
+# Winsock 1's wsock32.dll is a desktop dependency. Keep guest networking on
+# Winsock 2 and IP Helper rather than letting the linker resolve it via wsock32.
+text = external.read_text()
+old = 'target_link_libraries(winsock INTERFACE WSOCK32 WS2_32 IPHLPAPI)'
+assert text.count(old) == 1
+text = text.replace(old, '''if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+    target_link_libraries(winsock INTERFACE WS2_32 IPHLPAPI)
+  else()
+    target_link_libraries(winsock INTERFACE WSOCK32 WS2_32 IPHLPAPI)
+  endif()''')
+external.write_text(text)
