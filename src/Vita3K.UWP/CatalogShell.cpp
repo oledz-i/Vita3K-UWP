@@ -508,12 +508,12 @@ Button^ CatalogShell::MakeTile(size_t index) {
         v->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
         v->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
         art->Children->Append(v);
-        auto small = Text(games_[index].name, 15, true);
-        small->Foreground = Solid(Colors::White);
-        small->MaxHeight = 53;
-        small->Margin = Thickness(14, 0, 14, 17);
-        small->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
-        art->Children->Append(small);
+        auto coverCaption = Text(games_[index].name, 15, true);
+        coverCaption->Foreground = Solid(Colors::White);
+        coverCaption->MaxHeight = 53;
+        coverCaption->Margin = Thickness(14, 0, 14, 17);
+        coverCaption->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
+        art->Children->Append(coverCaption);
     }
     cover->Child = art;
     card->Children->Append(cover);
