@@ -24,6 +24,9 @@ public:
     bool PresentBgraFrame(const std::uint8_t* pixels, unsigned width, unsigned height,
                           unsigned strideBytes, std::wstring& result);
     bool DrawUploadTestFrame(std::wstring& result);
+    bool PresentScaledBgraFrame(const std::uint8_t* pixels, unsigned width,
+        unsigned height, unsigned strideBytes, bool sourceRgba,
+        std::wstring& result);
     void Shutdown();
     bool Ready() const { return swapChain_ != nullptr; }
 
