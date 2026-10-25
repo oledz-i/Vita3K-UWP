@@ -3,6 +3,11 @@ on:
   push:
     branches: [cinematic-ui-overhaul, undertale-boot, astra-undertale]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Public release build (hides the developer Tools page)
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -13,6 +18,8 @@ jobs:
   appx-with-onyx-dozen:
     runs-on: windows-2022
     timeout-minutes: 35
+    env:
+      VITA3K_RELEASE: ${{ inputs.release && '1' || '0' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Reuse verified Onyx Mesa UWP GPU build from prior successful run
@@ -37,6 +44,10 @@ jobs:
       - name: Compile and sign cinematic UI plus genuine Onyx Dozen DLL
         shell: pwsh
         run: ./scripts/build-appx.ps1 -BuildNumber ${{ github.run_number }}
+      - name: Show build errors on the run page
+        if: failure()
+        shell: pwsh
+        run: ./scripts/annotate-msbuild.ps1
       - name: Verify both source-built GPU DLLs are inside signed APPX
         shell: pwsh
         run: |

@@ -1,6 +1,11 @@
 name: Full Vita3K core + Dozen signed APPX (gameplay path)
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Public release build (hides the developer Tools page)
+        type: boolean
+        default: false
   push:
     branches: [astra-undertale]
     paths:
@@ -190,6 +195,8 @@ jobs:
     name: Package core, Dozen and runtime DLLs into signed APPX
     needs: [core]
     runs-on: windows-2022
+    env:
+      VITA3K_RELEASE: ${{ inputs.release && '1' || '0' }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

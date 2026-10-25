@@ -33,12 +33,16 @@
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
     <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
   </PropertyGroup>
+  <PropertyGroup>
+    <!-- msbuild /p:Vita3KRelease=true hides the developer Tools page. See docs/RELEASING.md. -->
+    <Vita3KReleaseDefine Condition="'$(Vita3KRelease)' == 'true'">VITA3K_RELEASE_BUILD;</Vita3KReleaseDefine>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <CompileAsWinRT>true</CompileAsWinRT>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>$(Vita3KReleaseDefine)NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\..\build\abi\include;$(MSBuildProjectDirectory)\..\..\build\abi\Vulkan-Headers\include;$(MSBuildProjectDirectory)\\..\\..\\third_party\\vita3k\\mem\\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>

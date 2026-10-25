@@ -12,7 +12,7 @@ No game-performance or release-date guarantees. The `core-integration` branch re
 | 5 — First homebrew boot | Load a decrypted Vita homebrew ELF/SELF, resolve imports, run CPU/kernel and produce a displayed frame | **Not achieved:** requires complete core, loader, service stubs and GXM shader execution |
 | 6 — Commercial-game capability | Legitimate license handling, install/launch flow, compatibility reporting | **Not achieved:** file/PKG header checks and stored license-file permissions only; no decryption/installation or boot |
 | Parallel — Vulkan/OpenGL | Documented Xbox viable graphics paths | Research only; neither supported natively by Xbox UWP |
-| Release readiness | Persistent signing, tested upgrades, saves, hardware compatibility | Pending |
+| Release readiness | Persistent signing, tested upgrades, saves, hardware compatibility; Tools page hidden in public builds ([how](RELEASING.md)) | Pending |
 
 ## Next technical gates
 

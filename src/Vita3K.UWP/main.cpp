@@ -15,6 +15,10 @@ public:
 protected:
     virtual void OnLaunched(LaunchActivatedEventArgs^ args) override {
         if (args->PrelaunchActivated) return;
+        // Draw edge to edge; the shell keeps its own title-safe margins, so
+        // backgrounds reach the screen edge instead of stopping at a border.
+        Windows::UI::ViewManagement::ApplicationView::GetForCurrentView()->SetDesiredBoundsMode(
+            Windows::UI::ViewManagement::ApplicationViewBoundsMode::UseCoreWindow);
         Window::Current->Content = ref new CatalogShell();
         Window::Current->Activate();
     }

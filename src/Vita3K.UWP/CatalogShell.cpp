@@ -36,6 +36,8 @@ using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Controls::Primitives;
 using namespace Windows::UI::Xaml::Media;
 using namespace Windows::UI::Xaml::Media::Imaging;
+using namespace Windows::UI::Xaml::Media::Animation;
+using namespace Windows::UI::Xaml::Markup;
 using namespace Windows::UI::Xaml::Shapes;
 
 namespace Vita3KUWP {
@@ -51,6 +53,29 @@ Platform::String^ Pref(Platform::String^ key, Platform::String^ fallback = L"") 
 }
 void PutPref(Platform::String^ key, Platform::String^ value) {
     ApplicationData::Current->LocalSettings->Values->Insert(key, value);
+}
+TimeSpan Millis(double ms) {
+    TimeSpan span;
+    span.Duration = static_cast<long long>(ms * 10000.0);
+    return span;
+}
+std::wstring HexOf(Color c) {
+    wchar_t buffer[16] = {};
+    swprintf_s(buffer, L"#%02X%02X%02X%02X", c.A, c.R, c.G, c.B);
+    return std::wstring(buffer);
+}
+Color Alpha(unsigned a, unsigned r, unsigned g, unsigned b) {
+    return ColorHelper::FromArgb(static_cast<unsigned char>(a), static_cast<unsigned char>(r),
+        static_cast<unsigned char>(g), static_cast<unsigned char>(b));
+}
+VariableSizedWrapGrid^ ActionRow(double itemWidth) {
+    // Wraps onto a second line instead of running off the edge of the screen.
+    auto row = ref new VariableSizedWrapGrid();
+    row->Orientation = Orientation::Horizontal;
+    row->ItemWidth = itemWidth;
+    row->ItemHeight = 46;
+    row->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    return row;
 }
 Platform::String^ StringOf(const std::wstring& value) {
     return ref new Platform::String(value.c_str());
@@ -128,6 +153,11 @@ Color CatalogShell::Glow() const {
 Color CatalogShell::Muted() const {
     return RgbColor(153, 157, 169);
 }
+Color CatalogShell::RailColor() const {
+    // The rail sits a step darker than the page so the content reads as one raised surface.
+    const Color page = Bg();
+    return RgbColor(page.R * 7 / 10, page.G * 7 / 10, page.B * 7 / 10);
+}
 Brush^ CatalogShell::Solid(Color value) {
     return ref new SolidColorBrush(value);
 }
@@ -157,19 +187,121 @@ TextBlock^ CatalogShell::Text(Platform::String^ value, double size, bool bold, b
     t->Margin = Thickness(0);
     return t;
 }
+ControlTemplate^ CatalogShell::ButtonTemplate(double radius, bool filled) {
+    // One template for every focusable surface. Focus lifts the control with a soft
+    // spring and draws an accent ring; a press squeezes it slightly. Both run as
+    // transform/opacity animations, so they stay smooth on the console.
+    const std::wstring ring = filled ? L"#FFFFFFFF" : HexOf(Accent());
+    const std::wstring r = std::to_wstring(radius);
+    std::wstring xaml =
+        L"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+        L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>"
+        L"<Grid x:Name='Root' RenderTransformOrigin='0.5,0.5' Background='Transparent'>"
+        L"<Grid.RenderTransform><ScaleTransform x:Name='FocusScale'/></Grid.RenderTransform>"
+        L"<Grid x:Name='Inner' RenderTransformOrigin='0.5,0.5'>"
+        L"<Grid.RenderTransform><ScaleTransform x:Name='PressScale'/></Grid.RenderTransform>"
+        L"<Border x:Name='Plate' CornerRadius='" + r + L"' Background='{TemplateBinding Background}' "
+        L"BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'/>"
+        L"<Border x:Name='Sheen' CornerRadius='" + r + L"' Background='#FFFFFFFF' Opacity='0' IsHitTestVisible='False'/>"
+        L"<Border x:Name='Ring' CornerRadius='" + r + L"' BorderBrush='" + ring + L"' BorderThickness='2' "
+        L"Opacity='0' IsHitTestVisible='False'/>"
+        L"<ContentPresenter x:Name='Presenter' Content='{TemplateBinding Content}' "
+        L"ContentTemplate='{TemplateBinding ContentTemplate}' Padding='{TemplateBinding Padding}' "
+        L"Foreground='{TemplateBinding Foreground}' FontSize='{TemplateBinding FontSize}' "
+        L"FontFamily='{TemplateBinding FontFamily}' FontWeight='{TemplateBinding FontWeight}' "
+        L"HorizontalContentAlignment='{TemplateBinding HorizontalContentAlignment}' "
+        L"VerticalContentAlignment='{TemplateBinding VerticalContentAlignment}'/>"
+        L"</Grid>"
+        L"<VisualStateManager.VisualStateGroups>"
+        L"<VisualStateGroup x:Name='CommonStates'>"
+        L"<VisualStateGroup.Transitions><VisualTransition GeneratedDuration='0:0:0.16'>"
+        L"<VisualTransition.GeneratedEasingFunction><CubicEase EasingMode='EaseOut'/></VisualTransition.GeneratedEasingFunction>"
+        L"</VisualTransition></VisualStateGroup.Transitions>"
+        L"<VisualState x:Name='Normal'/>"
+        L"<VisualState x:Name='PointerOver'><Storyboard>"
+        L"<DoubleAnimation Storyboard.TargetName='Sheen' Storyboard.TargetProperty='Opacity' To='0.08' Duration='0:0:0.12'/>"
+        L"</Storyboard></VisualState>"
+        L"<VisualState x:Name='Pressed'><Storyboard>"
+        L"<DoubleAnimation Storyboard.TargetName='Sheen' Storyboard.TargetProperty='Opacity' To='0.16' Duration='0:0:0.06'/>"
+        L"<DoubleAnimation Storyboard.TargetName='PressScale' Storyboard.TargetProperty='ScaleX' To='0.965' Duration='0:0:0.08'/>"
+        L"<DoubleAnimation Storyboard.TargetName='PressScale' Storyboard.TargetProperty='ScaleY' To='0.965' Duration='0:0:0.08'/>"
+        L"</Storyboard></VisualState>"
+        L"<VisualState x:Name='Disabled'><Storyboard>"
+        L"<DoubleAnimation Storyboard.TargetName='Inner' Storyboard.TargetProperty='Opacity' To='0.38' Duration='0:0:0.01'/>"
+        L"</Storyboard></VisualState>"
+        L"</VisualStateGroup>"
+        L"<VisualStateGroup x:Name='FocusStates'>"
+        L"<VisualStateGroup.Transitions><VisualTransition GeneratedDuration='0:0:0.2'>"
+        L"<VisualTransition.GeneratedEasingFunction><CubicEase EasingMode='EaseOut'/></VisualTransition.GeneratedEasingFunction>"
+        L"</VisualTransition></VisualStateGroup.Transitions>"
+        L"<VisualState x:Name='Focused'><Storyboard>"
+        L"<DoubleAnimation Storyboard.TargetName='Ring' Storyboard.TargetProperty='Opacity' To='1' Duration='0:0:0.16'/>"
+        L"<DoubleAnimation Storyboard.TargetName='FocusScale' Storyboard.TargetProperty='ScaleX' To='1.045' Duration='0:0:0.2'/>"
+        L"<DoubleAnimation Storyboard.TargetName='FocusScale' Storyboard.TargetProperty='ScaleY' To='1.045' Duration='0:0:0.2'/>"
+        L"</Storyboard></VisualState>"
+        L"<VisualState x:Name='Unfocused'/>"
+        L"<VisualState x:Name='PointerFocused'/>"
+        L"</VisualStateGroup>"
+        L"</VisualStateManager.VisualStateGroups>"
+        L"</Grid></ControlTemplate>";
+    try {
+        return dynamic_cast<ControlTemplate^>(XamlReader::Load(StringOf(xaml)));
+    } catch (Platform::Exception^) {
+        return nullptr;   // fall back to the stock template rather than fail to launch
+    }
+}
+void CatalogShell::Skin(Windows::UI::Xaml::Controls::Button^ button, double radius, bool filled) {
+    auto custom = ButtonTemplate(radius, filled);
+    if (custom != nullptr) button->Template = custom;
+    button->UseSystemFocusVisuals = false;
+}
+void CatalogShell::Reveal(UIElement^ element, double delayMs, double rise) {
+    if (element == nullptr) return;
+    element->Opacity = 0;
+    auto board = ref new Storyboard();
+    auto ease = ref new CubicEase();
+    ease->EasingMode = EasingMode::EaseOut;
+    auto fade = ref new DoubleAnimation();
+    fade->From = 0.0;
+    fade->To = 1.0;
+    fade->Duration = DurationHelper::FromTimeSpan(Millis(380));
+    fade->BeginTime = Millis(delayMs);
+    fade->EasingFunction = ease;
+    Storyboard::SetTarget(fade, element);
+    Storyboard::SetTargetProperty(fade, L"Opacity");
+    board->Children->Append(fade);
+    if (rise > 0 && element->RenderTransform == nullptr) {
+        auto shift = ref new TranslateTransform();
+        shift->Y = rise;
+        element->RenderTransform = shift;
+        auto lift = ref new DoubleAnimation();
+        lift->From = rise;
+        lift->To = 0.0;
+        lift->Duration = DurationHelper::FromTimeSpan(Millis(460));
+        lift->BeginTime = Millis(delayMs);
+        auto liftEase = ref new CubicEase();
+        liftEase->EasingMode = EasingMode::EaseOut;
+        lift->EasingFunction = liftEase;
+        Storyboard::SetTarget(lift, shift);
+        Storyboard::SetTargetProperty(lift, L"Y");
+        board->Children->Append(lift);
+    }
+    board->Begin();
+}
 Button^ CatalogShell::Button(Platform::String^ label, bool highlighted) {
     auto button = ref new Windows::UI::Xaml::Controls::Button();
     button->Content = label;
-    button->Padding = Thickness(23, 13, 23, 13);
-    button->Margin = Thickness(0, 0, 12, 0);
-    button->MinHeight = 49;
+    button->Padding = Thickness(18, 8, 18, 9);
+    button->Margin = Thickness(0, 0, 10, 0);
+    button->MinHeight = 38;
     button->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
     button->FontWeight = FontWeights::SemiBold;
-    button->FontSize = 15;
-    button->BorderThickness = Thickness(highlighted ? 0 : 1);
-    button->BorderBrush = Solid(RgbColor(75, 78, 88));
-    button->Background = Solid(highlighted ? Accent() : RgbColor(38, 39, 47));
+    button->FontSize = 13;
+    button->BorderThickness = Thickness(1);
+    button->BorderBrush = Solid(highlighted ? Alpha(0, 0, 0, 0) : Alpha(34, 255, 255, 255));
+    button->Background = Solid(highlighted ? Accent() : Alpha(22, 255, 255, 255));
     button->Foreground = Solid(highlighted ? RgbColor(14, 14, 17) : Colors::White);
+    Skin(button, 10, highlighted);
     button->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         PlayCue(0);
     });
@@ -186,10 +318,12 @@ StackPanel^ CatalogShell::Vertical(double spacing) {
 }
 Border^ CatalogShell::Panel(UIElement^ child, double pad) {
     auto border = ref new Border();
-    border->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
+    border->CornerRadius = Windows::UI::Xaml::CornerRadius(14);
     border->Padding = Thickness(pad);
-    border->Margin = Thickness(0, 12, 0, 14);
+    border->Margin = Thickness(0, 8, 0, 10);
     border->Background = Solid(Card());
+    border->BorderBrush = Solid(Alpha(20, 255, 255, 255));
+    border->BorderThickness = Thickness(1);
     border->Child = child;
     return border;
 }
@@ -218,7 +352,7 @@ CatalogShell::CatalogShell() {
     root_ = ref new Grid();
     root_->Background = Solid(Bg());
     auto railColumn = ref new ColumnDefinition();
-    railColumn->Width = GridLength(102);
+    railColumn->Width = GridLength(92);
     auto contentColumn = ref new ColumnDefinition();
     contentColumn->Width = GridLength(1, GridUnitType::Star);
     root_->ColumnDefinitions->Append(railColumn);
@@ -226,12 +360,12 @@ CatalogShell::CatalogShell() {
     auto mainRow = ref new RowDefinition();
     mainRow->Height = GridLength(1, GridUnitType::Star);
     auto footerRow = ref new RowDefinition();
-    footerRow->Height = GridLength(30);
+    footerRow->Height = GridLength(26);
     root_->RowDefinitions->Append(mainRow);
     root_->RowDefinitions->Append(footerRow);
 
     navigation_ = ref new Border();
-    navigation_->Background = Solid(RgbColor(13, 14, 18));
+    navigation_->Background = Solid(RailColor());
     Grid::SetColumn(navigation_, 0);
     Grid::SetRowSpan(navigation_, 2);
     root_->Children->Append(navigation_);
@@ -240,7 +374,7 @@ CatalogShell::CatalogShell() {
     scroll->VerticalScrollBarVisibility = ScrollBarVisibility::Hidden;
     scroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Disabled;
     content_ = Vertical();
-    content_->Margin = Thickness(46, 30, 58, 36);
+    content_->Margin = Thickness(30, 27, 48, 20);
     scroll->Content = content_;
     Grid::SetColumn(scroll, 1);
     Grid::SetRow(scroll, 0);
@@ -248,8 +382,11 @@ CatalogShell::CatalogShell() {
 
     auto statusBar = ref new Border();
     statusBar->Background = Solid(Bg());
-    statusBar->Padding = Thickness(48, 3, 16, 2);
-    status_ = Text(L"VITA3K  /  XBOX PREVIEW                         Core integration in progress", 11, false, true);
+    statusBar->Padding = Thickness(32, 3, 48, 2);
+    status_ = Text(L"VITA3K  /  XBOX PREVIEW", 10, false, true);
+    status_->CharacterSpacing = 80;
+    status_->TextTrimming = TextTrimming::CharacterEllipsis;
+    status_->TextWrapping = TextWrapping::NoWrap;
     statusBar->Child = status_;
     Grid::SetColumn(statusBar, 1);
     Grid::SetRow(statusBar, 1);
@@ -289,7 +426,7 @@ CatalogShell::CatalogShell() {
             if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
             SetStatus(playbackStatus_);
         });
-    for (unsigned cue = 0; cue < 4; ++cue) {
+    for (unsigned cue = 0; cue < vita3k_uwp::kInterfaceCueCount; ++cue) {
         cuePlayers_[cue] = ref new MediaElement();
         cuePlayers_[cue]->AutoPlay = false;
         cuePlayers_[cue]->IsLooping = false;
@@ -359,29 +496,23 @@ void CatalogShell::BuildNavigation() {
     auto rail = ref new StackPanel();
     rail->Orientation = Orientation::Vertical;
     rail->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-    rail->Width = 100;
-    rail->Margin = Thickness(0, 25, 0, 0);
-    // Use the Vita handheld artwork already packaged as the app's icon.
-    // The old giant V/3K text was a placeholder, not the project identity.
+    rail->Margin = Thickness(0, 28, 0, 0);
+    // The packaged Vita artwork doubles as the app mark.
     auto appLogo = ref new Image();
-    appLogo->Width = 68;
-    appLogo->Height = 68;
+    appLogo->Width = 40;
+    appLogo->Height = 40;
     appLogo->Stretch = Stretch::Uniform;
     appLogo->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
     appLogo->Source = ref new BitmapImage(ref new Uri(L"ms-appx:///Assets/Square150x150Logo.png"));
     rail->Children->Append(appLogo);
-    auto brandName = Text(L"vita3k", 14, true);
-    brandName->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
-    brandName->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-    brandName->Margin = Thickness(0, 5, 0, 0);
-    rail->Children->Append(brandName);
     auto spacer = ref new Border();
-    spacer->Height = 76;
+    spacer->Height = 34;
     rail->Children->Append(spacer);
 
     const wchar_t* glyphs[] = {L"\uE80F", L"\uE8B7", L"\uE713", L"\uE90F"};
-    const wchar_t* labels[] = {L"HOME", L"LIBRARY", L"SETTINGS", L"TOOLS"};
-    // Preview builds expose diagnostics. Public release builds hide Tools.
+    const wchar_t* labels[] = {L"Home", L"Library", L"Settings", L"Tools"};
+    // Tools holds developer diagnostics. Release builds (VITA3K_RELEASE_BUILD)
+    // leave it out; development builds keep it. See docs/RELEASING.md.
 #if defined(VITA3K_RELEASE_BUILD)
     constexpr int visibleTabs = 3;
 #else
@@ -390,30 +521,39 @@ void CatalogShell::BuildNavigation() {
     for (int i = 0; i < visibleTabs; ++i) {
         const bool selected = page_ == i || (i == 1 && page_ == 4);
         auto nav = ref new Windows::UI::Xaml::Controls::Button();
-        nav->Margin = Thickness(11, 0, 11, 14);
-        nav->Width = 78;
-        nav->Height = 79;
-        nav->Padding = Thickness(5);
+        nav->Margin = Thickness(0, 0, 0, 10);
+        nav->Width = 52;
+        nav->Height = 48;
+        nav->Padding = Thickness(0);
         nav->BorderThickness = Thickness(0);
-        nav->Background = Solid(selected ? Card() : RgbColor(13, 14, 18));
-        auto inside = Vertical();
-        inside->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-        auto symbol = Text(ref new Platform::String(glyphs[i]), 26, false);
+        nav->Background = Solid(selected ? Alpha(40, Accent().R, Accent().G, Accent().B)
+                                         : Colors::Transparent);
+        Skin(nav, 12);
+        Windows::UI::Xaml::Automation::AutomationProperties::SetName(
+            nav, ref new Platform::String(labels[i]));
+        auto inside = ref new Grid();
+        if (selected) {
+            auto pill = ref new Border();
+            pill->Width = 3;
+            pill->Height = 20;
+            pill->CornerRadius = Windows::UI::Xaml::CornerRadius(2);
+            pill->Background = Solid(Accent());
+            pill->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+            pill->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+            inside->Children->Append(pill);
+        }
+        auto symbol = Text(ref new Platform::String(glyphs[i]), 19, false);
         symbol->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
-        symbol->Foreground = Solid(selected ? Accent() : RgbColor(178, 181, 190));
+        symbol->Foreground = Solid(selected ? Accent() : RgbColor(170, 174, 184));
         symbol->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+        symbol->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
         inside->Children->Append(symbol);
-        auto label = Text(ref new Platform::String(labels[i]), 9, true, !selected);
-        label->Foreground = Solid(selected ? Colors::White : Muted());
-        label->CharacterSpacing = 60;
-        label->Margin = Thickness(0, 9, 0, 0);
-        label->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-        inside->Children->Append(label);
         nav->Content = inside;
         nav->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
             PlayCue(0);
         });
         nav->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) {
+            if (page_ == i) return;
             PlayCue(1);
             ShowPage(i);
         });
@@ -427,6 +567,7 @@ void CatalogShell::ShowPage(int nextPage) {
 #endif
     if (nextPage < 0 || nextPage > 4) nextPage = 0;
     if (page_ == 3 && nextPage != 3) renderer_.Shutdown();
+    if (nextPage != page_) PlayCue(4);
     page_ = nextPage;
     BuildNavigation();
     Render();
@@ -434,28 +575,28 @@ void CatalogShell::ShowPage(int nextPage) {
 void CatalogShell::Banner(Platform::String^ eyebrow, Platform::String^ headline,
                           Platform::String^ description) {
     auto body = Vertical();
-    body->Margin = Thickness(3, 17, 0, 29);
-    auto tag = Text(eyebrow, 11, true);
-    tag->CharacterSpacing = 180;
+    body->Margin = Thickness(2, 0, 0, 16);
+    auto tag = Text(eyebrow, 10, true);
+    tag->CharacterSpacing = 220;
     tag->Foreground = Solid(Accent());
     body->Children->Append(tag);
-    auto title = Text(headline, 43, false);
+    auto title = Text(headline, 32, false);
     title->FontWeight = FontWeights::Light;
-    title->Margin = Thickness(0, 12, 0, 7);
+    title->Margin = Thickness(0, 6, 0, 4);
     body->Children->Append(title);
-    auto note = Text(description, 15, false, true);
-    note->MaxWidth = 880;
+    auto note = Text(description, 13, false, true);
+    note->MaxWidth = 640;
     body->Children->Append(note);
     content_->Children->Append(body);
 }
 void CatalogShell::Section(Platform::String^ label, Platform::String^ note) {
     auto row = Vertical();
-    row->Margin = Thickness(3, 24, 0, 17);
-    auto heading = Text(label, 23, true);
+    row->Margin = Thickness(2, 18, 0, 12);
+    auto heading = Text(label, 17, true);
     row->Children->Append(heading);
     if (note != nullptr && !note->IsEmpty()) {
-        auto secondary = Text(note, 14, false, true);
-        secondary->Margin = Thickness(0, 6, 0, 0);
+        auto secondary = Text(note, 12, false, true);
+        secondary->Margin = Thickness(0, 3, 0, 0);
         row->Children->Append(secondary);
     }
     content_->Children->Append(row);
@@ -511,68 +652,62 @@ void CatalogShell::ConfigureCover(Border^ cover, size_t index) {
 
 Button^ CatalogShell::MakeTile(size_t index) {
     auto tile = ref new Windows::UI::Xaml::Controls::Button();
-    tile->Width = 198;
-    tile->Height = 335;
-    tile->Margin = Thickness(0, 2, 18, 10);
-    tile->Padding = Thickness(0);
+    tile->Width = 146;
+    tile->Height = 236;
+    tile->Margin = Thickness(0, 4, 10, 8);
+    tile->Padding = Thickness(8);
     tile->BorderThickness = Thickness(0);
     tile->Background = Solid(Colors::Transparent);
+    tile->HorizontalContentAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    tile->VerticalContentAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
+    Skin(tile, 14);
 
     auto card = Vertical();
-    card->Width = 196;
+    card->Width = 130;
     auto cover = ref new Border();
-    cover->Width = 196;
-    cover->Height = 261;
-    cover->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
+    cover->Width = 130;
+    cover->Height = 174;
+    cover->CornerRadius = Windows::UI::Xaml::CornerRadius(10);
     ConfigureCover(cover, index);
 
     auto art = ref new Grid();
-    auto systemMark = Text(L"PS VITA", 11, true);
-    systemMark->CharacterSpacing = 110;
-    systemMark->Foreground = Solid(Colors::White);
-    systemMark->Margin = Thickness(14, 14, 0, 0);
+    auto systemMark = Text(L"PS VITA", 9, true);
+    systemMark->CharacterSpacing = 130;
+    systemMark->Foreground = Solid(Alpha(210, 255, 255, 255));
+    systemMark->Margin = Thickness(10, 10, 0, 0);
     systemMark->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
     art->Children->Append(systemMark);
     if (ArtworkUri(index)->IsEmpty() && games_[index].icon == nullptr) {
-        auto v = Text(L"V", 135, true);
+        auto v = Text(L"V", 88, true);
         v->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
         v->Foreground = Solid(Colors::White);
         v->Opacity = 0.14;
         v->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
         v->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
         art->Children->Append(v);
-        auto coverCaption = Text(games_[index].name, 15, true);
+        auto coverCaption = Text(games_[index].name, 12, true);
         coverCaption->Foreground = Solid(Colors::White);
-        coverCaption->MaxHeight = 53;
-        coverCaption->Margin = Thickness(14, 0, 14, 17);
+        coverCaption->MaxHeight = 44;
+        coverCaption->Margin = Thickness(10, 0, 10, 12);
         coverCaption->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
         art->Children->Append(coverCaption);
     }
     cover->Child = art;
     card->Children->Append(cover);
-    auto title = Text(games_[index].name, 15, true);
-    title->MaxHeight = 41;
-    title->Margin = Thickness(3, 10, 0, 2);
+    auto title = Text(games_[index].name, 12, true);
+    title->MaxHeight = 34;
+    title->Margin = Thickness(2, 9, 0, 1);
     card->Children->Append(title);
-    auto kind = Text(games_[index].sourceType, 11, false, true);
-    kind->CharacterSpacing = 65;
-    kind->Margin = Thickness(3, 2, 0, 0);
+    auto kind = Text(games_[index].sourceType, 10, false, true);
+    kind->CharacterSpacing = 70;
+    kind->Margin = Thickness(2, 1, 0, 0);
+    kind->MaxLines = 1;
+    kind->TextWrapping = TextWrapping::NoWrap;
     card->Children->Append(kind);
     tile->Content = card;
-    auto focusScale = ref new ScaleTransform();
-    tile->RenderTransformOrigin = Point(0.5, 0.5);
-    tile->RenderTransform = focusScale;
-    tile->GotFocus += ref new RoutedEventHandler([this,tile,focusScale](Platform::Object^, RoutedEventArgs^) {
-        focusScale->ScaleX = 1.035;
-        focusScale->ScaleY = 1.035;
-        tile->BorderThickness = Thickness(2);
-        tile->BorderBrush = Solid(Accent());
+    // Scale, ring and press feedback come from the shared button template.
+    tile->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         PlayCue(0);
-    });
-    tile->LostFocus += ref new RoutedEventHandler([tile,focusScale](Platform::Object^, RoutedEventArgs^) {
-        focusScale->ScaleX = 1.0;
-        focusScale->ScaleY = 1.0;
-        tile->BorderThickness = Thickness(0);
     });
     tile->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         PlayCue(1);
@@ -585,17 +720,23 @@ void CatalogShell::MakeShelf(Platform::String^ heading,
     const std::vector<size_t>& items, StackPanel^ target) {
     if (items.empty()) return;
     auto destination = target != nullptr ? target : content_;
-    auto label = Text(heading, 23, true);
-    label->Margin = Thickness(3, 15, 0, 14);
+    auto label = Text(heading, 17, true);
+    label->Margin = Thickness(2, 10, 0, 8);
     destination->Children->Append(label);
     auto shelf = ref new StackPanel();
     shelf->Orientation = Orientation::Horizontal;
-    for (const auto index : items) shelf->Children->Append(MakeTile(index));
+    unsigned order = 0;
+    for (const auto index : items) {
+        auto tile = MakeTile(index);
+        shelf->Children->Append(tile);
+        Reveal(tile, 140.0 + 38.0 * std::min(order++, 9u), 16);
+    }
     auto scroller = ref new ScrollViewer();
-    scroller->Height = 358;
+    scroller->Height = 256;
     scroller->HorizontalScrollBarVisibility = ScrollBarVisibility::Hidden;
     scroller->HorizontalScrollMode = ScrollMode::Enabled;
     scroller->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
+    scroller->VerticalScrollMode = ScrollMode::Disabled;
     scroller->Content = shelf;
     auto lastCell = std::make_shared<int>(0);
     scroller->ViewChanged += ref new EventHandler<ScrollViewerViewChangedEventArgs^>(
@@ -603,7 +744,7 @@ void CatalogShell::MakeShelf(Platform::String^ heading,
             if (event->IsIntermediate) return;
             auto view = dynamic_cast<ScrollViewer^>(sender);
             if (view == nullptr) return;
-            const int cell = static_cast<int>(view->HorizontalOffset / 180.0);
+            const int cell = static_cast<int>(view->HorizontalOffset / 156.0);
             if (cell != *lastCell) {
                 *lastCell = cell;
                 PlayCue(3);
@@ -612,66 +753,79 @@ void CatalogShell::MakeShelf(Platform::String^ heading,
     destination->Children->Append(scroller);
 }
 void CatalogShell::Home() {
-    auto topLine = ref new Grid();
-    topLine->Margin = Thickness(3, 0, 3, 18);
-    auto stretch = ref new ColumnDefinition();
-    stretch->Width = GridLength(1, GridUnitType::Star);
-    auto rightColumn = ref new ColumnDefinition();
-    rightColumn->Width = GridLength(1, GridUnitType::Auto);
-    topLine->ColumnDefinitions->Append(stretch);
-    topLine->ColumnDefinitions->Append(rightColumn);
-    auto label = Text(L"FOR YOU   /   YOUR PLAYSTATION VITA COLLECTION", 11, true, true);
-    label->CharacterSpacing = 130;
-    topLine->Children->Append(label);
-    auto hint = Text(L"VITA3K  \u2022  XBOX SERIES", 11, true, true);
-    hint->CharacterSpacing = 95;
-    hint->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
-    Grid::SetColumn(hint, 1);
-    topLine->Children->Append(hint);
-    content_->Children->Append(topLine);
-
     const bool hasGames = !games_.empty();
     auto hero = ref new Border();
-    hero->Height = 480;
-    hero->Margin = Thickness(-46, -12, -58, 30);
+    hero->Height = 262;
+    hero->CornerRadius = Windows::UI::Xaml::CornerRadius(18);
+    hero->Margin = Thickness(0, 0, 0, 20);
+    hero->BorderBrush = Solid(Alpha(22, 255, 255, 255));
+    hero->BorderThickness = Thickness(1);
     auto heroLayout = ref new Grid();
-    heroLayout->Background = Gradient(RgbColor(16, 17, 23), Glow());
+    heroLayout->Background = Gradient(Card(), Glow());
     if (hasGames && !ArtworkUri(0)->IsEmpty()) {
         auto art = ref new Image();
         art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(0)));
         art->Stretch = Stretch::UniformToFill;
         art->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
-        art->Width = 820;
-        art->Opacity = 0.78;
+        art->Width = 520;
+        art->Opacity = 0.82;
         heroLayout->Children->Append(art);
+    } else {
+        // No artwork yet: a large, faint mark keeps the right side from feeling empty.
+        auto mark = ref new Image();
+        mark->Source = ref new BitmapImage(ref new Uri(L"ms-appx:///Assets/Square150x150Logo.png"));
+        mark->Width = 230;
+        mark->Height = 230;
+        mark->Stretch = Stretch::Uniform;
+        mark->Opacity = 0.16;
+        mark->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
+        mark->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        mark->Margin = Thickness(0, 0, 54, 0);
+        heroLayout->Children->Append(mark);
     }
     auto fade = ref new LinearGradientBrush();
-    fade->StartPoint = Point(0, 0.5); fade->EndPoint = Point(1, 0.5);
-    auto stop = ref new GradientStop(); stop->Color = Bg(); stop->Offset = 0; fade->GradientStops->Append(stop);
-    stop = ref new GradientStop(); stop->Color = Bg(); stop->Offset = 0.30; fade->GradientStops->Append(stop);
-    stop = ref new GradientStop(); stop->Color = ColorHelper::FromArgb(0, 0, 0, 0); stop->Offset = 1; fade->GradientStops->Append(stop);
-    auto veil = ref new Border(); veil->Background = fade; heroLayout->Children->Append(veil);
+    fade->StartPoint = Point(0, 0.5);
+    fade->EndPoint = Point(1, 0.5);
+    auto stop = ref new GradientStop();
+    stop->Color = Alpha(235, Bg().R, Bg().G, Bg().B);
+    stop->Offset = 0;
+    fade->GradientStops->Append(stop);
+    stop = ref new GradientStop();
+    stop->Color = Alpha(150, Bg().R, Bg().G, Bg().B);
+    stop->Offset = 0.38;
+    fade->GradientStops->Append(stop);
+    stop = ref new GradientStop();
+    stop->Color = Alpha(0, Bg().R, Bg().G, Bg().B);
+    stop->Offset = 1;
+    fade->GradientStops->Append(stop);
+    auto veil = ref new Border();
+    veil->Background = fade;
+    heroLayout->Children->Append(veil);
+
     auto copy = Vertical();
-    copy->Margin = Thickness(50, 45, 48, 45);
-    copy->MaxWidth = 760;
+    copy->Margin = Thickness(34, 0, 20, 0);
+    copy->MaxWidth = 430;
     copy->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     copy->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    auto logo = ref new Image(); logo->Width = 64; logo->Height = 64;
-    logo->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
-    logo->Source = ref new BitmapImage(ref new Uri(L"ms-appx:///Assets/Square150x150Logo.png"));
-    copy->Children->Append(logo);
-    auto kicker = Text(L"Y O U R   P L A Y S T A T I O N   V I T A   C O L L E C T I O N", 11, true, true);
-    kicker->Margin = Thickness(0, 18, 0, 10); copy->Children->Append(kicker);
-    auto headline = Text(hasGames ? games_[0].name : L"Every game.\nA new world.", 66, true);
-    headline->FontWeight = FontWeights::SemiBold;
-    headline->MaxWidth = 680; headline->MaxLines = 2;
-    headline->Margin = Thickness(0, 0, 0, 16); copy->Children->Append(headline);
-    auto detail = Text(hasGames ? L"Picked from your library. Explore the details, choose your artwork, and make it yours." : L"Your collection deserves the big screen. Add your Vita games to get started.", 18, false, true);
-    detail->MaxWidth = 520; detail->Margin = Thickness(0, 0, 0, 25); copy->Children->Append(detail);
+    auto kicker = Text(hasGames ? L"FEATURED" : L"WELCOME TO VITA3K", 10, true);
+    kicker->CharacterSpacing = 240;
+    kicker->Foreground = Solid(Accent());
+    copy->Children->Append(kicker);
+    auto headline = Text(hasGames ? games_[0].name : L"Every game.\nA new world.", 36, false);
+    headline->FontWeight = FontWeights::Light;
+    headline->MaxLines = 2;
+    headline->Margin = Thickness(0, 8, 0, 10);
+    copy->Children->Append(headline);
+    auto detail = Text(hasGames
+        ? L"Picked from your library. Open it to see the details or change its artwork."
+        : L"Your Vita collection, on the big screen. Add a game or a folder to begin.", 13, false, true);
+    detail->MaxWidth = 360;
+    detail->Margin = Thickness(0, 0, 0, 18);
+    copy->Children->Append(detail);
     auto controls = ref new StackPanel();
     controls->Orientation = Orientation::Horizontal;
     auto primary = Button(hasGames ? L"View game" : L"Add a game", true);
-    primary->MinWidth = 167;
+    primary->MinWidth = 132;
     primary->Click += ref new RoutedEventHandler([this,hasGames](Platform::Object^, RoutedEventArgs^) {
         if (!hasGames) ChooseGameFile();
         else { selectedGame_ = 0; ShowPage(4); }
@@ -688,7 +842,7 @@ void CatalogShell::Home() {
     hero->Child = heroLayout;
     content_->Children->Append(hero);
 
-    if (!games_.empty()) {
+    if (hasGames) {
         std::vector<size_t> all, folders, packages;
         for (size_t i = 0; i < games_.size(); ++i) {
             all.push_back(i);
@@ -699,8 +853,8 @@ void CatalogShell::Home() {
         MakeShelf(L"Game folders", folders);
         MakeShelf(L"Archives and packages", packages);
     } else {
-        auto heading = Text(L"Make it yours", 24, true);
-        heading->Margin = Thickness(3, 5, 0, 18);
+        auto heading = Text(L"Make it yours", 17, true);
+        heading->Margin = Thickness(2, 2, 0, 12);
         content_->Children->Append(heading);
         auto promos = ref new StackPanel();
         promos->Orientation = Orientation::Horizontal;
@@ -713,60 +867,71 @@ void CatalogShell::Home() {
         const wchar_t* symbols[] = {L"\uE8B7", L"\uE713", L"\uE8D6"};
         for (int i = 0; i < 3; ++i) {
             auto promo = ref new Windows::UI::Xaml::Controls::Button();
-            promo->Width = 305;
-            promo->Height = 165;
-            promo->Margin = Thickness(0, 0, 16, 12);
+            promo->Width = 226;
+            promo->Height = 104;
+            promo->Margin = Thickness(0, 4, 12, 8);
             promo->BorderThickness = Thickness(0);
             promo->Padding = Thickness(0);
+            promo->HorizontalContentAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+            promo->VerticalContentAlignment = Windows::UI::Xaml::VerticalAlignment::Stretch;
+            Skin(promo, 14);
             auto surface = ref new Border();
-            surface->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
-            surface->Background = Gradient(Card(), i == 0 ? Glow() : RgbColor(41, 39, 48));
+            surface->CornerRadius = Windows::UI::Xaml::CornerRadius(14);
+            surface->Background = Gradient(Card(), i == 0 ? Glow() : RgbColor(36, 35, 44));
+            surface->BorderBrush = Solid(Alpha(20, 255, 255, 255));
+            surface->BorderThickness = Thickness(1);
             auto body = ref new Grid();
-            auto symbol = Text(ref new Platform::String(symbols[i]), 100, true);
+            auto symbol = Text(ref new Platform::String(symbols[i]), 54, false);
             symbol->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
             symbol->Foreground = Solid(Accent());
-            symbol->Opacity = 0.13;
+            symbol->Opacity = 0.16;
             symbol->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
             symbol->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-            symbol->Margin = Thickness(0, 0, 26, 0);
+            symbol->Margin = Thickness(0, 0, 18, 0);
             body->Children->Append(symbol);
             auto caption = Vertical();
             caption->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
-            caption->Margin = Thickness(23, 0, 12, 23);
-            auto tag = Text(ref new Platform::String(headlines[i]), 12, true);
-            tag->CharacterSpacing = 115;
+            caption->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+            caption->Margin = Thickness(16, 0, 12, 14);
+            auto tag = Text(ref new Platform::String(headlines[i]), 10, true);
+            tag->CharacterSpacing = 140;
             caption->Children->Append(tag);
-            auto desc = Text(ref new Platform::String(descriptions[i]), 15, false, true);
-            desc->Margin = Thickness(0, 6, 0, 0);
+            auto desc = Text(ref new Platform::String(descriptions[i]), 12, false, true);
+            desc->Margin = Thickness(0, 3, 0, 0);
             caption->Children->Append(desc);
             body->Children->Append(caption);
             surface->Child = body;
             promo->Content = surface;
+            promo->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+                PlayCue(0);
+            });
             promo->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) {
                 PlayCue(1);
                 if (i == 0) ChooseGameFile();
                 else ShowPage(2);
             });
             promos->Children->Append(promo);
+            Reveal(promo, 160.0 + 70.0 * i, 14);
         }
         auto promoScroll = ref new ScrollViewer();
         promoScroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Hidden;
         promoScroll->HorizontalScrollMode = ScrollMode::Enabled;
         promoScroll->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
+        promoScroll->VerticalScrollMode = ScrollMode::Disabled;
         promoScroll->Content = promos;
         content_->Children->Append(promoScroll);
     }
-    auto note = Text(L"EARLY ACCESS   \u2022   Full Vita3K game execution is still in development. "
-        L"Library items are not yet playable.", 12, false, true);
-    note->Margin = Thickness(3, 34, 0, 10);
+    auto note = Text(L"EARLY ACCESS   \u2022   Game execution is still in development. "
+        L"Library items are not playable yet.", 10, false, true);
+    note->CharacterSpacing = 40;
+    note->Margin = Thickness(2, 16, 0, 6);
     content_->Children->Append(note);
 }
 void CatalogShell::Library() {
     Banner(L"COLLECTION  /  PLAYSTATION VITA",
         L"Your library.", L"Everything you've added, organized in one place.");
-    auto actions = ref new StackPanel();
-    actions->Orientation = Orientation::Horizontal;
-    actions->Margin = Thickness(0, 0, 0, 22);
+    auto actions = ActionRow(146);
+    actions->Margin = Thickness(0, 0, 0, 12);
     auto add = Button(L"Add a game", true);
     add->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseGameFile(); });
     actions->Children->Append(add);
@@ -784,15 +949,15 @@ void CatalogShell::Library() {
     searchBox_ = ref new TextBox();
     searchBox_->PlaceholderText = L"Search your Vita games";
     searchBox_->Text = search_;
-    searchBox_->Width = 490;
-    searchBox_->Height = 51;
-    searchBox_->FontSize = 16;
-    searchBox_->Padding = Thickness(17, 12, 12, 12);
+    searchBox_->Width = 420;
+    searchBox_->Height = 42;
+    searchBox_->FontSize = 14;
+    searchBox_->Padding = Thickness(14, 9, 10, 9);
     searchBox_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     searchBox_->Background = Solid(Card());
     searchBox_->Foreground = Solid(Colors::White);
     searchBox_->BorderThickness = Thickness(1);
-    searchBox_->BorderBrush = Solid(RgbColor(67, 67, 77));
+    searchBox_->BorderBrush = Solid(Alpha(40, 255, 255, 255));
     searchBox_->TextChanged += ref new TextChangedEventHandler(
         [this](Platform::Object^, TextChangedEventArgs^) {
             search_ = searchBox_->Text;
@@ -800,7 +965,7 @@ void CatalogShell::Library() {
         });
     content_->Children->Append(searchBox_);
     libraryResults_ = Vertical();
-    libraryResults_->Margin = Thickness(0, 25, 0, 0);
+    libraryResults_->Margin = Thickness(0, 14, 0, 0);
     content_->Children->Append(libraryResults_);
     RefreshLibraryItems();
 }
@@ -808,8 +973,8 @@ void CatalogShell::RefreshLibraryItems() {
     if (libraryResults_ == nullptr) return;
     libraryResults_->Children->Clear();
     if (games_.empty()) {
-        auto message = Text(L"No titles yet. Add a VPK, ZIP, PKG, VCI or an extracted game folder.", 18, false, true);
-        message->Margin = Thickness(3, 27, 0, 0);
+        auto message = Text(L"No titles yet. Add a VPK, ZIP, PKG, VCI or an extracted game folder.", 14, false, true);
+        message->Margin = Thickness(2, 16, 0, 0);
         libraryResults_->Children->Append(message);
         return;
     }
@@ -819,10 +984,10 @@ void CatalogShell::RefreshLibraryItems() {
     }
     MakeShelf(L"All titles", matches, libraryResults_);
     if (matches.empty()) {
-        libraryResults_->Children->Append(Text(L"No games match that search.", 16, false, true));
+        libraryResults_->Children->Append(Text(L"No games match that search.", 13, false, true));
     }
-    auto warning = Text(L"Game file detection doesn't mean the title can run. The Vita3K executable core is still being ported.", 12, false, true);
-    warning->Margin = Thickness(2, 15, 0, 0);
+    auto warning = Text(L"Game file detection doesn't mean the title can run. The Vita3K executable core is still being ported.", 10, false, true);
+    warning->Margin = Thickness(2, 10, 0, 0);
     libraryResults_->Children->Append(warning);
 }
 void CatalogShell::GameDetails() {
@@ -833,63 +998,65 @@ void CatalogShell::GameDetails() {
     const size_t index = static_cast<size_t>(selectedGame_);
     auto back = Button(L"\u2039  All games");
     back->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(1); });
-    back->Margin = Thickness(3, 5, 0, 23);
+    back->Margin = Thickness(0, 0, 0, 14);
     content_->Children->Append(back);
 
     auto feature = ref new Border();
-    feature->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
-    feature->MinHeight = 465;
-    feature->Padding = Thickness(50, 38, 40, 38);
-    feature->Background = Gradient(Card(), Bg());
+    feature->CornerRadius = Windows::UI::Xaml::CornerRadius(18);
+    feature->MinHeight = 300;
+    feature->Padding = Thickness(30, 24, 28, 24);
+    feature->Background = Gradient(Card(), Glow());
+    feature->BorderBrush = Solid(Alpha(22, 255, 255, 255));
+    feature->BorderThickness = Thickness(1);
 
     auto layout = ref new Grid();
     auto artColumn = ref new ColumnDefinition();
-    artColumn->Width = GridLength(295);
+    artColumn->Width = GridLength(214);
     auto infoColumn = ref new ColumnDefinition();
     infoColumn->Width = GridLength(1, GridUnitType::Star);
     layout->ColumnDefinitions->Append(artColumn);
     layout->ColumnDefinitions->Append(infoColumn);
 
     auto cover = ref new Border();
-    cover->Width = 270;
-    cover->Height = 370;
-    cover->CornerRadius = Windows::UI::Xaml::CornerRadius(9);
+    cover->Width = 190;
+    cover->Height = 254;
+    cover->CornerRadius = Windows::UI::Xaml::CornerRadius(12);
     cover->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     cover->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     ConfigureCover(cover, index);
     if (ArtworkUri(index)->IsEmpty() && games_[index].icon == nullptr) {
         auto fallback = Vertical();
-        fallback->Margin = Thickness(22, 17, 22, 30);
-        fallback->Children->Append(Text(L"PS VITA", 12, true));
-        auto emblem = Text(L"V", 178, true);
+        fallback->Margin = Thickness(16, 14, 16, 20);
+        fallback->Children->Append(Text(L"PS VITA", 10, true));
+        auto emblem = Text(L"V", 120, true);
         emblem->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
         emblem->Opacity = 0.21;
         emblem->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
         fallback->Children->Append(emblem);
-        fallback->Children->Append(Text(games_[index].name, 19, true));
+        fallback->Children->Append(Text(games_[index].name, 14, true));
         cover->Child = fallback;
     }
     layout->Children->Append(cover);
 
     auto right = Vertical();
-    right->Margin = Thickness(30, 16, 15, 12);
+    right->Margin = Thickness(22, 8, 6, 4);
     Grid::SetColumn(right, 1);
-    auto category = Text(L"PLAYSTATION VITA  /  " + games_[index].sourceType, 12, true);
-    category->CharacterSpacing = 100;
+    auto category = Text(L"PLAYSTATION VITA  /  " + games_[index].sourceType, 10, true);
+    category->CharacterSpacing = 160;
     category->Foreground = Solid(Accent());
     right->Children->Append(category);
-    auto title = Text(games_[index].name, 50, true);
+    auto title = Text(games_[index].name, 32, true);
     title->FontWeight = FontWeights::Light;
-    title->Margin = Thickness(0, 13, 0, 17);
-    title->MaxWidth = 790;
+    title->Margin = Thickness(0, 8, 0, 10);
+    title->MaxWidth = 560;
+    title->MaxLines = 2;
     right->Children->Append(title);
-    auto note = Text(L"Added to your personal collection. This build can display metadata and artwork while the emulator core is being ported.", 17, false, true);
-    note->MaxWidth = 700;
+    auto note = Text(L"Added to your personal collection. This build can display metadata and artwork while the emulator core is being ported.", 13, false, true);
+    note->MaxWidth = 520;
     right->Children->Append(note);
 
-    auto actions = ref new StackPanel();
-    actions->Orientation = Orientation::Horizontal;
-    actions->Margin = Thickness(0, 28, 0, 12);
+    auto actions = ActionRow(168);
+    actions->Margin = Thickness(0, 18, 0, 8);
     auto inspect = Button(L"Inspect game", true);
     inspect->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         InspectLaunch(index);
@@ -918,13 +1085,13 @@ void CatalogShell::GameDetails() {
     actions->Children->Append(find);
     right->Children->Append(actions);
 
-    auto validation = Text(L"SOURCE CHECK:  " + games_[index].validation, 14, false, true);
-    validation->MaxWidth = 750;
-    validation->Margin = Thickness(0, 12, 0, 6);
+    auto validation = Text(L"SOURCE CHECK:  " + games_[index].validation, 12, false, true);
+    validation->MaxWidth = 560;
+    validation->Margin = Thickness(0, 8, 0, 4);
     right->Children->Append(validation);
     if (games_[index].format == vita3k_uwp::GameFormat::Pkg) {
         auto license = Button(L"Select owned PKG license");
-        license->Margin = Thickness(0, 14, 0, 0);
+        license->Margin = Thickness(0, 10, 0, 0);
         license->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
             ChooseLicenseForGame(index);
         });
@@ -933,8 +1100,8 @@ void CatalogShell::GameDetails() {
     layout->Children->Append(right);
     feature->Child = layout;
     content_->Children->Append(feature);
-    auto status = Text(L"EARLY ACCESS  /  Vita3K CPU, kernel, package installation and game rendering are still in development.", 13, false, true);
-    status->Margin = Thickness(3, 22, 0, 0);
+    auto status = Text(L"EARLY ACCESS  /  Vita3K CPU, kernel, package installation and game rendering are still in development.", 10, false, true);
+    status->Margin = Thickness(2, 14, 0, 0);
     content_->Children->Append(status);
 }
 void CatalogShell::Render() {
@@ -947,6 +1114,15 @@ void CatalogShell::Render() {
     case 3: Diagnostics(); break;
     case 4: GameDetails(); break;
     default: Home(); break;
+    }
+    // Each page settles in: its blocks rise and fade in one after another.
+    // Re-renders on the same page (theme change, toggles) only fade, so the
+    // layout never jumps while someone is working in it.
+    const bool newPage = page_ != shownPage_;
+    shownPage_ = page_;
+    unsigned order = 0;
+    for (auto child : content_->Children) {
+        Reveal(child, 45.0 * std::min(order++, 8u), newPage ? 18 : 0);
     }
 }
 
@@ -971,18 +1147,22 @@ void CatalogShell::Settings() {
     for (int i = 0; i < 5; ++i) {
         const bool active = theme_ == i;
         auto choice = ref new Windows::UI::Xaml::Controls::Button();
-        choice->Width = 179;
-        choice->Height = 108;
-        choice->Margin = Thickness(0, 3, 13, 3);
+        choice->Width = 148;
+        choice->Height = 84;
+        choice->Margin = Thickness(0, 4, 10, 8);
         choice->Padding = Thickness(0);
         choice->BorderThickness = Thickness(active ? 2 : 1);
-        choice->BorderBrush = Solid(active ? Accent() : RgbColor(54, 56, 65));
+        choice->BorderBrush = Solid(active ? Accent() : Alpha(34, 255, 255, 255));
+        choice->HorizontalContentAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+        choice->VerticalContentAlignment = Windows::UI::Xaml::VerticalAlignment::Stretch;
+        Skin(choice, 14);
         auto swatch = ref new Border();
         swatch->Background = Gradient(RgbColor(23, 23, 29), samples[i]);
-        swatch->Padding = Thickness(15);
+        swatch->Padding = Thickness(12);
+        swatch->CornerRadius = Windows::UI::Xaml::CornerRadius(13);
         auto caption = Vertical();
         caption->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
-        auto name = Text(ref new Platform::String(styles[i]), 19, true);
+        auto name = Text(ref new Platform::String(styles[i]), 15, true);
         caption->Children->Append(name);
         auto sub = Text(ref new Platform::String(captions[i]), 11, false, true);
         sub->Foreground = Solid(RgbColor(214, 212, 225));
@@ -1007,8 +1187,7 @@ void CatalogShell::Settings() {
     const wchar_t* names[] = {
         L"Off", L"Ambient Drift", L"Neon Pulse", L"Stardust", L"Tidal Blue", L"Custom track"
     };
-    auto music = ref new StackPanel();
-    music->Orientation = Orientation::Horizontal;
+    auto music = ActionRow(142);
     for (int i = 0; i < 6; ++i) {
         auto b = Button(ref new Platform::String(names[i]), track_ == i);
         b->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) {
@@ -1018,10 +1197,10 @@ void CatalogShell::Settings() {
         music->Children->Append(b);
     }
     content_->Children->Append(music);
-    musicStatus_ = Text(L"Audio: " + playbackStatus_, 13, false, true);
+    musicStatus_ = Text(L"Audio: " + playbackStatus_, 12, false, true);
     musicStatus_->Margin = Thickness(3, 11, 0, 11);
     content_->Children->Append(musicStatus_);
-    content_->Children->Append(Text(L"MUSIC VOLUME", 14, true, true));
+    content_->Children->Append(Text(L"MUSIC VOLUME", 12, true, true));
     auto volume = ref new Slider();
     volume->Minimum = 0;
     volume->Maximum = 100;
@@ -1035,8 +1214,7 @@ void CatalogShell::Settings() {
     content_->Children->Append(volume);
 
     Section(L"Interface sounds", L"Soft focus, confirmation, back and game-shelf swipe cues.");
-    auto soundRow = ref new StackPanel();
-    soundRow->Orientation = Orientation::Horizontal;
+    auto soundRow = ActionRow(200);
     auto enabled = Button(uiSounds_ ? L"UI sounds: ON" : L"UI sounds: OFF", uiSounds_);
     enabled->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         uiSounds_ = !uiSounds_;
@@ -1062,12 +1240,12 @@ void CatalogShell::Settings() {
             for (auto player : cuePlayers_) if (player != nullptr) player->Volume = uiSoundVolume_;
             SaveCueSettings();
         });
-    content_->Children->Append(Text(L"INTERFACE VOLUME", 14, true, true));
+    content_->Children->Append(Text(L"INTERFACE VOLUME", 12, true, true));
     content_->Children->Append(cueVolume);
 
     Section(L"Storage and paths", L"Choose internal or external storage as Xbox UWP permits.");
     auto storage = Vertical();
-    folderLabel_ = Text(L"Game library: not selected", 17, false, true);
+    folderLabel_ = Text(L"Game library: not selected", 14, false, true);
     storage->Children->Append(folderLabel_);
     auto choose = Button(L"Choose game folder", true);
     choose->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
@@ -1075,14 +1253,14 @@ void CatalogShell::Settings() {
     });
     storage->Children->Append(choose);
     storage->Children->Append(Text(
-        L"Application data: " + ApplicationData::Current->LocalFolder->Path, 14, false, true));
-    firmwareLabel_ = Text(L"Firmware file: not selected", 17, false, true);
+        L"Application data: " + ApplicationData::Current->LocalFolder->Path, 12, false, true));
+    firmwareLabel_ = Text(L"Firmware file: not selected", 14, false, true);
     storage->Children->Append(firmwareLabel_);
     storage->Children->Append(Text(
         L"Choose both official Sony firmware packages. They'll be copied into "
         L"Vita3K's private system directory, so the emulator can find them later. "
         L"Selecting a package does not install it until the Vita3K core is linked.",
-        15, false, true));
+        13, false, true));
     auto fw = Button(L"Choose main system firmware");
     fw->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ChooseFirmware();
@@ -1101,11 +1279,11 @@ void CatalogShell::Settings() {
     art->Children->Append(Text(
         L"SteamGridDB cover matching requires a personal API key. The search uses each "
         L"game's title and only accepts an exact title match, to avoid mismatched artwork. "
-        L"If no match is available, your game keeps its themed cover.", 16, false, true));
+        L"If no match is available, your game keeps its themed cover.", 13, false, true));
     auto password = ref new PasswordBox();
     password->PlaceholderText = L"SteamGridDB API key (saved in Windows PasswordVault)";
-    password->Height = 48;
-    password->Width = 540;
+    password->Height = 40;
+    password->Width = 460;
     password->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     art->Children->Append(password);
     auto buttons = ref new StackPanel();
@@ -1124,23 +1302,26 @@ void CatalogShell::Settings() {
     art->Children->Append(buttons);
     art->Children->Append(Text(
         ApiKey()->IsEmpty() ? L"No API key saved yet." : L"SteamGridDB API key saved.",
-        14, false, true));
+        12, false, true));
     art->Children->Append(Text(
         L"Select a game card to import a custom PNG or JPEG. Custom artwork takes priority.",
-        14, false, true));
+        12, false, true));
     content_->Children->Append(Panel(art));
 
     Section(L"Emulation engine", L"Technical details stay out of the way.");
     auto advanced = Vertical();
     advanced->Children->Append(Text(
         L"Game execution, firmware installation and full Vita3K CPU / GPU settings "
-        L"will be available as the core integration progresses.", 15, false, true));
+        L"will be available as the core integration progresses.", 13, false, true));
+#if !defined(VITA3K_RELEASE_BUILD)
+    // Development builds only; release builds ship without the Tools page.
     auto openTools = Button(L"Developer diagnostics");
-    openTools->Margin = Thickness(0, 15, 0, 0);
+    openTools->Margin = Thickness(0, 12, 0, 0);
     openTools->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ShowPage(3);
     });
     advanced->Children->Append(openTools);
+#endif
     content_->Children->Append(Panel(advanced));
     RestorePaths();
 }
@@ -1154,7 +1335,7 @@ void CatalogShell::Diagnostics() {
         L"Verify the core API before attempting to load a game. "
         L"The desktop DLL cannot automatically run as UWP. Game execution needs a "
         L"successfully ported core and working Vulkan graphics (possibly Mesa Dozen).",
-        16, false, true));
+        13, false, true));
     auto probeCore = Button(L"Check for actual Vita3K core", true);
     probeCore->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ProbeLibretro(false);
@@ -1165,7 +1346,7 @@ void CatalogShell::Diagnostics() {
         ProbeLibretro(true);
     });
     libretroBox->Children->Append(initCore);
-    libretroResult_ = Text(L"Libretro core not probed. No UWP-compatible core DLL bundled yet.", 17, true);
+    libretroResult_ = Text(L"Libretro core not probed. No UWP-compatible core DLL bundled yet.", 14, true);
     libretroBox->Children->Append(libretroResult_);
     content_->Children->Append(Panel(libretroBox));
 
@@ -1175,8 +1356,8 @@ void CatalogShell::Diagnostics() {
         L"Mesa Dozen translates Vulkan to native D3D12 on Windows. "
         L"On Xbox, the Vulkan loader and Dozen ICD must "
         L"run inside the app package. "
-        L"A native D3D12 test frame is not evidence that Vulkan works.", 16, false, true));
-    auto dznResult = Text(L"No Vulkan / Dozen probe run on this Xbox.", 17, true);
+        L"A native D3D12 test frame is not evidence that Vulkan works.", 13, false, true));
+    auto dznResult = Text(L"No Vulkan / Dozen probe run on this Xbox.", 14, true);
     auto dznButton = Button(L"Probe actual packaged Vulkan device");
     dznButton->Click += ref new RoutedEventHandler(
         [this,dznResult](Platform::Object^, RoutedEventArgs^) {
@@ -1191,8 +1372,8 @@ void CatalogShell::Diagnostics() {
     cpuPanel->Children->Append(Text(
         L"This test runs three ARM instructions through Vita3K's Dynarmic CPU: "
         L"MOV, ADD and SVC. A pass means Xbox executed ARM guest code and returned "
-        L"R0 = 12. It does not launch a Vita game.", 15, false, true));
-    auto cpuReport = Text(L"ARM CPU test not started.", 15, false, true);
+        L"R0 = 12. It does not launch a Vita game.", 13, false, true));
+    auto cpuReport = Text(L"ARM CPU test not started.", 13, false, true);
     auto runCpu = Button(L"Run Vita ARM instructions", true);
     runCpu->Click += ref new RoutedEventHandler(
         [cpuReport](Platform::Object^, RoutedEventArgs^) {
@@ -1206,13 +1387,13 @@ void CatalogShell::Diagnostics() {
     auto core = Vertical();
     core->Children->Append(Text(
         L"This runs upstream bitmap allocation, reservation and release routines. "
-        L"It is not a Dynarmic emulator boot.", 16, false, true));
+        L"It is not a Dynarmic emulator boot.", 13, false, true));
     auto test = Button(L"Run real upstream memory test", true);
     test->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ProbeCore();
     });
     core->Children->Append(test);
-    coreResult_ = Text(L"Not tested on this Xbox.", 17, true);
+    coreResult_ = Text(L"Not tested on this Xbox.", 14, true);
     core->Children->Append(coreResult_);
     content_->Children->Append(Panel(core));
 
@@ -1220,23 +1401,23 @@ void CatalogShell::Diagnostics() {
     auto memory = Vertical();
     memory->Children->Append(Text(
         L"Check read/write pages, RW-to-RX protection and a reserved 4 GiB guest address "
-        L"range. This does not execute generated ARM instructions.", 16, false, true));
+        L"range. This does not execute generated ARM instructions.", 13, false, true));
     auto probe = Button(L"Probe memory compatibility");
     probe->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ProbeMemory();
     });
     memory->Children->Append(probe);
-    memoryResult_ = Text(L"Not tested on this Xbox.", 17, true);
+    memoryResult_ = Text(L"Not tested on this Xbox.", 14, true);
     memory->Children->Append(memoryResult_);
     auto jitDescription = Text(
         L"JIT liveness runs a tiny native x64 function generated into a writable page, "
         L"then switches it to executable-only/readable via VirtualProtectFromApp. "
         L"Only run this on the Xbox after testing the normal memory probe. "
         L"An Xbox code-integrity policy could terminate the app instead of returning an error. "
-        L"Passing is not proof that the Vita CPU or Dynarmic works.", 15, false, true);
+        L"Passing is not proof that the Vita CPU or Dynarmic works.", 13, false, true);
     memory->Children->Append(jitDescription);
     auto jitButton = Button(L"Execute on-demand JIT machine-code test");
-    auto jitReport = Text(L"Generated machine code has not been executed.", 16, true);
+    auto jitReport = Text(L"Generated machine code has not been executed.", 13, true);
     jitButton->Click += ref new RoutedEventHandler(
         [this,jitReport](Platform::Object^, RoutedEventArgs^) {
             jitReport->Text = StringOf(RunUwpJitLivenessProbe());
@@ -1250,13 +1431,13 @@ void CatalogShell::Diagnostics() {
     graphics->Children->Append(Text(
         L"This display uses a D3D12 device, command queue, swap chain and GPU upload. "
         L"It cannot render PS Vita games until the GXM command and shader pipeline exists.",
-        16, false, true));
+        13, false, true));
     renderSurface_ = ref new SwapChainPanel();
     renderSurface_->Width = 960;
     renderSurface_->Height = 544;
     renderSurface_->Margin = Thickness(0, 10, 0, 10);
     graphics->Children->Append(renderSurface_);
-    rendererResult_ = Text(L"Renderer not initialized.", 16, true);
+    rendererResult_ = Text(L"Renderer not initialized.", 13, true);
     graphics->Children->Append(rendererResult_);
     auto actions = ref new StackPanel();
     actions->Orientation = Orientation::Horizontal;
@@ -1278,9 +1459,10 @@ void CatalogShell::SaveTheme(int theme) {
     theme_ = theme;
     PutPref(L"theme", StringOf(std::to_wstring(theme)));
     root_->Background = Solid(Bg());
-    navigation_->Background = Solid(RgbColor(13, 14, 18));
+    navigation_->Background = Solid(RailColor());
+    PlayCue(5);
     auto footer = dynamic_cast<Border^>(root_->Children->GetAt(2));
-    if (footer != nullptr) footer->Background = Solid(Card());
+    if (footer != nullptr) footer->Background = Solid(Bg());
     if (status_ != nullptr) status_->Foreground = Solid(Muted());
     BuildNavigation();
     Render();
@@ -2140,7 +2322,7 @@ void CatalogShell::SaveCueSettings() {
 }
 void CatalogShell::PlayCue(unsigned kind) {
     if (!bootstrapped_ || !uiSounds_ || uiSoundVolume_ <= 0) return;
-    kind %= 4;
+    kind %= vita3k_uwp::kInterfaceCueCount;
     if (!cueReady_[kind] || cuePlayers_[kind] == nullptr) return;
     // Dedicated player per cue means focus and confirm don't cut one another off.
     cuePlayers_[kind]->Stop();
@@ -2154,7 +2336,7 @@ void CatalogShell::PrepareCues() {
     .then([this](task<StorageFolder^> result) {
         try {
             auto folder = result.get();
-            for (unsigned i = 0; i < 4; ++i) {
+            for (unsigned i = 0; i < vita3k_uwp::kInterfaceCueCount; ++i) {
                 auto bytes = vita3k_uwp::GenerateInterfaceCue(i);
                 auto buffer = ref new Platform::Array<unsigned char>(
                     static_cast<unsigned>(bytes.size()));

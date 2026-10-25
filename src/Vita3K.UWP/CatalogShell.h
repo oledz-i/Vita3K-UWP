@@ -34,9 +34,10 @@ private:
     Windows::Storage::Streams::IRandomAccessStream^ customMusicStream_ = nullptr;
     Windows::UI::Xaml::Controls::TextBlock^ musicStatus_ = nullptr;
     Platform::String^ playbackStatus_ = L"Not started";
-    Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[4] = {};
-    Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[4] = {};
-    bool cueReady_[4] = {};
+    // One slot per cue in vita3k_uwp::kInterfaceCueCount.
+    Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[6] = {};
+    Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[6] = {};
+    bool cueReady_[6] = {};
     bool uiSounds_ = true;
     double uiSoundVolume_ = 0.40;
     Windows::UI::Xaml::Controls::TextBlock^ status_;
@@ -53,6 +54,7 @@ private:
     D3D12Host renderer_;
     VitaLibretroHost libretro_;
     int page_ = 0;
+    int shownPage_ = -1;
     int selectedGame_ = -1;
     int theme_ = 0;
     int track_ = 1;
@@ -67,13 +69,17 @@ private:
     Windows::UI::Color Accent() const;
     Windows::UI::Color Glow() const;
     Windows::UI::Color Muted() const;
+    Windows::UI::Color RailColor() const;
     Windows::UI::Xaml::Media::Brush^ Solid(Windows::UI::Color value);
     Windows::UI::Xaml::Media::Brush^ Gradient(Windows::UI::Color a, Windows::UI::Color b);
     Windows::UI::Xaml::Controls::TextBlock^ Text(Platform::String^ value, double size,
                                                   bool bold = false, bool muted = false);
     Windows::UI::Xaml::Controls::Button^ Button(Platform::String^ label, bool highlighted = false);
     Windows::UI::Xaml::Controls::Border^ Panel(Windows::UI::Xaml::UIElement^ child,
-                                                double pad = 24);
+                                                double pad = 18);
+    Windows::UI::Xaml::Controls::ControlTemplate^ ButtonTemplate(double radius, bool filled);
+    void Skin(Windows::UI::Xaml::Controls::Button^ button, double radius, bool filled = false);
+    void Reveal(Windows::UI::Xaml::UIElement^ element, double delayMs = 0, double rise = 14);
     Windows::UI::Xaml::Controls::StackPanel^ Vertical(double spacing = 0);
     void Banner(Platform::String^ eyebrow, Platform::String^ headline,
                 Platform::String^ description);
