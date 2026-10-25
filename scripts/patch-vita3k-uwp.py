@@ -256,3 +256,69 @@ text = text.replace(old, '''if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
     target_link_libraries(winsock INTERFACE WSOCK32 WS2_32 IPHLPAPI)
   endif()''')
 external.write_text(text)
+
+# The optional host crash logger used a desktop-only exception hook. Keep
+# terminate/file/debugger logging; guest memory exception machinery is separate.
+logging = source / 'vita3k/util/src/logging.cpp'
+text = logging.read_text()
+old = '#ifdef _WIN32\nstatic LONG WINAPI exception_handler'
+assert old in text
+logging.write_text(text.replace(old, '#if defined(_WIN32) && !defined(VITA3K_UWP)\nstatic LONG WINAPI exception_handler', 1))
+
+# GetAdaptersInfo is hidden by the UWP SDK. Its supported successor returns
+# real assigned IPv4 addresses and on-link prefix lengths for the guest.
+network = source / 'vita3k/util/src/net_utils.cpp'
+text = network.read_text()
+old = '#include <winsock2.h>'
+assert old in text
+text = text.replace(old, old + '\n#include <ws2tcpip.h>', 1)
+old = '#ifdef _WIN32\n    PIP_ADAPTER_INFO pAdapterInfo;'
+assert old in text
+text = text.replace(old, '''#if defined(VITA3K_UWP)
+    ULONG bytes = 15 * 1024;
+    std::vector<IP_ADAPTER_ADDRESSES> adapters;
+    ULONG result = ERROR_BUFFER_OVERFLOW;
+    for (unsigned attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; ++attempt) {
+        adapters.resize((bytes + sizeof(IP_ADAPTER_ADDRESSES) - 1) / sizeof(IP_ADAPTER_ADDRESSES));
+        result = GetAdaptersAddresses(AF_INET,
+            GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+            nullptr, adapters.data(), &bytes);
+    }
+    if (result != NO_ERROR) {
+        LOG_WARN("GetAdaptersAddresses failed with error: {}", result);
+        return ret_addrs();
+    }
+    for (auto *adapter = adapters.data(); adapter; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+            continue;
+        for (auto *unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
+            if (!unicast->Address.lpSockaddr || unicast->Address.lpSockaddr->sa_family != AF_INET)
+                continue;
+            const auto *address = reinterpret_cast<const sockaddr_in *>(unicast->Address.lpSockaddr);
+            const unsigned prefix = unicast->OnLinkPrefixLength;
+            if (prefix > 32) continue;
+            in_addr mask{};
+            mask.s_addr = htonl(prefix == 0 ? 0u : (0xffffffffu << (32 - prefix)));
+            char ip[INET_ADDRSTRLEN] = {}, netmask[INET_ADDRSTRLEN] = {};
+            if (!inet_ntop(AF_INET, &address->sin_addr, ip, sizeof(ip)) ||
+                !inet_ntop(AF_INET, &mask, netmask, sizeof(netmask))) continue;
+            out_addrs.push_back({ adapter->AdapterName ? adapter->AdapterName : "network", ip, netmask });
+        }
+    }
+#elif defined(_WIN32)
+    PIP_ADAPTER_INFO pAdapterInfo;''', 1)
+network.write_text(text)
+
+# The pinned spdlog predates fmt 12's deprecated implicit format-string
+# conversion. Use its explicit accessor instead of suppressing compiler errors.
+logger = source / 'external/spdlog/include/spdlog/logger.h'
+text = logger.read_text()
+old = '        log_(loc, lvl, details::to_string_view(fmt), std::forward<Args>(args)...);'
+assert text.count(old) == 2
+new = '''#if !defined(SPDLOG_USE_STD_FORMAT) && FMT_VERSION >= 120000
+        log_(loc, lvl, fmt.get(), std::forward<Args>(args)...);
+#else
+''' + old + '\n#endif'
+text = text.replace(old, new, 1)
+logger.write_text(text)
+print('Fixed UWP utility exception logging, network enumeration and fmt 12 compatibility.')

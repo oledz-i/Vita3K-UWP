@@ -19,7 +19,7 @@ on:
       - src/**
 concurrency:
   group: full-core-appx-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 permissions:
   contents: read
   actions: read
@@ -32,6 +32,17 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check PowerShell scripts before fetching dependencies
+        shell: pwsh
+        run: |
+          $invalid = @()
+          Get-ChildItem scripts -Filter '*.ps1' | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            foreach ($parseIssue in $parseErrors) { $invalid += "$($_.Name): $parseIssue" }
+          }
+          if ($invalid.Count) { throw ($invalid -join "`n") }
       - name: Fetch pinned libretro Vita3K source with submodules
         shell: pwsh
         run: |

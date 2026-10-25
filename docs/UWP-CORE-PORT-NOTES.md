@@ -47,3 +47,23 @@ All source adapters were applied successfully to a fresh archive of the pinned
 Vita3K libretro source. Repository and workflow syntax checks pass. These are
 source-level checks; Windows CI must compile the affected targets. Xbox runtime
 loading, firmware setup, Vulkan features and Undertale execution remain unverified.
+
+## Next compiler batch: utility library
+
+Full-core run 40162246205 got past SDL and failed in the util target:
+
+- C3861: AddVectoredExceptionHandler in the optional host crash logger.
+  UWP keeps terminate, file and debugger logging without registering that
+  desktop-only logger hook. The CPU/guest memory exception code is untouched.
+- C3861: GetAdaptersInfo in network adapter enumeration. The UWP branch now
+  uses GetAdaptersAddresses and computes IPv4 subnet masks from prefix lengths.
+  See Microsoft's [supported API documentation](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getadaptersaddresses).
+- C4996: spdlog's implicit conversion from fmt 12's format string. The pinned
+  char logger overload now uses fmt.get() explicitly. A C++23 syntax check
+  with deprecation warnings treated as errors reproduced the failure before
+  the patch and passed after it, using the exact pinned fmt/spdlog revisions.
+
+The errors-summary script also had a PowerShell variable-colon parse error.
+It now uses braced interpolation, and the workflow parses every PowerShell
+script before fetching and compiling the core. Full logs were preserved even
+when the old summary script failed.
