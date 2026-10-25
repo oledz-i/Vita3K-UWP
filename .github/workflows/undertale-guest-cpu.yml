@@ -1,0 +1,108 @@
+name: Vita ARM guest CPU Xbox package
+on:
+  push:
+    branches: [undertale-boot]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: vita-guest-xbox-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build-vita-arm-jit:
+    name: Compile Vita guest ARM executable test for UWP
+    runs-on: windows-2022
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Fetch full pinned Vita3K libretro sources and Dynarmic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content core-candidates.lock.json -Raw | ConvertFrom-Json
+          git clone --branch $lock.libretro_candidate.branch --depth 25 $lock.libretro_candidate.repository upstream-core
+          if ($LASTEXITCODE) { throw 'Vita3K libretro clone failed' }
+          git -C upstream-core checkout --detach $lock.libretro_candidate.commit
+          if ($LASTEXITCODE) { throw 'Pinned Vita3K source checkout failed' }
+          git -C upstream-core submodule update --init --recursive --depth 1
+          if ($LASTEXITCODE) { throw 'Required Vita3K submodules are unavailable' }
+      - name: Compile Vita3K Dynarmic CPU and executable ARM instruction test
+        shell: pwsh
+        run: ./scripts/build-vita-dynarmic-uwp.ps1
+      - name: Save guest ARM CPU DLL and compiler results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vita-arm-guest-cpu-uwp
+          path: |
+            artifacts/dynarmic-uwp/
+            artifacts/onyx-dynarmic/
+          if-no-files-found: warn
+          retention-days: 14
+  package-vita-arm-test:
+    name: Sign Xbox APPX containing Vita ARM CPU and Mesa Dozen
+    needs: build-vita-arm-jit
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: vita-arm-guest-cpu-uwp
+          path: artifacts/compiled-arm
+      - name: Get previously source-built Onyx Vulkan Dozen
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh run download 40146146144 --repo oledz-i/Vita3K-UWP --name onyx-mesa-dozen-uwp --dir artifacts/onyx-driver
+          if ($LASTEXITCODE) { throw 'Previously compiled Onyx Dozen GPU artifact missing' }
+          $arm = 'artifacts/compiled-arm/dynarmic-uwp/vita_guest_cpu_probe.dll'
+          if (!(Test-Path $arm)) { throw 'Compiled Vita ARM guest CPU test DLL missing; do not build empty test' }
+          Copy-Item $arm 'src/Vita3K.UWP/vita_guest_cpu_probe.dll' -Force
+          foreach ($dll in @('vulkan_dzn.dll','dxil.dll')) {
+            $source = Join-Path 'artifacts/onyx-driver' $dll
+            if (!(Test-Path $source)) { throw "Onyx GPU driver $dll missing" }
+            Copy-Item $source (Join-Path 'src/Vita3K.UWP' $dll) -Force
+          }
+      - name: Compile and sign Xbox Vita guest CPU test package
+        shell: pwsh
+        run: |
+          python scripts/validate.py
+          if ($LASTEXITCODE) { throw 'Source validation failed' }
+          ./scripts/build-appx.ps1 -BuildNumber ${{ github.run_number }}
+      - name: Verify guest ARM JIT DLL and Onyx Dozen are in signed APPX
+        shell: pwsh
+        run: |
+          $appx = @(Get-ChildItem artifacts/package -Recurse -Filter '*.appx' |
+            Where-Object { $_.FullName -notmatch '[\\/]Dependencies[\\/]' })
+          if ($appx.Count -ne 1) { throw 'Expected one signed Xbox APPX file' }
+          $zip = "$env:RUNNER_TEMP/vita-guest-test.zip"
+          Copy-Item $appx[0].FullName $zip
+          Add-Type -AssemblyName System.IO.Compression
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $filenames = @($archive.Entries | ForEach-Object FullName)
+            foreach ($dll in @('vita_guest_cpu_probe.dll','vulkan_dzn.dll','dxil.dll')) {
+              if (!($filenames | Where-Object { $_ -ieq $dll -or $_ -ilike "*/$dll" })) {
+                throw "$dll not present in Xbox APPX"
+              }
+            }
+          } finally { $archive.Dispose() }
+          'Vita guest ARM CPU test and Mesa Vulkan driver are included in the signed APPX.'
+      - name: Upload Vita CPU Xbox Developer Mode test
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-UWP-Vita-ARM-CPU-test-x64-${{ github.run_number }}
+          path: artifacts/package/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save APPX compiler log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita-ARM-Xbox-CI-logs-${{ github.run_number }}
+          path: artifacts/logs/
+          if-no-files-found: warn

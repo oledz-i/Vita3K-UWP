@@ -5,6 +5,7 @@
 #include "SfoReader.h"
 #include "GameFormats.h"
 #include "VulkanDznProbe.h"
+#include "VitaGuestCpuUwpProbe.h"
 #include "UwpJitProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
@@ -362,7 +363,13 @@ void CatalogShell::BuildNavigation() {
 
     const wchar_t* glyphs[] = {L"\uE80F", L"\uE8B7", L"\uE713", L"\uE90F"};
     const wchar_t* labels[] = {L"HOME", L"LIBRARY", L"SETTINGS", L"TOOLS"};
-    for (int i = 0; i < 4; ++i) {
+    // Preview builds expose diagnostics. Public release builds hide Tools.
+#if defined(VITA3K_RELEASE_BUILD)
+    constexpr int visibleTabs = 3;
+#else
+    constexpr int visibleTabs = 4;
+#endif
+    for (int i = 0; i < visibleTabs; ++i) {
         const bool selected = page_ == i || (i == 1 && page_ == 4);
         auto nav = ref new Windows::UI::Xaml::Controls::Button();
         nav->Margin = Thickness(11, 0, 11, 14);
@@ -397,6 +404,9 @@ void CatalogShell::BuildNavigation() {
     navigation_->Child = rail;
 }
 void CatalogShell::ShowPage(int nextPage) {
+#if defined(VITA3K_RELEASE_BUILD)
+    if (nextPage == 3) nextPage = 0;
+#endif
     if (nextPage < 0 || nextPage > 4) nextPage = 0;
     if (page_ == 3 && nextPage != 3) renderer_.Shutdown();
     page_ = nextPage;
@@ -944,6 +954,17 @@ void CatalogShell::GameDetails() {
         InspectLaunch(index);
     });
     actions->Children->Append(inspect);
+    // Show Launch only when a UWP-built, signed Vita3K core is present.
+    // No inactive button or simulated launch screen in frontend-only builds.
+    std::wstring coreStatus;
+    if (libretro_.Probe(coreStatus) && games_[index].file != nullptr) {
+        auto launch = Button(L"Launch Vita game", true);
+        launch->Click += ref new RoutedEventHandler(
+            [this,index](Platform::Object^, RoutedEventArgs^) {
+                AttemptBoot(index);
+            });
+        actions->Children->Append(launch);
+    }
     auto image = Button(L"Change cover art");
     image->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         ChooseCustomArtwork(index);
@@ -1117,14 +1138,22 @@ void CatalogShell::Settings() {
     firmwareLabel_ = Text(L"Firmware file: not selected", 17, false, true);
     storage->Children->Append(firmwareLabel_);
     storage->Children->Append(Text(
-        L"Obtain an official PS Vita update .PUP from Sony using another device, transfer "
-        L"it to accessible storage, and select it here. This saves your file selection "
-        L"but does not install firmware: the full emulator core is not integrated.", 15, false, true));
-    auto fw = Button(L"Choose official firmware .PUP");
+        L"Choose both official Sony firmware packages. They'll be copied into "
+        L"Vita3K's private system directory, so the emulator can find them later. "
+        L"Selecting a package does not install it until the Vita3K core is linked.",
+        15, false, true));
+    auto fw = Button(L"Choose main system firmware");
     fw->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ChooseFirmware();
     });
     storage->Children->Append(fw);
+    auto preinstalled = Button(L"Choose preinstalled firmware");
+    preinstalled->Margin = Thickness(0, 11, 0, 0);
+    preinstalled->Click += ref new RoutedEventHandler(
+        [this](Platform::Object^, RoutedEventArgs^) {
+            ChoosePreinstalledFirmware();
+        });
+    storage->Children->Append(preinstalled);
     content_->Children->Append(Panel(storage));
     Section(L"Game artwork", L"Use original cover images or bring in your own.");
     auto art = Vertical();
@@ -1176,12 +1205,12 @@ void CatalogShell::Settings() {
 }
 void CatalogShell::Diagnostics() {
     Banner(L"UNDER THE HOOD", L"Developer laboratory.",
-        L"Real Vita3K upstream code, libretro core ABI and D3D12 diagnostics.");
-    Section(L"Experimental real Vita3K libretro core");
+        L"Vita3K CPU, graphics and emulator diagnostics.");
+    Section(L"Vita3K core");
     auto libretroBox = Vertical();
     libretroBox->Children->Append(Text(
-        L"This probes a genuine Vita3K libretro DLL packaged inside the APPX. "
-        L"Unlike a memory or loading-screen test, it checks the exported core API. "
+        L"Check for a Vita3K core DLL inside the app package. "
+        L"Verify the core API before attempting to load a game. "
         L"The desktop DLL cannot automatically run as UWP. Game execution needs a "
         L"successfully ported core and working Vulkan graphics (possibly Mesa Dozen).",
         16, false, true));
@@ -1203,8 +1232,8 @@ void CatalogShell::Diagnostics() {
     auto dzn = Vertical();
     dzn->Children->Append(Text(
         L"Mesa Dozen translates Vulkan to native D3D12 on Windows. "
-        L"On Xbox, a compatible Vulkan loader and Dozen ICD would have to "
-        L"be built for UWP and bundled in the signed APPX. "
+        L"On Xbox, the Vulkan loader and Dozen ICD must "
+        L"run inside the app package. "
         L"A native D3D12 test frame is not evidence that Vulkan works.", 16, false, true));
     auto dznResult = Text(L"No Vulkan / Dozen probe run on this Xbox.", 17, true);
     auto dznButton = Button(L"Probe actual packaged Vulkan device");
@@ -1215,6 +1244,22 @@ void CatalogShell::Diagnostics() {
     dzn->Children->Append(dznButton);
     dzn->Children->Append(dznResult);
     content_->Children->Append(Panel(dzn));
+
+    Section(L"Vita CPU test", L"Run a short ARMv7 program through Dynarmic.");
+    auto cpuPanel = Vertical();
+    cpuPanel->Children->Append(Text(
+        L"This test runs three ARM instructions through Vita3K's Dynarmic CPU: "
+        L"MOV, ADD and SVC. A pass means Xbox executed ARM guest code and returned "
+        L"R0 = 12. It does not launch a Vita game.", 15, false, true));
+    auto cpuReport = Text(L"ARM CPU test not started.", 15, false, true);
+    auto runCpu = Button(L"Run Vita ARM instructions", true);
+    runCpu->Click += ref new RoutedEventHandler(
+        [cpuReport](Platform::Object^, RoutedEventArgs^) {
+            cpuReport->Text = StringOf(RunVitaGuestArmCpuProbe());
+        });
+    cpuPanel->Children->Append(runCpu);
+    cpuPanel->Children->Append(cpuReport);
+    content_->Children->Append(Panel(cpuPanel));
 
     Section(L"Upstream Vita3K memory allocator");
     auto core = Vertical();
@@ -1410,9 +1455,13 @@ void CatalogShell::RestorePaths() {
             ? L"Game folder access saved." : L"No game folder chosen yet.";
     }
     if (firmwareLabel_ != nullptr) {
-        firmwareLabel_->Text = future->ContainsItem(L"vita-firmware")
-            ? L"Official firmware selection saved (not installed)."
-            : L"No firmware .PUP selected.";
+        const bool mainReady = Pref(L"firmware.stage.main", L"0")->Equals(L"1");
+        const bool preinstReady = Pref(L"firmware.stage.preinst", L"0")->Equals(L"1");
+        firmwareLabel_->Text = mainReady && preinstReady
+            ? L"Both firmware packages are in Vita3K's system directory (not installed)."
+            : mainReady ? L"Main firmware staged; preinstalled firmware still needed."
+            : preinstReady ? L"Preinstalled firmware staged; main update still needed."
+            : L"Two official firmware packages required.";
     }
     if (future->ContainsItem(L"vita-games")) {
         create_task(future->GetFolderAsync(L"vita-games")).then(
@@ -1433,7 +1482,8 @@ void CatalogShell::RestorePaths() {
                 try {
                     auto file = work.get();
                     if (firmwareLabel_ != nullptr)
-                        firmwareLabel_->Text = L"Selected firmware: " + file->Name + L" (not installed)";
+                        firmwareLabel_->Text = L"Firmware selected: " + file->Name +
+                            L" (installation pending)";
                 } catch (Platform::Exception^) {
                     if (firmwareLabel_ != nullptr)
                         firmwareLabel_->Text = L"Firmware permission expired. Select again.";
@@ -1461,19 +1511,57 @@ void CatalogShell::ChooseGameFolder() {
         }, task_continuation_context::use_current());
 }
 void CatalogShell::ChooseFirmware() {
+    ChooseFirmwareSlot(false);
+}
+void CatalogShell::ChoosePreinstalledFirmware() {
+    ChooseFirmwareSlot(true);
+}
+void CatalogShell::ChooseFirmwareSlot(bool preinstalled) {
+    // Vita3K libretro requires BOTH official update and preinstalled firmware.
+    // A UWP FutureAccessList token does not grant CRT fopen() access. Copy
+    // the selected package into the frontend's writable system directory.
+    Platform::String^ token = preinstalled ? L"vita-firmware-preinst" : L"vita-firmware";
+    Platform::String^ name = preinstalled ? L"PSP2UPDAT_PREINST.PUP" : L"PSP2UPDAT.PUP";
+    Platform::String^ statusKey = preinstalled ? L"firmware.stage.preinst" : L"firmware.stage.main";
+
     auto picker = ref new FileOpenPicker();
-    picker->SuggestedStartLocation = PickerLocationId::Downloads;
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
     picker->FileTypeFilter->Append(L".PUP");
     picker->FileTypeFilter->Append(L".pup");
-    SetStatus(L"Choose your official PS Vita firmware update .PUP file.");
+    SetStatus(preinstalled
+        ? L"Select the official PS Vita preinstalled firmware package."
+        : L"Select the official PS Vita system software update package.");
     create_task(picker->PickSingleFileAsync()).then(
-        [this](task<StorageFile^> work) {
+        [this,token,name,statusKey](task<StorageFile^> selection) {
             try {
-                auto file = work.get();
+                auto file = selection.get();
                 if (file == nullptr) return;
-                StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-firmware", file);
-                RestorePaths();
-                SetStatus(L"Firmware file selected. Installation is blocked until core integration.");
+                PutPref(statusKey, L"0");
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(token, file);
+                SetStatus(L"Copying official firmware package into Vita3K system storage...");
+                create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
+                    L"Vita3KSystem", CreationCollisionOption::OpenIfExists))
+                .then([](StorageFolder^ system) {
+                    return create_task(system->CreateFolderAsync(
+                        L"vita3k", CreationCollisionOption::OpenIfExists));
+                }).then([file,name](StorageFolder^ data) {
+                    // Memory-safe for large firmware files, unlike
+                    // loading the whole .PUP into an IBuffer.
+                    return create_task(file->CopyAsync(
+                        data, name, NameCollisionOption::ReplaceExisting));
+                }).then([this,statusKey,name](task<StorageFile^> copied) {
+                    try {
+                        auto staged = copied.get();
+                        if (staged == nullptr) return;
+                        PutPref(statusKey, L"1");
+                        SetStatus(L"Firmware file prepared as " + name +
+                            L". Vita3K installation still requires the emulator core.");
+                        RestorePaths();
+                    } catch (Platform::Exception^ e) {
+                        SetStatus(L"Couldn't stage Vita firmware: " + e->Message);
+                        RestorePaths();
+                    }
+                }, task_continuation_context::use_current());
             } catch (Platform::Exception^ e) {
                 SetStatus(L"Firmware picker failed: " + e->Message);
             }
@@ -1628,6 +1716,66 @@ void CatalogShell::InspectLaunch(size_t index) {
     SetStatus(L"Input preflight: " + games_[index].validation +
         L". Game boot is blocked: Dynarmic CPU, Vita kernel, executable loader "
         L"and GXM renderer are not integrated in this UWP build.");
+}
+
+void CatalogShell::AttemptBoot(size_t index) {
+    if (index >= games_.size()) return;
+    auto game = games_[index].file;
+    if (game == nullptr) {
+        SetStatus(L"Cannot launch: choose a Vita VPK/PKG/ZIP/VCI file. "
+            L"Extracted game directories are not staged yet.");
+        return;
+    }
+    std::wstring probe;
+    if (!libretro_.Probe(probe)) {
+        SetStatus(StringOf(probe));
+        return;
+    }
+    // UWP's file picker grants a StorageFile capability; Vita3K's CRT-based
+    // loader requires a path inside our own app sandbox or a working VFS.
+    // CopyAsync streams disk data without buffering the entire Vita package.
+    SetStatus(L"Preparing game file in Vita3K's private content storage...");
+    create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
+        L"Vita3KContent", CreationCollisionOption::OpenIfExists))
+    .then([game,index](StorageFolder^ target) {
+        auto stagedName = L"vita-" + StringOf(std::to_wstring(index)) +
+            L"-" + game->Name;
+        return create_task(game->CopyAsync(
+            target, stagedName, NameCollisionOption::ReplaceExisting));
+    }).then([this](task<StorageFile^> staged) {
+        try {
+            auto file = staged.get();
+            if (file == nullptr) return;
+            auto folder = ApplicationData::Current->LocalFolder;
+            auto systemPath = folder->Path + L"\\Vita3KSystem";
+            auto gamePath = file->Path;
+            auto toUtf8 = [](Platform::String^ source) {
+                const int count = WideCharToMultiByte(
+                    CP_UTF8, 0, source->Data(), -1, nullptr, 0, nullptr, nullptr);
+                if (count <= 0) return std::string();
+                std::string result(static_cast<size_t>(count), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, source->Data(), -1,
+                    &result[0], count, nullptr, nullptr);
+                return result;
+            };
+            const std::string system = toUtf8(systemPath);
+            const std::string content = toUtf8(gamePath);
+            SetStatus(L"Vita file staged. Initializing Vita3K core...");
+            create_task([this,system,content]() {
+                std::wstring detail;
+                if (!libretro_.Initialize(system, detail)) return detail;
+                if (!libretro_.LoadGame(content, detail)) return detail;
+                return detail;
+            }).then([this](task<std::wstring> result) {
+                try { SetStatus(StringOf(result.get())); }
+                catch (...) {
+                    SetStatus(L"Vita3K loader failed. See core diagnostics.");
+                }
+            }, task_continuation_context::use_current());
+        } catch (Platform::Exception^ error) {
+            SetStatus(L"Couldn't stage game file: " + error->Message);
+        }
+    }, task_continuation_context::use_current());
 }
 
 void CatalogShell::ChooseGameFile() {
@@ -1938,9 +2086,9 @@ void CatalogShell::ProbeLibretro(bool initialize) {
                     std::wstring detail;
                     const bool loaded = libretro_.Initialize(narrow, detail);
                     libretroResult_->Text = StringOf(detail);
-                    SetStatus(loaded ? L"Real Vita3K libretro initialization returned. "
+                    SetStatus(loaded ? L"Vita3K core initialization returned. "
                         L"No game execution or Vulkan context is available." :
-                        L"Real Vita3K core initialization blocked. See developer report.");
+                        L"Vita3K core initialization blocked. See diagnostic details.");
                 } catch (Platform::Exception^ e) {
                     libretroResult_->Text = L"Cannot create private Vita3K system directory: " + e->Message;
                 }

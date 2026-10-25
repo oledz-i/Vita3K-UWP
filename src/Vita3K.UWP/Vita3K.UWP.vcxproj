@@ -73,6 +73,10 @@
       <CompileAsWinRT>false</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
+    <ClCompile Include="VitaGuestCpuUwpProbe.cpp">
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
     <ClCompile Include="VitaLibretroHost.cpp">
       <CompileAsWinRT>false</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
@@ -89,6 +93,7 @@
   <ItemGroup>
     <ClInclude Include="D3D12Host.h" />
     <ClInclude Include="VitaLibretroHost.h" />
+    <ClInclude Include="VitaGuestCpuUwpProbe.h" />
     <ClInclude Include="VulkanDznProbe.h" />
     <ClInclude Include="UwpJitProbe.h" />
     <ClInclude Include="CatalogShell.h" />
@@ -114,6 +119,12 @@
        Never copy an arbitrary desktop Win32 DLL here and claim it works. -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\vita3k_libretro.dll')">
     <Content Include="vita3k_libretro.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <!-- Packaged ARM JIT test runs actual Vita guest machine code through Dynarmic. -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\vita_guest_cpu_probe.dll')">
+    <Content Include="vita_guest_cpu_probe.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

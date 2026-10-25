@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "VitaLibretroHost.h"
 #include <algorithm>
+#include <cstdarg>
+#include <cstdio>
 #include <string>
 
 VitaLibretroHost* VitaLibretroHost::active_ = nullptr;
@@ -26,10 +28,14 @@ VitaLibretroHost::~VitaLibretroHost() {
 }
 
 void VitaLibretroHost::Shutdown() {
+    UnloadGame();
     if (initialized_ && deinit_) deinit_();
     initialized_ = false;
     init_ = nullptr;
     deinit_ = nullptr;
+    loadGame_ = nullptr;
+    unloadGame_ = nullptr;
+    runFrame_ = nullptr;
     unsupportedVideo_ = false;
     if (active_ == this) active_ = nullptr;
     if (module_) {
@@ -63,8 +69,12 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
     const auto input = Entry<SetInputState>(module_, "retro_set_input_state");
     init_ = Entry<Init>(module_, "retro_init");
     deinit_ = Entry<Deinit>(module_, "retro_deinit");
+    loadGame_ = Entry<LoadGameFunction>(module_, "retro_load_game");
+    unloadGame_ = Entry<UnloadGameFunction>(module_, "retro_unload_game");
+    runFrame_ = Entry<RunFunction>(module_, "retro_run");
     if (!api || !info || !environment || !video || !audio ||
-        !audioBatch || !poll || !input || !init_ || !deinit_) {
+        !audioBatch || !poll || !input || !init_ || !deinit_ ||
+        !loadGame_ || !unloadGame_ || !runFrame_) {
         detail = L"Core DLL is present but missing required libretro exports.";
         Shutdown();
         return false;
@@ -92,7 +102,7 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
     audioBatch(&AudioBatch);
     poll(&PollInput);
     input(&Input);
-    detail = L"Authentic Vita3K libretro ABI and exports validated (" + coreVersion_ +
+    detail = L"Vita3K core API detected (" + coreVersion_ +
         L"). Actual emulated CPU and GPU execution not yet tested.";
     return true;
 }
@@ -101,14 +111,14 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
     systemDir_ = systemFolder;
     if (!Probe(detail)) return false;
     if (initialized_) {
-        detail = L"Real Vita3K libretro retro_init already executed.";
+        detail = L"Vita3K core is already initialized.";
         return true;
     }
     unsupportedVideo_ = false;
     if (!init_) return false;
     init_();
     initialized_ = true;
-    detail = L"Real Vita3K libretro retro_init returned (" + coreVersion_ +
+    detail = L"Vita3K core initialized (" + coreVersion_ +
         L"). This is core initialization only, not Vita game boot.";
     if (unsupportedVideo_) {
         detail += L" Hardware Vulkan was requested but the UWP frontend cannot supply it.";
@@ -116,6 +126,77 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
     return true;
 }
 
+
+std::wstring VitaLibretroHost::RecentLog() const {
+    std::lock_guard<std::mutex> guard(logsMutex_);
+    return FromUtf8(latestCoreLogs_.c_str());
+}
+void VitaLibretroHost::UnloadGame() {
+    if (gameLoaded_ && unloadGame_) unloadGame_();
+    gameLoaded_ = false;
+    framesExecuted_ = 0;
+}
+bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wstring& detail) {
+    if (!initialized_ || !loadGame_) {
+        detail = L"Vita3K must initialize before loading a game.";
+        return false;
+    }
+    if (readableContentPath.empty()) {
+        detail = L"No game path supplied.";
+        return false;
+    }
+    UnloadGame();
+    {
+        std::lock_guard<std::mutex> guard(logsMutex_);
+        latestCoreLogs_.clear();
+    }
+    RetroGameInfo game{};
+    game.path = readableContentPath.c_str();
+    // The file remains owned by the caller; Vita3K's loader opens it using
+    // its own filesystem/VFS APIs. A UWP picker token alone is insufficient.
+    game.data = nullptr;
+    game.size = 0;
+    game.meta = nullptr;
+    gameLoaded_ = loadGame_(&game);
+    if (!gameLoaded_) {
+        detail = L"Vita3K rejected this game file. ";
+        if (unsupportedVideo_) {
+            detail += L"Vulkan hardware context is not yet connected to Dozen. ";
+        }
+        detail += L"Core log: " + RecentLog();
+        return false;
+    }
+    detail = L"Vita3K retro_load_game returned true. Guest execution and "
+             L"visible game frames must still be verified.";
+    return true;
+}
+bool VitaLibretroHost::RunFrame(std::wstring& detail) {
+    if (!gameLoaded_ || !runFrame_) {
+        detail = L"No Vita game is loaded.";
+        return false;
+    }
+    runFrame_();
+    ++framesExecuted_;
+    detail = L"Vita3K retro_run returned; tick " +
+        std::to_wstring(framesExecuted_) +
+        L". Verify a Vita guest thread and real rendered frames before "
+        L"calling this gameplay.";
+    return true;
+}
+void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
+    auto* host = active_;
+    if (!host || !format) return;
+    char message[2048] = {};
+    va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    std::lock_guard<std::mutex> guard(host->logsMutex_);
+    host->latestCoreLogs_.append(message);
+    if (host->latestCoreLogs_.size() > 12000) {
+        host->latestCoreLogs_.erase(0, host->latestCoreLogs_.size() - 12000);
+    }
+}
 bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
     auto* host = active_;
     if (!host || !data) return false;
@@ -128,6 +209,12 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
     case 10: // SET_PIXEL_FORMAT
         // RGB1555 (0), XRGB8888 (1), RGB565 (2) accepted for software video
         return *static_cast<const unsigned*>(data) <= 2;
+    case 27: // GET_LOG_INTERFACE, receives a variadic logging callback
+        *static_cast<RetroLogCallback*>(data) = {&VitaLibretroHost::Log};
+        return true;
+    case 56: // GET_PREFERRED_HW_RENDER
+        *static_cast<unsigned*>(data) = 6; // Vulkan (Onyx Dozen backend)
+        return true;
     case 14: // SET_HW_RENDER (OpenGL/Vulkan context negotiation)
         host->unsupportedVideo_ = true;
         return false;

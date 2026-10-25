@@ -1,7 +1,7 @@
 name: Vita3K Cinematic Xbox UI
 on:
   push:
-    branches: [cinematic-ui-overhaul]
+    branches: [cinematic-ui-overhaul, undertale-boot]
   workflow_dispatch:
 permissions:
   contents: read
