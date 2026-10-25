@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <chrono>
 #pragma comment(lib, "xinputuap.lib")
@@ -13,7 +14,7 @@ namespace {
 std::wstring FromUtf8(const char* input) {
     if (input == nullptr) return L"(unknown)";
     const int size = MultiByteToWideChar(CP_UTF8, 0, input, -1, nullptr, 0);
-    if (size <= 1 || size > 2048) return L"(unavailable)";
+    if (size <= 1 || size > 16384) return L"(unavailable)";
     std::wstring output(static_cast<std::size_t>(size), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, input, -1, &output[0], size);
     output.pop_back();
@@ -114,7 +115,12 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
 
 bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring& detail) {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
-    systemDir_ = systemFolder;
+    systemDir_ = systemFolder.c_str();
+    // Keep frontend diagnostics outside the core's firmware directory so they
+    // survive load failures. The caller passes LocalFolder/Vita3KSystem.
+    const auto parent = systemDir_.find_last_of("/\\");
+    if (parent != std::string::npos)
+        runtimeLogPath_ = FromUtf8((systemDir_.substr(0, parent + 1) + "vita3k-runtime.log").c_str());
     if (!Probe(detail)) return false;
     if (initialized_) {
         detail = L"Vita3K core is already initialized.";
@@ -125,6 +131,7 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
     if (!audio_.Start()) {
         Log(2, "Xbox audio output is unavailable; continuing without audio.\n");
     }
+    Log(1, "Initializing packaged Vita3K core.\n");
     init_();
     initialized_ = true;
     detail = L"Vita3K core initialized (" + coreVersion_ +
@@ -173,7 +180,9 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     game.data = nullptr;
     game.size = 0;
     game.meta = nullptr;
+    Log(1, "Loading staged content: %s\n", game.path);
     gameLoaded_ = loadGame_(&game);
+    Log(1, "retro_load_game returned %s\n", gameLoaded_ ? "true" : "false");
     if (!gameLoaded_) {
         detail = L"Vita3K rejected this game file. ";
         if (unsupportedVideo_) {
@@ -184,6 +193,7 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     }
     std::string vulkanError;
     if (!vulkan_.Initialize(vulkanError)) {
+        Log(3, "Vulkan initialization failed: %s\n", vulkanError.c_str());
         detail = L"Vulkan initialization failed: " + FromUtf8(vulkanError.c_str());
         UnloadGame();
         return false;
@@ -255,9 +265,18 @@ void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
     std::vsnprintf(message, sizeof(message), format, arguments);
     va_end(arguments);
     std::lock_guard<std::mutex> guard(host->logsMutex_);
+    if (!host->runtimeLogPath_.empty()) {
+        if (FILE* file = _wfopen(host->runtimeLogPath_.c_str(), L"ab")) {
+            std::fwrite(message, 1, std::strlen(message), file);
+            std::fclose(file);
+        }
+    }
     host->latestCoreLogs_.append(message);
     if (host->latestCoreLogs_.size() > 12000) {
         host->latestCoreLogs_.erase(0, host->latestCoreLogs_.size() - 12000);
+        while (!host->latestCoreLogs_.empty() &&
+            (static_cast<unsigned char>(host->latestCoreLogs_.front()) & 0xc0) == 0x80)
+            host->latestCoreLogs_.erase(0, 1);
     }
 }
 bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {

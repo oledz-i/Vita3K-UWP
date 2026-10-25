@@ -101,6 +101,7 @@ private:
     LoadGameFunction loadGame_ = nullptr;
     UnloadGameFunction unloadGame_ = nullptr;
     RunFunction runFrame_ = nullptr;
+    std::wstring runtimeLogPath_;
     std::string systemDir_;
     bool initialized_ = false;
     bool gameLoaded_ = false;
