@@ -47,6 +47,23 @@ text = text.replace(
 )
 cmake.write_text(text)
 
+# The libretro fork also invokes get_boost() in vita3k/CMakeLists.txt.
+# Previous attempts only patched the top-level call. Configure therefore
+# still demanded Boost.Filesystem and stopped before compiling any Vita code.
+vita_cmake = source / "vita3k/CMakeLists.txt"
+vita_text = vita_cmake.read_text()
+assert vita_text.count("\\nget_boost()\\n") == 1, "Nested Boost integration moved"
+vita_text = vita_text.replace(
+    "\\nget_boost()\\n",
+    "\\nif(CMAKE_SYSTEM_NAME STREQUAL \\"WindowsStore\\")\\n"
+    "  # Windows Store builds use standard C++ filesystem.\\n"
+    "  set(Boost_INCLUDE_DIRS \\"\\u0024{CMAKE_SOURCE_DIR}/external/boost\\")\\n"
+    "else()\\n"
+    "  get_boost()\\n"
+    "endif()\\n"
+)
+vita_cmake.write_text(vita_text)
+
 filesystem = source / "vita3k/util/include/util/fs.h"
 original = filesystem.read_text()
 old = (
