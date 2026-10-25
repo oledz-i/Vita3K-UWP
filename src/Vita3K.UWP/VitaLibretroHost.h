@@ -9,6 +9,7 @@
 #include <string>
 #include <mutex>
 #include <Xinput.h>
+#include "CoreAudio.h"
 
 class VitaLibretroHost final {
 public:
@@ -79,6 +80,8 @@ private:
     static void __cdecl PollInput();
     static std::int16_t __cdecl Input(unsigned port, unsigned device, unsigned index, unsigned id);
 
+    CoreAudio audio_;
+    std::vector<std::int16_t> sampleBuffer_;
     XINPUT_STATE inputState_{};
     bool inputConnected_ = false;
     HMODULE module_ = nullptr;

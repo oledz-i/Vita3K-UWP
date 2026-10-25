@@ -32,6 +32,7 @@ void VitaLibretroHost::Shutdown() {
     UnloadGame();
     if (initialized_ && deinit_) deinit_();
     initialized_ = false;
+    audio_.Stop();
     init_ = nullptr;
     deinit_ = nullptr;
     loadGame_ = nullptr;
@@ -117,6 +118,10 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
     }
     unsupportedVideo_ = false;
     if (!init_) return false;
+    if (!audio_.Start()) {
+        detail = L"Could not initialize Xbox audio output.";
+        return false;
+    }
     init_();
     initialized_ = true;
     detail = L"Vita3K core initialized (" + coreVersion_ +
@@ -135,6 +140,7 @@ std::wstring VitaLibretroHost::RecentLog() const {
 void VitaLibretroHost::UnloadGame() {
     if (gameLoaded_ && unloadGame_) unloadGame_();
     gameLoaded_ = false;
+    sampleBuffer_.clear();
     framesExecuted_ = 0;
 }
 bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wstring& detail) {
@@ -240,9 +246,19 @@ void __cdecl VitaLibretroHost::Video(
     // Hardware video frames require Vulkan and cannot be consumed by our
     // D3D12 BGRA test surface without a real Vulkan/D3D12 interop layer.
 }
-void __cdecl VitaLibretroHost::Audio(std::int16_t, std::int16_t) {}
+void __cdecl VitaLibretroHost::Audio(std::int16_t left, std::int16_t right) {
+    if (!active_) return;
+    auto& buffer = active_->sampleBuffer_;
+    buffer.push_back(left); buffer.push_back(right);
+    if (buffer.size() >= 1024) {
+        active_->audio_.Push(buffer.data(), buffer.size() / 2);
+        buffer.clear();
+    }
+}
 std::size_t __cdecl VitaLibretroHost::AudioBatch(
-    const std::int16_t*, std::size_t frames) { return frames; }
+    const std::int16_t* samples, std::size_t frames) {
+    return active_ ? active_->audio_.Push(samples, frames) : 0;
+}
 void __cdecl VitaLibretroHost::PollInput() {
     if (!active_) return;
     // Take one coherent controller snapshot for the emulated frame.
