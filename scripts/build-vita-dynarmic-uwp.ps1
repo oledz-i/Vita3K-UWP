@@ -18,6 +18,18 @@ if ($actual -ne '86458a0bd369d63ba4c2ef812cacbb6c9080c065') {
     throw "Unexpected Vita3K Dynarmic source revision: $actual"
 }
 & "$root/scripts/apply-onyx-dynarmic.ps1" -DynarmicSource $source
+# Compile the real Dynarmic execution smoke as a Store DLL, not an EXE.
+# The host app can load this signed package component and call it on Series S.
+$probeSource = (Join-Path $root 'tests/VitaGuestCpuProbe.cpp').Replace('\','/')
+if (!(Test-Path $probeSource)) { throw 'Guest CPU execution probe source missing' }
+$probeCMake = @"
+add_library(vita_guest_cpu_probe SHARED "$probeSource")
+target_compile_features(vita_guest_cpu_probe PRIVATE cxx_std_20)
+target_link_libraries(vita_guest_cpu_probe PRIVATE dynarmic)
+set_target_properties(vita_guest_cpu_probe PROPERTIES PREFIX "" OUTPUT_NAME "vita_guest_cpu_probe")
+"@
+Add-Content (Join-Path $source 'CMakeLists.txt') $probeCMake
+
 $base = Join-Path $root 'build/dynarmic-x64-uwp'
 $boost = (Join-Path $upstream 'external/boost').Replace('\','/')
 $cmakeArgs = @(
@@ -54,4 +66,18 @@ $libs = @(Get-ChildItem $base -Filter 'dynarmic.lib' -Recurse -File)
 if (!$libs) { throw 'Target returned success but no genuine Dynarmic static library was created' }
 Copy-Item $libs[0].FullName (Join-Path $out 'dynarmic.lib')
 "Compiled actual Vita3K ARM guest CPU source as a WindowsStore x64 library: $($libs[0].FullName)" |
+  Add-Content (Join-Path $out 'assessment.txt')
+# This DLL executes three *ARM* instructions through Dynarmic, traps SVC and
+# returns R0=12. Compilation alone does not mean Xbox JIT was exercised.
+& cmake --build $base --config Release --target vita_guest_cpu_probe --parallel 2 2>&1 |
+  Out-File (Join-Path $out 'cpu-probe-build.log')
+if ($LASTEXITCODE -ne 0) {
+  Get-Content (Join-Path $out 'cpu-probe-build.log') -Tail 85 |
+    Tee-Object -FilePath (Join-Path $out 'cpu-probe-build-tail.txt')
+  throw 'UWP guest ARM execution probe DLL failed to compile/link'
+}
+$dll = @(Get-ChildItem $base -Filter 'vita_guest_cpu_probe.dll' -Recurse -File)
+if (!$dll) { throw 'Dynarmic DLL target returned success but no native guest CPU test DLL was created' }
+Copy-Item $dll[0].FullName (Join-Path $out 'vita_guest_cpu_probe.dll')
+"Packaged test component built: $($dll[0].FullName). MUST still run on Xbox hardware." |
   Add-Content (Join-Path $out 'assessment.txt')
