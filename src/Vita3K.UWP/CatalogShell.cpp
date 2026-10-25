@@ -203,8 +203,8 @@ CatalogShell::CatalogShell() {
              savedTrack->Equals(L"3") ? 3 : savedTrack->Equals(L"4") ? 4 :
              savedTrack->Equals(L"5") ? 5 : 1;
     try {
-        musicVolume_ = std::stod(Pref(L"music.volume", L"0.22")->Data());
-    } catch (...) { musicVolume_ = 0.22; }
+        musicVolume_ = std::stod(Pref(L"music.volume", L"0.45")->Data());
+    } catch (...) { musicVolume_ = 0.45; }
     musicVolume_ = std::max(0.0, std::min(1.0, musicVolume_));
     uiSounds_ = !Pref(L"ui.sounds", L"1")->Equals(L"0");
     try { uiSoundVolume_ = std::stod(Pref(L"ui.sound.volume", L"0.40")->Data()); }
@@ -257,23 +257,57 @@ CatalogShell::CatalogShell() {
     musicPlayer_->AutoPlay = false;
     musicPlayer_->IsLooping = true;
     musicPlayer_->Volume = musicVolume_;
-    musicPlayer_->Width = 0;
-    musicPlayer_->Height = 0;
+    // Xbox Media Foundation is more reliable with a loaded media element.
+    // A 1x1, nearly transparent element keeps the audio pipeline initialized.
+    musicPlayer_->Width = 1;
+    musicPlayer_->Height = 1;
+    musicPlayer_->Opacity = 0.01;
     musicPlayer_->IsHitTestVisible = false;
     Grid::SetRow(musicPlayer_, 1);
     Grid::SetColumn(musicPlayer_, 1);
     root_->Children->Append(musicPlayer_);
+    musicPlayer_->MediaOpened += ref new RoutedEventHandler(
+        [this](Platform::Object^, RoutedEventArgs^) {
+            if (track_ == 0) return;
+            musicPlayer_->Volume = musicVolume_;
+            musicPlayer_->Play();
+            playbackStatus_ = L"Track opened. Starting playback...";
+            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+        });
+    musicPlayer_->CurrentStateChanged += ref new RoutedEventHandler(
+        [this](Platform::Object^, RoutedEventArgs^) {
+            if (musicPlayer_->CurrentState == MediaElementState::Playing) {
+                playbackStatus_ = L"Playing";
+                if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+            }
+        });
+    musicPlayer_->MediaFailed += ref new ExceptionRoutedEventHandler(
+        [this](Platform::Object^, ExceptionRoutedEventArgs^ e) {
+            playbackStatus_ = L"Audio playback failed: " + e->ErrorMessage;
+            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+            SetStatus(playbackStatus_);
+        });
     for (unsigned cue = 0; cue < 4; ++cue) {
         cuePlayers_[cue] = ref new MediaElement();
         cuePlayers_[cue]->AutoPlay = false;
         cuePlayers_[cue]->IsLooping = false;
         cuePlayers_[cue]->Volume = uiSoundVolume_;
-        cuePlayers_[cue]->Width = 0;
-        cuePlayers_[cue]->Height = 0;
+        cuePlayers_[cue]->Width = 1;
+        cuePlayers_[cue]->Height = 1;
+        cuePlayers_[cue]->Opacity = 0.01;
         cuePlayers_[cue]->IsHitTestVisible = false;
         Grid::SetRow(cuePlayers_[cue], 1);
         Grid::SetColumn(cuePlayers_[cue], 1);
         root_->Children->Append(cuePlayers_[cue]);
+        const unsigned cueIndex = cue;
+        cuePlayers_[cue]->MediaOpened += ref new RoutedEventHandler(
+            [this,cueIndex](Platform::Object^, RoutedEventArgs^) {
+                cueReady_[cueIndex] = true;
+            });
+        cuePlayers_[cue]->MediaFailed += ref new ExceptionRoutedEventHandler(
+            [this,cueIndex](Platform::Object^, ExceptionRoutedEventArgs^) {
+                cueReady_[cueIndex] = false;
+            });
     }
 
     Content = root_;
@@ -1155,51 +1189,82 @@ void CatalogShell::SetMusic(int track) {
     track_ = track;
     PutPref(L"music.track", StringOf(std::to_wstring(track)));
     musicPlayer_->Stop();
+    musicPlayer_->Source = nullptr;
+    customMusicStream_ = nullptr;
     if (track > 0 && track < 5) PlayBundledMusic(track);
-    if (track == 5) PlayCustomMusic();
+    else if (track == 5) PlayCustomMusic();
+    else playbackStatus_ = L"Music off";
     Render();
-    SetStatus(track == 0 ? L"Menu music turned off." : L"Menu soundtrack saved.");
+    if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
 }
 void CatalogShell::PlayBundledMusic(int track) {
+    if (track < 1 || track > 4) return;
+    playbackStatus_ = L"Preparing original soundtrack...";
+    if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+    // Use a *real file* under LocalFolder, not a temporary RAM stream.
+    // Xbox's Media Foundation decoder can then seek and loop reliably.
     auto bytes = vita3k_uwp::GenerateMenuWav(static_cast<unsigned>(track - 1));
-    auto data = ref new Platform::Array<unsigned char>(static_cast<unsigned>(bytes.size()));
+    auto data = ref new Platform::Array<unsigned char>(
+        static_cast<unsigned>(bytes.size()));
     std::memcpy(data->Data, bytes.data(), bytes.size());
-    auto stream = ref new InMemoryRandomAccessStream();
-    auto writer = ref new DataWriter(stream->GetOutputStreamAt(0));
-    writer->WriteBytes(data);
-    create_task(writer->StoreAsync()).then(
-        [this,writer,stream,track](task<unsigned int> work) {
-            try {
-                work.get();
-                if (track_ != track) return;
-                stream->Seek(0);
-                musicPlayer_->SetSource(stream, L"audio/wav");
-                musicPlayer_->Volume = musicVolume_;
-                musicPlayer_->Play();
-            } catch (Platform::Exception^ e) {
-                SetStatus(L"Menu audio error: " + e->Message);
-            }
-        }, task_continuation_context::use_current());
+    create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
+        L"MenuAudio", CreationCollisionOption::OpenIfExists))
+    .then([this,track,data](StorageFolder^ folder) {
+        const auto filename = L"ambient" + StringOf(std::to_wstring(track)) + L".wav";
+        return create_task(folder->CreateFileAsync(
+            filename, CreationCollisionOption::ReplaceExisting))
+        .then([fileData = data](StorageFile^ file) {
+            return create_task(FileIO::WriteBytesAsync(file, fileData))
+                .then([file]() { return file; });
+        });
+    }).then([this,track](task<StorageFile^> work) {
+        try {
+            auto file = work.get();
+            if (track_ != track) return;  // Music changed during file write.
+            musicPlayer_->IsLooping = true;
+            musicPlayer_->Source = ref new Uri(
+                L"ms-appdata:///local/MenuAudio/" + file->Name);
+            playbackStatus_ = L"Loading " + file->Name + L"...";
+            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+            musicPlayer_->Play(); // MediaOpened also triggers Play once ready.
+        } catch (Platform::Exception^ error) {
+            playbackStatus_ = L"Couldn't prepare soundtrack: " + error->Message;
+            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+            SetStatus(playbackStatus_);
+        } catch (...) {
+            playbackStatus_ = L"Couldn't create the local soundtrack file.";
+            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+        }
+    }, task_continuation_context::use_current());
 }
 void CatalogShell::PlayCustomMusic() {
-    auto future = StorageApplicationPermissions::FutureAccessList;
-    if (!future->ContainsItem(L"menu-track")) {
-        SetStatus(L"Select a custom audio file under Settings first.");
+    auto access = StorageApplicationPermissions::FutureAccessList;
+    if (!access->ContainsItem(L"menu-track")) {
+        playbackStatus_ = L"Choose a custom MP3, WAV or M4A file first.";
+        if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
         return;
     }
-    create_task(future->GetFileAsync(L"menu-track")).then(
-        [this](StorageFile^ file) {
-            return create_task(file->OpenAsync(FileAccessMode::Read)).then(
-                [this,file](IRandomAccessStream^ stream) {
-                    if (track_ != 5) return;
-                    musicPlayer_->SetSource(stream, file->ContentType);
-                    musicPlayer_->Play();
-                    SetStatus(L"Playing custom menu audio: " + file->Name);
-                });
-        }).then([this](task<void> work) {
-            try { work.get(); }
-            catch (Platform::Exception^ e) { SetStatus(L"Custom audio failed: " + e->Message); }
-        }, task_continuation_context::use_current());
+    playbackStatus_ = L"Opening custom soundtrack...";
+    create_task(access->GetFileAsync(L"menu-track"))
+    .then([this](StorageFile^ file) {
+        return create_task(file->OpenAsync(FileAccessMode::Read)).then(
+            [this,file](IRandomAccessStream^ stream) {
+                if (track_ != 5) return;
+                // Retain source for the entire playback lifetime.
+                customMusicStream_ = stream;
+                musicPlayer_->IsLooping = true;
+                musicPlayer_->SetSource(customMusicStream_, file->ContentType);
+                musicPlayer_->Play();
+                playbackStatus_ = L"Opening " + file->Name + L"...";
+                if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+            });
+    }).then([this](task<void> work) {
+        try { work.get(); }
+        catch (Platform::Exception^ error) {
+            playbackStatus_ = L"Couldn't open custom music: " + error->Message;
+            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
+        }
+    }, task_continuation_context::use_current());
 }
 void CatalogShell::PickCustomMusic() {
     auto picker = ref new FileOpenPicker();
@@ -1850,25 +1915,38 @@ void CatalogShell::PlayCue(unsigned kind) {
     cuePlayers_[kind]->Play();
 }
 void CatalogShell::PrepareCues() {
-    for (unsigned kind = 0; kind < 4; ++kind) {
-        auto bytes = vita3k_uwp::GenerateInterfaceCue(kind);
-        auto buffer = ref new Platform::Array<unsigned char>(static_cast<unsigned>(bytes.size()));
-        std::memcpy(buffer->Data, bytes.data(), bytes.size());
-        cueStreams_[kind] = ref new InMemoryRandomAccessStream();
-        auto stream = cueStreams_[kind];
-        auto writer = ref new DataWriter(stream->GetOutputStreamAt(0));
-        writer->WriteBytes(buffer);
-        create_task(writer->StoreAsync()).then([this, writer, stream, kind](task<unsigned int> operation) {
-            try {
-                operation.get();
-                stream->Seek(0);
-                cuePlayers_[kind]->SetSource(stream, L"audio/wav");
-                cuePlayers_[kind]->Volume = uiSoundVolume_;
-                cueReady_[kind] = true;
-            } catch (Platform::Exception^) {
-                cueReady_[kind] = false;
+    // Small UI sounds also use durable file-backed sources. MediaOpened is
+    // the readiness gate; a generated byte buffer alone is not proof of audio.
+    create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
+        L"MenuAudio", CreationCollisionOption::OpenIfExists))
+    .then([this](task<StorageFolder^> result) {
+        try {
+            auto folder = result.get();
+            for (unsigned i = 0; i < 4; ++i) {
+                auto bytes = vita3k_uwp::GenerateInterfaceCue(i);
+                auto buffer = ref new Platform::Array<unsigned char>(
+                    static_cast<unsigned>(bytes.size()));
+                std::memcpy(buffer->Data, bytes.data(), bytes.size());
+                const auto name = L"ui" + StringOf(std::to_wstring(i)) + L".wav";
+                create_task(folder->CreateFileAsync(
+                    name, CreationCollisionOption::ReplaceExisting))
+                .then([buffer](StorageFile^ file) {
+                    return create_task(FileIO::WriteBytesAsync(file, buffer))
+                        .then([file]() { return file; });
+                }).then([this,i](task<StorageFile^> completed) {
+                    try {
+                        const auto file = completed.get();
+                        cueReady_[i] = false;
+                        cuePlayers_[i]->Source = ref new Uri(
+                            L"ms-appdata:///local/MenuAudio/" + file->Name);
+                    } catch (Platform::Exception^) {
+                        cueReady_[i] = false;
+                    }
+                }, task_continuation_context::use_current());
             }
-        }, task_continuation_context::use_current());
-    }
+        } catch (Platform::Exception^ error) {
+            SetStatus(L"Could not prepare UI audio: " + error->Message);
+        }
+    }, task_continuation_context::use_current());
 }
 } // namespace Vita3KUWP
