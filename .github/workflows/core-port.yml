@@ -2,7 +2,7 @@ name: Real Vita3K libretro core UWP port attempt
 on:
   workflow_dispatch:
   push:
-    branches: [core-integration, astra-undertale]
+    branches: [core-integration]
     paths:
       - .github/workflows/core-port.yml
       - core-candidates.lock.json

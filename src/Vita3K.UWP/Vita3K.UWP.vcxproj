@@ -131,5 +131,10 @@
   </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
   <ItemGroup><Image Include="Assets\*.png" /></ItemGroup>
+  <ItemGroup>
+    <Content Include="*.dll" Exclude="vulkan_dzn.dll;dxil.dll;vita3k_libretro.dll;vita_guest_cpu_probe.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
