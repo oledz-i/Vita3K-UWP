@@ -1,0 +1,133 @@
+name: OnyxEMU Mesa Dozen for Vita3K UWP
+on:
+  push:
+    branches: [onyx-dozen-integration]
+  workflow_dispatch:
+  pull_request:
+    branches: [core-integration]
+permissions:
+  contents: read
+concurrency:
+  group: onyx-dozen-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  source-host-smoke:
+    name: Compile Xbox Onyx ICD bridge without GPU DLL
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Compile genuine Dozen ICD startup code into Vita3K UWP
+        shell: pwsh
+        run: |
+          python scripts/validate.py
+          if ($LASTEXITCODE -ne 0) { throw 'Repository validator failed' }
+          ./scripts/build-appx.ps1 -BuildNumber ${{ github.run_number }}
+      - name: Upload diagnostic package for desktop/Xbox DLL-missing path
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-ONYX-ICD-host-smoke-${{ github.run_number }}
+          path: artifacts/package/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve native compilation diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-ONYX-ICD-compile-logs-${{ github.run_number }}
+          path: artifacts/logs/
+          if-no-files-found: warn
+          retention-days: 7
+  patched-dozen:
+    name: Compile actual Onyx-patched Mesa Dozen UWP Vulkan ICD
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install the original Onyx Meson/Flex build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check meson ninja mako pyyaml packaging
+          if ($LASTEXITCODE -ne 0) { throw 'Python Meson dependency setup failed' }
+          choco install winflexbison3 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'winflexbison3 setup failed' }
+      - name: Cache pinned Onyx Mesa sources and UWP native build
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            build/onyx-dozen-source/deps/mesa/
+            build/onyx-dozen-source/deps/build/mesa/
+            build/onyx-dozen-source/deps/bin/
+          key: onyx-dzn-uwp-${{ hashFiles('core-candidates.lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            onyx-dzn-uwp-${{ hashFiles('core-candidates.lock.json') }}-
+      - name: Build pinned Onyx Mesa Dozen with original UWP patches
+        shell: pwsh
+        run: ./scripts/build-onyx-dozen.ps1
+      - name: Upload exact Dozen / DXIL DLLs and diagnostic build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: onyx-mesa-dozen-uwp
+          path: artifacts/onyx-dozen/
+          if-no-files-found: warn
+          retention-days: 14
+  vita3k-onyx-dozen-appx:
+    name: Build signed Vita3K UWP APPX with actual Onyx Dozen driver
+    needs: [patched-dozen]
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: onyx-mesa-dozen-uwp
+          path: artifacts/onyx-dozen/
+      - name: Stage signed-package GPU driver and DXIL dependency
+        shell: pwsh
+        run: |
+          foreach ($dll in @('vulkan_dzn.dll','dxil.dll')) {
+            $source = Join-Path 'artifacts/onyx-dozen' $dll
+            if (!(Test-Path $source)) { throw "Missing $dll from original Onyx Dozen build" }
+            Copy-Item $source (Join-Path 'src/Vita3K.UWP' $dll) -Force
+          }
+          python scripts/validate.py
+      - name: Compile and sign Vita3K UWP with the real bundled Dozen ICD
+        shell: pwsh
+        run: ./scripts/build-appx.ps1 -BuildNumber ${{ github.run_number }}
+      - name: Verify both compiled Mesa binaries are inside APPX
+        shell: pwsh
+        run: |
+          $appx = @(Get-ChildItem artifacts/package -Recurse -Filter '*.appx' |
+              Where-Object { $_.FullName -notmatch 'Dependencies' } | Select-Object -First 1)
+          if ($appx.Count -ne 1) { throw 'No signed APPX to inspect' }
+          $zip = Join-Path $env:RUNNER_TEMP 'vita-dozen-appx.zip'
+          Copy-Item $appx[0].FullName $zip
+          Add-Type -AssemblyName System.IO.Compression
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $names = @($archive.Entries | ForEach-Object FullName)
+            foreach ($name in @('vulkan_dzn.dll','dxil.dll')) {
+              if (!($names | Where-Object { $_ -ieq $name -or $_ -ilike "*/$name" })) {
+                throw "$name not packaged in actual signed APPX"
+              }
+            }
+          } finally { $archive.Dispose() }
+          'Both Onyx-patched Mesa Dozen and DXIL are inside the signed Vita3K APPX.'
+      - name: Upload signed Xbox Vulkan / Dozen integration test package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-UWP-ONYX-Dozen-x64-${{ github.run_number }}
+          path: artifacts/package/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload Windows compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Vita3K-ONYX-Dozen-build-logs-${{ github.run_number }}
+          path: artifacts/logs/
+          if-no-files-found: warn

@@ -14,5 +14,18 @@
     "reference": "https://docs.mesa3d.org/",
     "status": "Vulkan-over-D3D12 driver confirmed on Windows; Xbox UWP not verified"
   },
-  "security": "No Sony firmware, game data, license files, private build keys, or downloaded executable DLLs vendored"
+  "security": "No Sony firmware, game data, license files, private build keys, or downloaded executable DLLs vendored",
+  "onyx_renderer_source": {
+    "repository": "https://github.com/oledz-i/OnyxEMU.git",
+    "commit": "78f2561a16fe7a65e59893f896611263f10575c5",
+    "mesa_patch_base": "a4a47003a194effad8cabe727f74985e9417476f",
+    "reused_components": [
+      "tools/fetch-deps.ps1 Mesa checkout and patches",
+      "tools/build-dozen.ps1 UWP Mesa compiler flags",
+      "VulkanHost.cpp ICD vk_icdGetInstanceProcAddr bootstrap"
+    ],
+    "license": "GPL-3.0-or-later (OnyxEMU), Mesa MIT",
+    "xbox_evidence": "OnyxEMU reports hardware Vulkan/Dozen gameplay; not equivalent to Vita3K compatibility",
+    "status": "source reuse targeted for UWP Dozen build; game boot unverified"
+  }
 }

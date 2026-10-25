@@ -37,6 +37,12 @@ Read the **[installation guide](docs/INSTALL.md)** before deploying. These packa
 
 The integration branch includes five visual themes, four original menu loops, four original UI interaction sounds with separate volume, and Xbox B/back navigation. The library recognizes **VPK, ZIP, PKG, VCI, eboot.bin, and extracted game folders**. It checks file headers without loading multi-gigabyte files, and lets users select their own PKG license file for later installation support. **These files cannot be installed or launched yet.** SteamGridDB support requires the user's own API key and exact-title match; **automatic correct art for every title cannot be promised**. See [frontend documentation](docs/UI.md). Upstream CPU/kernel, installation and GXM rendering remain incomplete.
 
+## Reusing OnyxEMU's Xbox Vulkan/Direct3D 12 renderer
+
+The `onyx-dozen-integration` branch now pins the original [OnyxEMU](https://github.com/oledz-i/OnyxEMU) sources and runs its **proven, Xbox-patched Mesa Dozen build** (including its Mesa patch series). It ports Onyx's direct Vulkan ICD loader to the Vita3K frontend and can probe a real Vulkan 1.1 device and graphics queue. A separate GitHub Actions build can produce a signed APPX with `vulkan_dzn.dll` and `dxil.dll` **only when the patched Mesa UWP build succeeds**.
+
+This reuses the Xbox **graphics host**, not the Azahar 3DS emulator. Vita3K must still compile for UWP, execute Vita ARM guest code, and connect its Vulkan/GXM renderer to libretro's graphics lifecycle before homebrew or commercial games can run. See [Onyx GPU integration](docs/ONYX_GPU_PORT.md) for the exact adapted files, test plan and GPLv3 attribution. No gameplay has yet been demonstrated.
+
 ## Real upstream Vita3K core port (in progress)
 
 The `core-integration` branch now pins an **existing full Vita3K libretro emulator core** from [WizzardSK/vita3k-libretro](https://github.com/WizzardSK/vita3k-libretro), derived from the Vita3K source tree. A separate Windows CI job attempts to compile this *actual* source for the Windows Store API family, including the CPU and existing Vulkan backend. The source build is **not** equivalent to game booting or an Xbox-compatible binary until the port passes all platform checks.

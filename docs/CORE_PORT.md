@@ -26,6 +26,12 @@ The Windows x64 `vita3k_libretro.dll` released for RetroArch is a **desktop bina
 
 In a development build that does **not** contain a native UWP Vita3K DLL, the new core-probe button is expected to say **not packaged**. This is a truthful blocked state, not a game boot.
 
+## Reusing the OnyxEMU UWP Vulkan renderer
+
+The experimental `onyx-dozen-integration` branch pins the owner's original [OnyxEMU](https://github.com/oledz-i/OnyxEMU) code and exact Mesa patch series, rather than trying only stock Mesa. Its Windows CI invokes Onyx's original `fetch-deps.ps1` and `build-dozen.ps1` to generate real UWP `vulkan_dzn.dll` and stage the required `dxil.dll`.
+
+The Vita frontend now follows Onyx's `DozenDriver` **direct ICD bootstrap**: load the packaged DLL, negotiate the ICD interface, get `vkCreateInstance`, enumerate physical devices and attempt a Vulkan logical device and graphics queue. **This does not yet feed Vita3K's GXM frames into D3D12.** Detailed boundaries, verification steps and licensing are in [Onyx GPU port](ONYX_GPU_PORT.md).
+
 ## Why Mesa Dozen (dzn) is promising, but not yet the answer
 
 - **Mesa Dozen** implements **Vulkan over Direct3D 12**. The relevant Windows binary generally consists of Mesa `vulkan_dzn.dll` (an ICD), an appropriate Vulkan loader and support DLLs.
