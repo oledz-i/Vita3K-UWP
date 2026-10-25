@@ -79,7 +79,7 @@ $cmdArgs = @(
   "-DVITA3K_FORCE_SYSTEM_BOOST=ON"
 )
 $log = Join-Path $out 'configure.log'
-& cmake @cmdArgs 2>&1 | Out-File -FilePath $log
+& cmake @cmdArgs 2>&1 | Tee-Object -FilePath $log
 $configurationExit = $LASTEXITCODE
 "Configure exit: $configurationExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $log -Tail 90 | Out-File -FilePath (Join-Path $out 'configure-tail.txt')
@@ -89,7 +89,7 @@ if ($configurationExit -ne 0) {
 
 "Starting genuine Vita3K libretro UWP compilation..." | Add-Content -Path (Join-Path $out 'assessment.txt')
 $buildLog = Join-Path $out 'build.log'
-& cmake --build "$root/build/core-uwp-probe" --config Release --target vita3k_libretro --parallel 2 2>&1 | Out-File $buildLog
+& cmake --build "$root/build/core-uwp-probe" --config Release --target vita3k_libretro --parallel 2 2>&1 | Tee-Object -FilePath $buildLog
 $buildExit = $LASTEXITCODE
 "Build exit: $buildExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $buildLog -Tail 90 | Out-File (Join-Path $out 'build-tail.txt')

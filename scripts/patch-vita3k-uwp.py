@@ -111,3 +111,34 @@ parent = source / 'vita3k/modules/module_parent.cpp'
 text = parent.read_text().replace('#include <boost/filesystem/operations.hpp>', '#include <util/fs.h>')
 parent.write_text(text)
 print('Adapted nested Boost discovery, filesystem error codes and trophy timestamp handling.')
+
+# The libretro backend delivers guest audio to the frontend. Do not build
+# the desktop Cubeb fallback or include its desktop-only headers for Xbox.
+audio_cmake = source / 'vita3k/audio/CMakeLists.txt'
+text = audio_cmake.read_text()
+first, rest = text.split('else()', 1)
+assert 'src/impl/cubeb_audio.cpp' in first and 'util cubeb kernel' in first
+first = first.replace('        src/impl/cubeb_audio.cpp\n', '').replace('util cubeb kernel', 'util kernel')
+audio_cmake.write_text(first + 'else()' + rest)
+audio_source = source / 'vita3k/audio/src/audio.cpp'
+text = audio_source.read_text()
+text = text.replace('#include <audio/impl/cubeb_audio.h>', '#ifndef VITA3K_UWP\n#include <audio/impl/cubeb_audio.h>\n#endif')
+start = text.index('#ifdef BUILD_LIBRETRO', text.index('void AudioState::set_backend'))
+end = text.index('#else', start)
+block = text[start:end]
+old = '    } else if (adapter_name == "Cubeb") {\n        adapter = std::make_unique<CubebAudioAdapter>(*this);'
+assert old in block
+block = block.replace(old, '')
+text = text[:start] + block + text[end:]
+audio_source.write_text(text)
+external = source / 'external/CMakeLists.txt'
+text = external.read_text()
+old = 'add_subdirectory(cubeb EXCLUDE_FROM_ALL)'
+assert old in text
+external.write_text(text.replace(old, 'if(NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")\n  '+old+'\nendif()'))
+print('Routed Xbox guest audio exclusively through the libretro frontend backend.')
+text = external.read_text()
+start = text.index('if (ARCHITECTURE STREQUAL "arm64")', text.index('add_subdirectory(cubeb'))
+end = text.index('\nif(ANDROID)', start)
+text = text[:start] + 'if(TARGET speex)\n' + text[start:end] + '\nendif()\n' + text[end:]
+external.write_text(text)

@@ -27,5 +27,10 @@
     "license": "GPL-3.0-or-later (OnyxEMU), Mesa MIT",
     "xbox_evidence": "OnyxEMU reports hardware Vulkan/Dozen gameplay; not equivalent to Vita3K compatibility",
     "status": "source reuse targeted for UWP Dozen build; game boot unverified"
+  },
+  "sdl_uwp": {
+    "repository": "https://github.com/SternXD/SDL3-uwp.git",
+    "commit": "b3852a0076c358f65ee19765e85ef9eded6e50df",
+    "purpose": "UWP platform implementation for SDL3; runtime integration unverified"
   }
 }
