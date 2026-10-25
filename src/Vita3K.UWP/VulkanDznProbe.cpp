@@ -52,6 +52,33 @@ struct VkQueueFamilyProperties {
     VkExtent3D minImageTransferGranularity;
 };
 
+using VkDevice = void*;
+using VkQueue = void*;
+struct VkDeviceQueueCreateInfo {
+    std::uint32_t sType;
+    const void* pNext;
+    std::uint32_t flags;
+    std::uint32_t queueFamilyIndex;
+    std::uint32_t queueCount;
+    const float* pQueuePriorities;
+};
+struct VkDeviceCreateInfo {
+    std::uint32_t sType;
+    const void* pNext;
+    std::uint32_t flags;
+    std::uint32_t queueCreateInfoCount;
+    const VkDeviceQueueCreateInfo* pQueueCreateInfos;
+    std::uint32_t enabledLayerCount;
+    const char* const* ppEnabledLayerNames;
+    std::uint32_t enabledExtensionCount;
+    const char* const* ppEnabledExtensionNames;
+    const void* pEnabledFeatures;
+};
+using CreateDevice = VkResult (__stdcall*)(VkPhysicalDevice, const VkDeviceCreateInfo*, const void*, VkDevice*);
+using GetDeviceProc = void* (__stdcall*)(VkDevice, const char*);
+using DestroyDevice = void (__stdcall*)(VkDevice, const void*);
+using GetDeviceQueue = void (__stdcall*)(VkDevice, std::uint32_t, std::uint32_t, VkQueue*);
+using DeviceWaitIdle = VkResult (__stdcall*)(VkDevice);
 using GetProc = void* (__stdcall*)(VkInstance, const char*);
 using NegotiateIcd = VkResult (__stdcall*)(std::uint32_t*);
 using CreateInstance = VkResult (__stdcall*)(const VkInstanceCreateInfo*, const void*, VkInstance*);
@@ -119,6 +146,10 @@ std::wstring VerifyVulkanInterface(HMODULE library, GetProc getProc,
         getProc(instance, "vkEnumerateDeviceExtensionProperties"));
     const auto queues = reinterpret_cast<GetQueueFamilies>(
         getProc(instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+    const auto createDevice = reinterpret_cast<CreateDevice>(
+        getProc(instance, "vkCreateDevice"));
+    const auto deviceProc = reinterpret_cast<GetDeviceProc>(
+        getProc(instance, "vkGetDeviceProcAddr"));
     if (extensions && queues) {
         for (std::uint32_t i = 0; i < count; ++i) {
             std::uint32_t familyCount = 0;
@@ -153,11 +184,55 @@ std::wstring VerifyVulkanInterface(HMODULE library, GetProc getProc,
                 (hasExtension("VK_KHR_external_memory_win32") ? std::wstring(L"yes") : std::wstring(L"no"));
             message += L" external_semaphore_win32=" +
                 (hasExtension("VK_KHR_external_semaphore_win32") ? std::wstring(L"yes") : std::wstring(L"no"));
+            // Onyx establishes a real Vulkan queue before presenting its
+            // 3DS frames. Verify the same native Dozen device gate for Vita:
+            // a detectable ICD that cannot create VkDevice cannot draw games.
+            if (i == 0 && graphics && createDevice && deviceProc) {
+                std::uint32_t graphicsFamily = 0;
+                for (std::uint32_t family = 0; family < familyCount; ++family) {
+                    if (families[family].queueCount &&
+                        (families[family].queueFlags & 1u)) {
+                        graphicsFamily = family;
+                        break;
+                    }
+                }
+                const float priority = 1.0f;
+                VkDeviceQueueCreateInfo queueInfo{};
+                queueInfo.sType = 2; // VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO
+                queueInfo.queueFamilyIndex = graphicsFamily;
+                queueInfo.queueCount = 1;
+                queueInfo.pQueuePriorities = &priority;
+                VkDeviceCreateInfo deviceInfo{};
+                deviceInfo.sType = 3; // VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO
+                deviceInfo.queueCreateInfoCount = 1;
+                deviceInfo.pQueueCreateInfos = &queueInfo;
+                VkDevice device = nullptr;
+                const VkResult creation = createDevice(
+                    devices[i], &deviceInfo, nullptr, &device);
+                if (creation == kVkSuccess && device) {
+                    const auto getQueue = reinterpret_cast<GetDeviceQueue>(
+                        deviceProc(device, "vkGetDeviceQueue"));
+                    const auto idle = reinterpret_cast<DeviceWaitIdle>(
+                        deviceProc(device, "vkDeviceWaitIdle"));
+                    const auto destroyDevice = reinterpret_cast<DestroyDevice>(
+                        deviceProc(device, "vkDestroyDevice"));
+                    VkQueue realQueue = nullptr;
+                    if (getQueue) getQueue(device, graphicsFamily, 0, &realQueue);
+                    const VkResult idleResult = idle ? idle(device) : -1;
+                    message += L" VkDevice=" + std::wstring(L"created");
+                    message += L" graphics_queue=" +
+                        std::wstring(realQueue ? L"valid" : L"unavailable");
+                    message += L" wait_idle=" + std::to_wstring(idleResult);
+                    if (destroyDevice) destroyDevice(device, nullptr);
+                } else {
+                    message += L" vkCreateDevice_failed=" + std::to_wstring(creation);
+                }
+            }
         }
     }
     destroy(instance, nullptr);
     (void)library;
-    return message + L". Vulkan device detection is NOT Vita3K GXM rendering or gameplay.";
+    return message + L". Real Vulkan device/queue probe only; not Vita3K GXM rendering or gameplay.";
 }
 } // namespace
 
