@@ -85,6 +85,7 @@ private:
     static void __cdecl PollInput();
     static std::int16_t __cdecl Input(unsigned port, unsigned device, unsigned index, unsigned id);
 
+    std::recursive_mutex lifecycleMutex_;
     std::atomic<bool> running_{false};
     std::thread runThread_;
     CoreAudio audio_;

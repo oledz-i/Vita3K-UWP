@@ -30,6 +30,7 @@ VitaLibretroHost::~VitaLibretroHost() {
 }
 
 void VitaLibretroHost::Shutdown() {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     UnloadGame();
     if (initialized_ && deinit_) deinit_();
     initialized_ = false;
@@ -48,6 +49,7 @@ void VitaLibretroHost::Shutdown() {
 }
 
 bool VitaLibretroHost::Probe(std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     if (module_) {
         detail = L"A packaged Vita3K libretro core is loaded: " + coreVersion_;
         return true;
@@ -111,6 +113,7 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
 }
 
 bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     systemDir_ = systemFolder;
     if (!Probe(detail)) return false;
     if (initialized_) {
@@ -138,6 +141,7 @@ std::wstring VitaLibretroHost::RecentLog() const {
     return FromUtf8(latestCoreLogs_.c_str());
 }
 void VitaLibretroHost::UnloadGame() {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     StopRunning();
     if (gameLoaded_ && unloadGame_) unloadGame_();
     gameLoaded_ = false;
@@ -145,6 +149,7 @@ void VitaLibretroHost::UnloadGame() {
     framesExecuted_ = 0;
 }
 bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     if (!initialized_ || !loadGame_) {
         detail = L"Vita3K must initialize before loading a game.";
         return false;
@@ -179,6 +184,7 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     return true;
 }
 bool VitaLibretroHost::RunFrame(std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     if (running_.load()) { detail = L"Core is already advancing on its execution thread."; return false; }
     if (!gameLoaded_ || !runFrame_) {
         detail = L"No Vita game is loaded.";
@@ -193,10 +199,12 @@ bool VitaLibretroHost::RunFrame(std::wstring& detail) {
     return true;
 }
 void VitaLibretroHost::StopRunning() {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     running_.store(false);
     if (runThread_.joinable()) runThread_.join();
 }
 bool VitaLibretroHost::StartRunning(std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     if (running_.load()) { detail = L"Vita3K session is already running."; return true; }
     StopRunning();
     if (!gameLoaded_ || !runFrame_ || unsupportedVideo_) {
