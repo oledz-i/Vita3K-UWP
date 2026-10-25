@@ -37,6 +37,12 @@ foreach ($path in $sourceList) {
   "$path => $present" | Add-Content -Path (Join-Path $out 'assessment.txt')
 }
 
+# Adapt only this pinned checkout: Boost.Filesystem calls desktop-only Win32
+# APIs even with vcpkg --allow-unsupported, and cannot be linked in UWP.
+& python "$root/scripts/patch-vita3k-uwp.py" "$upstream" 2>&1 |
+    Tee-Object -FilePath (Join-Path $out 'port-patch.log')
+if ($LASTEXITCODE -ne 0) { throw 'Pinned source UWP filesystem adapter failed' }
+
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
 "Starting Windows Store CMake configure..." | Add-Content -Path (Join-Path $out 'assessment.txt')
@@ -55,7 +61,10 @@ $cmdArgs = @(
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
   "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
   "-DUSE_LTO=NEVER",
-  "-DVITA3K_FORCE_SYSTEM_BOOST=ON"
+  "-DVITA3K_FORCE_SYSTEM_BOOST=ON",
+  "-DBoost_INCLUDE_DIR:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
+  "-DBOOST_ROOT:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
+  "-DBoost_NO_BOOST_CMAKE=ON"
 )
 $log = Join-Path $out 'configure.log'
 & cmake @cmdArgs 2>&1 | Out-File -FilePath $log

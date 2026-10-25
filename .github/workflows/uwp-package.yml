@@ -1,9 +1,9 @@
 name: UWP development package
 on:
   push:
-    branches: [main, core-integration]
+    branches: [main, core-integration, uwp-filesystem-port]
   pull_request:
-    branches: [main]
+    branches: [main, core-integration]
   workflow_dispatch:
 permissions:
   contents: read
@@ -38,7 +38,7 @@ jobs:
           ./catalog_native_smoke
   full-core-uwp-probe:
     name: Attempt genuine Vita3K libretro source UWP port
-    if: github.ref == 'refs/heads/core-integration' || github.head_ref == 'core-integration'
+    if: github.ref == 'refs/heads/core-integration' || github.ref == 'refs/heads/uwp-filesystem-port' || github.head_ref == 'core-integration' || github.head_ref == 'uwp-filesystem-port'
     runs-on: windows-2022
     timeout-minutes: 60
     continue-on-error: true
