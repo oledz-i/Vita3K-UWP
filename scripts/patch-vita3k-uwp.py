@@ -174,3 +174,12 @@ else()
 endif()''')
 external.write_text(text)
 print('Codec dependencies use source-built UWP FFmpeg 6.1.1 instead of desktop binaries.')
+
+# OSVersion is host logging metadata. Do not probe desktop system DLLs from
+# an AppContainer merely to decorate a log line.
+environment = source / 'external/CppCommon/source/environment.cpp'
+text = environment.read_text()
+old = 'std::string Environment::OSVersion() {\n#if defined(__APPLE__)'
+assert old in text
+text = text.replace(old, 'std::string Environment::OSVersion() {\n#if defined(VITA3K_UWP)\n    return "Windows UWP";\n#elif defined(__APPLE__)', 1)
+environment.write_text(text)

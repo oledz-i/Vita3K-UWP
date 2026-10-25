@@ -76,6 +76,8 @@ $cmdArgs = @(
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
   "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
   "-DUSE_LTO=NEVER",
+  "-DDYNARMIC_ENABLE_NO_EXECUTE_SUPPORT=ON",
+  "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
   "-DVITA3K_FORCE_SYSTEM_BOOST=ON"
 )
 $log = Join-Path $out 'configure.log'
