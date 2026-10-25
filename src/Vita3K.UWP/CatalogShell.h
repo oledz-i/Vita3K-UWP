@@ -31,6 +31,9 @@ private:
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
     Windows::UI::Xaml::Controls::MediaElement^ musicPlayer_;
+    Windows::Storage::Streams::IRandomAccessStream^ customMusicStream_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ musicStatus_ = nullptr;
+    Platform::String^ playbackStatus_ = L"Not started";
     Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[4] = {};
     Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[4] = {};
     bool cueReady_[4] = {};
