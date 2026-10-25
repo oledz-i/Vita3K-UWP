@@ -183,3 +183,21 @@ replace('vita3k/renderer/src/vulkan/renderer.cpp',
 #endif
             add(name);
         }''')
+
+# Adapted from 125hz/Tsubomi 0.47.0 (7e53bac87f442e770a39b1d9b032133418337f6d),
+# vita3k/cpu/src/cpu.cpp, GPL-2.0-or-later. UWP executable-memory allocation
+# can fail too: preserve kernel thread creation's existing null-CPU error path.
+replace('vita3k/cpu/src/cpu.cpp', '#include <cpu/functions.h>',
+        '#include <cpu/functions.h>\n#include <exception>')
+replace('vita3k/cpu/src/cpu.cpp',
+        '    state->cpu = std::make_unique<DynarmicCPU>(state.get(), processor_id, cpu_opt);',
+'''#ifdef VITA3K_UWP
+    try {
+        state->cpu = std::make_unique<DynarmicCPU>(state.get(), processor_id, cpu_opt);
+    } catch (const std::exception &e) {
+        LOG_CRITICAL("Failed to create CPU core for thread {}: {}", thread_id, e.what());
+        return CPUStatePtr();
+    }
+#else
+    state->cpu = std::make_unique<DynarmicCPU>(state.get(), processor_id, cpu_opt);
+#endif''')
