@@ -97,6 +97,7 @@ private:
     void CheckGameFile(size_t index, unsigned revision);
     void CheckGameFolder(size_t index, unsigned revision);
     void InspectLaunch(size_t index);
+    void AttemptBoot(size_t index);
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
     void ChoosePreinstalledFirmware();
