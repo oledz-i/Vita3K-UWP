@@ -120,8 +120,7 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
     unsupportedVideo_ = false;
     if (!init_) return false;
     if (!audio_.Start()) {
-        detail = L"Could not initialize Xbox audio output.";
-        return false;
+        Log(2, "Xbox audio output is unavailable; continuing without audio.\n");
     }
     init_();
     initialized_ = true;

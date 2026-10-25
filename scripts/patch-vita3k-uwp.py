@@ -142,3 +142,12 @@ start = text.index('if (ARCHITECTURE STREQUAL "arm64")', text.index('add_subdire
 end = text.index('\nif(ANDROID)', start)
 text = text[:start] + 'if(TARGET speex)\n' + text[start:end] + '\nendif()\n' + text[end:]
 external.write_text(text)
+
+# Match the guest address-space allocations to the Xbox AppContainer APIs,
+# independently of Dynarmic's already-patched executable code-cache allocator.
+memory = source / 'vita3k/mem/src/mem.cpp'
+text = memory.read_text()
+assert '#include <Windows.h>' in text
+text = text.replace('#include <Windows.h>', '#include <Windows.h>\n#ifdef VITA3K_UWP\n#define VirtualAlloc VirtualAllocFromApp\n#define VirtualProtect VirtualProtectFromApp\n#endif', 1)
+memory.write_text(text)
+print('Guest address-space allocation/protection now uses the FromApp APIs on UWP.')
