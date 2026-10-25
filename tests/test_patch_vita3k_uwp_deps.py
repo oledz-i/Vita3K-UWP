@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory(prefix="vita3k-xbox-audio-") as directory:
             "        src/audio.cpp\n        src/impl/cubeb_audio.cpp\n"
             "        src/impl/libretro_audio.cpp)\n",
         "vita3k/audio/src/audio.cpp":
+            '#include <audio/impl/cubeb_audio.h>\n'
             '    } else if (adapter_name == "Cubeb") {\n'
             '        adapter = std::make_unique<CubebAudioAdapter>(*this);\n'
             '    } else {\n'
@@ -41,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="vita3k-xbox-audio-") as directory:
     assert 'VITA3K_LIBRETRO_CUBEB_SOURCE' in audio_cmake
     assert 'CMAKE_SYSTEM_NAME STREQUAL "WindowsStore"' in audio_cmake
     audio_code = (tmp / "vita3k/audio/src/audio.cpp").read_text()
-    assert '#ifndef VITA3K_UWP' in audio_code
+    assert '#ifndef VITA3K_UWP\n#include <audio/impl/cubeb_audio.h>\n#endif' in audio_code
     env = (tmp / "external/CppCommon/source/environment.cpp").read_text()
     assert 'return "Windows UWP";' in env
     print("Vita3K WindowsStore dependency patches: PASS (Cubeb, CppCommon, libretro)")
