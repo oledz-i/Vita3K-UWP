@@ -9,7 +9,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $dir = Join-Path $root 'artifacts/core-port'
 New-Item -ItemType Directory -Force $dir | Out-Null
 $summary = Join-Path $dir 'errors-summary.txt'
-$pattern = 'error C\d+|error LNK\d+|fatal error|CMake Error|Could NOT find|error: |FAILED|vcpkg.*(failed|error)|unresolved external'
+$pattern = 'error\s+(?:C|D|LNK|MSB)\d+|fatal error|CMake Error|Could NOT find|error: |FAILED|vcpkg.*(failed|error)|unresolved external'
 '' | Set-Content $summary
 foreach ($name in @('configure.log', 'build.log', 'steps.log')) {
   $p = Join-Path $dir $name

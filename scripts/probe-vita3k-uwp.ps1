@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Experimental *real* Vita3K core integration. Intentionally exercises the
 # Windows Store toolchain, not a fake shim or the normal desktop DLL target.
+# Change vs c7e088f: pins SDL3 projects to /std:c++17 between configure and build
+# (fixes cl D8016 '/ZW' vs '/std:c++latest') and builds with 4 workers.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
@@ -61,7 +63,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Pinned filesystem port failed' }
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
 "Starting Windows Store CMake configure..." | Add-Content -Path (Join-Path $out 'assessment.txt')
-$env:VCPKG_MAX_CONCURRENCY = "2"
+$env:VCPKG_MAX_CONCURRENCY = "4"
 $env:VCPKG_KEEP_ENV_VARS = "VCPKG_MAX_CONCURRENCY"
 $cmdArgs = @(
   "-S", "$upstream",
@@ -72,6 +74,8 @@ $cmdArgs = @(
   "-DCMAKE_SYSTEM_VERSION=10.0",
   "-DCMAKE_SYSTEM_PROCESSOR=AMD64",
   "-DBUILD_LIBRETRO=ON",
+  "-DUSE_DISCORD_RICH_PRESENCE=OFF",
+  "-DCMAKE_PROJECT_INCLUDE=$root/scripts/uwp-core-flags.cmake",
   "-DCMAKE_TOOLCHAIN_FILE=$vcpkg",
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
   "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
@@ -89,9 +93,13 @@ if ($configurationExit -ne 0) {
   throw "Actual Vita3K core failed to configure for UWP. See uploaded configure.log for the exact blocking dependencies."
 }
 
+# SDL3's UWP backend is C++/CX (/ZW), which MSVC rejects together with
+# /std:c++latest (cl D8016 seen in the CI build log). Pin SDL to C++17.
+& "$PSScriptRoot/fix-sdl-uwp-vcxproj.ps1" -BuildDir "$root/build/core-uwp-probe" 2>&1 | Tee-Object -FilePath (Join-Path $out 'sdl-cxx17-pin.log')
+
 "Starting genuine Vita3K libretro UWP compilation..." | Add-Content -Path (Join-Path $out 'assessment.txt')
 $buildLog = Join-Path $out 'build.log'
-& cmake --build "$root/build/core-uwp-probe" --config Release --target vita3k_libretro --parallel 2 2>&1 | Tee-Object -FilePath $buildLog
+& cmake --build "$root/build/core-uwp-probe" --config Release --target vita3k_libretro --parallel 4 2>&1 | Tee-Object -FilePath $buildLog
 $buildExit = $LASTEXITCODE
 "Build exit: $buildExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $buildLog -Tail 90 | Out-File (Join-Path $out 'build-tail.txt')

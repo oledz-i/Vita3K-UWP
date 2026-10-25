@@ -9,6 +9,8 @@ on:
       - scripts/summarize-core-errors.ps1
       - scripts/probe-vita3k-uwp.ps1
       - scripts/patch-vita3k-uwp.py
+      - scripts/fix-sdl-uwp-vcxproj.ps1
+      - scripts/uwp-core-flags.cmake
       - scripts/apply-onyx-dynarmic.ps1
       - core-candidates.lock.json
       - render-abi.lock.json
@@ -261,7 +263,7 @@ jobs:
             'Full core logs, dependency reports and packaging logs are included in subfolders.',
             'If an early step failed before logs were created, download the GitHub Actions job logs from this run.'
           ) | Set-Content $report
-          $pattern = 'error C\d+|error LNK\d+|fatal error|CMake Error|Could NOT find|error: |FAILED|Exception|unresolved external'
+          $pattern = 'error\s+(?:C|D|LNK|MSB)\d+|fatal error|CMake Error|Could NOT find|error: |FAILED|Exception:|unresolved external'
           Get-ChildItem build-output -Recurse -File | Where-Object { $_.Extension -in '.log','.txt' -and $_.Name -ne 'ERROR-LOG.txt' } | ForEach-Object {
             $matches = @(Select-String -Path $_.FullName -Pattern $pattern | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique)
             if ($matches.Count) {

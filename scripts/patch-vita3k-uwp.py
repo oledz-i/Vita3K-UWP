@@ -183,3 +183,64 @@ old = 'std::string Environment::OSVersion() {\n#if defined(__APPLE__)'
 assert old in text
 text = text.replace(old, 'std::string Environment::OSVersion() {\n#if defined(VITA3K_UWP)\n    return "Windows UWP";\n#elif defined(__APPLE__)', 1)
 environment.write_text(text)
+
+# Pin at the source level too, so a CMake regeneration cannot bring back
+# C++23 on SDL's C++/CX files. Keep Vita3K and the other dependencies unchanged.
+text = external.read_text()
+assert text.count('add_subdirectory(sdl)') == 1
+text = text.replace('add_subdirectory(sdl)', '''if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+  set(_vita3k_saved_cxx_standard ${CMAKE_CXX_STANDARD})
+  set(CMAKE_CXX_STANDARD 17)
+endif()
+add_subdirectory(sdl)
+if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+  set(CMAKE_CXX_STANDARD ${_vita3k_saved_cxx_standard})
+  unset(_vita3k_saved_cxx_standard)
+endif()''')
+external.write_text(text)
+print('Isolated SDL C++/CX targets at C++17 without downgrading the emulator core.')
+
+# std::filesystem has native()/wstring(), but no Boost generic_path() member.
+# All these consumers want a host path; Windows file APIs accept native paths.
+for relative in [
+    'io/include/io/filesystem.h', 'io/include/io/util.h', 'io/src/io.cpp',
+    'util/src/fs_utils.cpp', 'util/src/logging.cpp', 'interface.cpp',
+]:
+    path = source / 'vita3k' / relative
+    text = path.read_text()
+    assert '.generic_path()' in text, relative
+    path.write_text(text.replace('.generic_path()', ''))
+
+# The libretro host owns presentation; Xbox never creates a Win32 HWND surface.
+screen = source / 'vita3k/renderer/src/vulkan/screen_renderer.cpp'
+text = screen.read_text()
+old = '#ifdef _WIN32\n        vk::Win32SurfaceCreateInfoKHR create_info{};'
+assert old in text
+screen.write_text(text.replace(old, '#if defined(_WIN32) && !defined(VITA3K_UWP)\n        vk::Win32SurfaceCreateInfoKHR create_info{};', 1))
+
+# Xbox has no desktop console to rename. Retain file/debugger/core callbacks.
+logging = source / 'vita3k/util/src/logging.cpp'
+text = logging.read_text()
+old = '#ifdef _WIN32\n    // set console codepage to UTF-8'
+assert old in text
+logging.write_text(text.replace(old, '#if defined(_WIN32) && !defined(VITA3K_UWP)\n    // set console codepage to UTF-8', 1))
+
+# Sparse-file hints are an optional storage optimization. Without desktop
+# volume APIs, conservatively report no holes rather than assuming sparsity.
+# Keep decryption, archive reads and the ordinary-file cache path intact.
+lazy = source / 'vita3k/libretro/libretro_lazy_pkg.cpp'
+text = lazy.read_text()
+old = 'void mark_sparse(const fs::path &path) {\n#ifdef _WIN32'
+assert old in text
+text = text.replace(old, 'void mark_sparse(const fs::path &path) {\n#if defined(VITA3K_UWP)\n    (void)path;\n#elif defined(_WIN32)', 1)
+old = 'static std::string fs_signature(const fs::path &dir) {\n#ifdef _WIN32'
+assert old in text
+text = text.replace(old, 'static std::string fs_signature(const fs::path &dir) {\n#if defined(VITA3K_UWP)\n    (void)dir;\n    return {};\n#elif defined(_WIN32)', 1)
+old = 'static bool probe_holes(const fs::path &dir) {\n'
+assert old in text
+text = text.replace(old, old + '#if defined(VITA3K_UWP)\n    (void)dir;\n    return false;\n#else\n', 1)
+old = '    return holes;\n}\n\nbool holes_supported'
+assert old in text
+text = text.replace(old, '    return holes;\n#endif\n}\n\nbool holes_supported', 1)
+lazy.write_text(text)
+print('Adapted native filesystem paths and excluded desktop window/console/sparse-volume helpers on Xbox.')
