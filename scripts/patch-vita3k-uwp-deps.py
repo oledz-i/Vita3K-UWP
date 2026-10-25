@@ -57,7 +57,9 @@ replace_once(
 replace_once(
     "vita3k/audio/src/audio.cpp",
     "#include <audio/impl/cubeb_audio.h>",
-    "#ifndef VITA3K_UWP\\n#include <audio/impl/cubeb_audio.h>\\n#endif".replace("\\\\n", "\\n")
+    """#ifndef VITA3K_UWP
+#include <audio/impl/cubeb_audio.h>
+#endif"""
 )
 replace_once(
     "vita3k/audio/src/audio.cpp",
