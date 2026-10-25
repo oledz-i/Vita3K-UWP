@@ -78,7 +78,9 @@ $configurationExit = $LASTEXITCODE
 "Configure exit: $configurationExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $log -Tail 90 | Out-File -FilePath (Join-Path $out 'configure-tail.txt')
 if ($configurationExit -ne 0) {
-  throw "Actual Vita3K core failed to configure for UWP. See uploaded configure.log for the exact blocking dependencies."
+  Write-Host "----- CMake UWP configure failure (last 90 lines) -----"
+  Get-Content $log -Tail 90 | ForEach-Object { Write-Host $_ }
+  throw "Vita3K UWP configuration failed; full diagnostic archive uploaded."
 }
 
 "Starting genuine Vita3K libretro UWP compilation..." | Add-Content -Path (Join-Path $out 'assessment.txt')
@@ -88,7 +90,9 @@ $buildExit = $LASTEXITCODE
 "Build exit: $buildExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $buildLog -Tail 90 | Out-File (Join-Path $out 'build-tail.txt')
 if ($buildExit -ne 0) {
-  throw "Real Vita3K libretro code could not be linked for UWP. See uploaded build.log."
+  Write-Host "----- Vita3K UWP compiler failure (last 90 lines) -----"
+  Get-Content $buildLog -Tail 90 | ForEach-Object { Write-Host $_ }
+  throw "Vita3K UWP source could not be linked; full compiler archive uploaded."
 }
 $cores = Get-ChildItem "$root/build/core-uwp-probe" -Recurse -Filter 'vita3k_libretro.dll' -File
 if (!$cores) { throw 'No vita3k_libretro.dll was produced by the Windows Store build' }
