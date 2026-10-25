@@ -90,3 +90,82 @@ replace('vita3k/app/src/apps_list.cpp',
 replace('vita3k/app/src/apps_list.cpp',
         'static_cast<int64_t>(fs::last_write_time(path))',
         'static_cast<int64_t>(fs::last_write_time(path).time_since_epoch().count())')
+
+# fmt/std.h owns std::filesystem::path, including its :g presentation. An
+# ostream specialization shadows that formatter and breaks fmt's own helpers.
+replace('vita3k/util/include/util/fs.h',
+        '#include <fmt/ostream.h>',
+        '#include <fmt/ostream.h>\n#ifdef VITA3K_UWP\n#include <fmt/std.h>\n#endif')
+replace('vita3k/util/include/util/fs.h',
+        'template <>\nstruct fmt::formatter<fs::path> : ostream_formatter {};',
+        '#ifndef VITA3K_UWP\ntemplate <>\nstruct fmt::formatter<fs::path> : ostream_formatter {};\n#endif')
+
+# Winsock 1 declarations are desktop-only. Keep the real debugger service and
+# use Winsock 2, with its import library explicitly attached to the target.
+for relative in ['vita3k/gdbstub/include/gdbstub/state.h', 'vita3k/gdbstub/src/gdb.cpp']:
+    replace(relative, '#include <winsock.h>', '#include <winsock2.h>\n#include <ws2tcpip.h>')
+replace('vita3k/gdbstub/src/gdb.cpp', '#include <emuenv/state.h>',
+        '#ifdef _WIN32\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#endif\n\n#include <emuenv/state.h>')
+replace('vita3k/gdbstub/CMakeLists.txt', 'target_link_libraries(gdbstub PRIVATE kernel)',
+        'target_link_libraries(gdbstub PRIVATE kernel)\nif(WIN32)\n  target_link_libraries(gdbstub PRIVATE ws2_32)\nendif()')
+
+# Query a real, active six-byte adapter address. Never report success with
+# uninitialized bytes, and retry if the adapter list changes during enumeration.
+replace('vita3k/modules/SceNet/SceNet.cpp', '#include <thread>',
+        '#include <thread>\n#include <vector>\n#ifdef _WIN32\n#include <ws2tcpip.h>\n#include <iphlpapi.h>\n#endif')
+replace('vita3k/modules/SceNet/SceNet.cpp', '#ifdef _WIN32\n    IP_ADAPTER_INFO AdapterInfo[16];', '''#if defined(VITA3K_UWP)
+    ULONG bytes = 15 * 1024;
+    std::vector<IP_ADAPTER_ADDRESSES> adapters;
+    ULONG result = ERROR_BUFFER_OVERFLOW;
+    for (unsigned attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; ++attempt) {
+        adapters.resize((bytes + sizeof(IP_ADAPTER_ADDRESSES) - 1) / sizeof(IP_ADAPTER_ADDRESSES));
+        result = GetAdaptersAddresses(AF_UNSPEC,
+            GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+            nullptr, adapters.data(), &bytes);
+    }
+    if (result != NO_ERROR)
+        RET_NET_ERRNO(SCE_NET_ERROR_EINVAL);
+    for (const auto *adapter = adapters.data(); adapter; adapter = adapter->Next) {
+        if (adapter->OperStatus == IfOperStatusUp &&
+            adapter->IfType != IF_TYPE_SOFTWARE_LOOPBACK &&
+            adapter->PhysicalAddressLength == sizeof(addr->data)) {
+            memcpy(addr->data, adapter->PhysicalAddress, sizeof(addr->data));
+            return 0;
+        }
+    }
+    RET_NET_ERRNO(SCE_NET_ERROR_EINVAL);
+#elif defined(_WIN32)
+    IP_ADAPTER_INFO AdapterInfo[16];''')
+replace('vita3k/modules/SceNet/SceNet.cpp', 'InetNtop(af, src, dst_ptr, size)', 'InetNtopA(af, src, dst_ptr, size)')
+replace('vita3k/modules/SceNet/SceNet.cpp', 'InetPton(af, src, dst)', 'InetPtonA(af, src, dst)')
+
+# A Vita user name is a guest profile setting. On UWP do not probe the host
+# machine name. Bound both the host fallback and guest copy and terminate them.
+replace('vita3k/modules/SceAppUtil/SceAppUtil.cpp',
+        '    char devname[devname_len];\n    switch (paramId) {',
+        '    if (!buf || bufSize == 0)\n        return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);\n    char devname[devname_len]{};\n    switch (paramId) {')
+replace('vita3k/modules/SceAppUtil/SceAppUtil.cpp', '''        if (gethostname(devname, devname_len)) {
+            // fallback to User Name
+            std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname));
+        }
+        std::strncpy(reinterpret_cast<char *>(buf), devname, sizeof(devname));''', '''#ifdef VITA3K_UWP
+        std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname) - 1);
+#else
+        if (gethostname(devname, devname_len)) {
+            std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname) - 1);
+        }
+#endif
+        devname[sizeof(devname) - 1] = '\\0';
+        {
+            const size_t capacity = (std::min)(static_cast<size_t>(bufSize), sizeof(devname));
+            std::strncpy(reinterpret_cast<char *>(buf), devname, capacity - 1);
+            buf[capacity - 1] = 0;
+        }''')
+
+# SceSize is unsigned int: use unsigned two's-complement arithmetic explicitly
+# to isolate the low bit without MSVC's unary-minus warning (C4146).
+replace('vita3k/modules/SceSysmem/SceSysmemForDriver.cpp',
+        'size & -size', 'size & (~size + SceSize{1})')
+print('Applied checked fmt filesystem, Winsock 2 and guest network/parameter/alignment fixes.')
+
+replace('vita3k/modules/SceAppUtil/SceAppUtil.cpp', '#include <util/safe_time.h>', '#include <util/safe_time.h>\n#include <algorithm>')
