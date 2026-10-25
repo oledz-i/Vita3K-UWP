@@ -254,6 +254,16 @@ jobs:
               foreach ($need in (@('vulkan_dzn.dll','dxil.dll') + @(Get-ChildItem artifacts/core-runtime -Filter '*.dll' | ForEach-Object Name))) {
                 if (!($dlls | Where-Object { $_ -ieq $need })) { throw "$need not packaged" }
               }
+              $manifestEntry = $archive.GetEntry('AppxManifest.xml')
+              if (!$manifestEntry) { throw 'Packaged manifest is missing' }
+              $reader = [IO.StreamReader]::new($manifestEntry.Open())
+              try { [xml]$packagedManifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+              $framework = @($packagedManifest.Package.Dependencies.PackageDependency | Where-Object { $_.Name -eq 'Microsoft.VCLibs.140.00' })
+              if (!$framework.Count) { throw 'Core requires the UWP VCLibs framework dependency' }
+              $frameworkPackages = @(Get-ChildItem artifacts/package -Recurse -Filter '*.appx' | Where-Object {
+                $_.Name -like '*VCLibs*' -and $_.FullName -match 'x64'
+              })
+              if (!$frameworkPackages.Count) { throw 'x64 VCLibs dependency APPX missing from installation bundle' }
               "Packaged DLLs ($($dlls.Count)): $($dlls -join ', ')"
             } finally { $archive.Dispose() }
           } finally { Stop-Transcript }

@@ -14,7 +14,7 @@ try {
     Import-Module (Join-Path $vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
     Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
     # Compile the actual patched filesystem header with the pinned fmt source.
-    & cl /nologo /EHsc /std:c++latest /W4 /WX /DVITA3K_UWP=1 /DFMT_HEADER_ONLY `
+    & cl /nologo /EHsc /utf-8 /std:c++latest /W4 /WX /DVITA3K_UWP=1 /DFMT_HEADER_ONLY `
         /DWINAPI_FAMILY=WINAPI_FAMILY_APP /D_WIN32_WINNT=0x0A00 `
         "/I$root/upstream-core/vita3k/util/include" "/I$root/upstream-core/external/fmt/include" `
         "$root/tests/uwp-path-format-test.cpp" "/Fo:$out/test.obj" "/Fe:$out/test.exe"
