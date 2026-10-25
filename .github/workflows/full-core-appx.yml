@@ -7,6 +7,7 @@ on:
       - .github/workflows/full-core-appx.yml
       - scripts/collect-core-runtime.ps1
       - scripts/summarize-core-errors.ps1
+      - scripts/annotate-errors.ps1
       - scripts/probe-vita3k-uwp.ps1
       - scripts/patch-vita3k-uwp.py
       - scripts/patch-vita3k-uwp-round2.py
@@ -162,6 +163,10 @@ jobs:
           try {
             ./scripts/summarize-core-errors.ps1
           } finally { Stop-Transcript }
+      - name: Publish distinct errors as annotations
+        if: always()
+        shell: pwsh
+        run: ./scripts/annotate-errors.ps1
       - name: Upload build logs and error summary
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
