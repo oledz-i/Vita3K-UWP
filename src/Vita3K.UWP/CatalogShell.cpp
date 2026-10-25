@@ -1659,6 +1659,19 @@ void CatalogShell::ChooseFirmwareSlot(bool preinstalled) {
             try {
                 auto file = selection.get();
                 if (file == nullptr) return;
+                // Sony's downloads are not always named the same. Refuse a
+                // file for the system slot that is clearly a preinstalled or
+                // font package, so the wrong one cannot be staged silently.
+                std::wstring picked = file->Name->Data();
+                for (auto &c : picked) c = (wchar_t)towlower(c);
+                const bool looksPreinst = picked.find(L"preinst") != std::wstring::npos;
+                const bool looksFont = picked.find(L"font") != std::wstring::npos;
+                if (!preinstalled && (looksPreinst || looksFont)) {
+                    SetStatus(L"That file looks like the " +
+                        std::wstring(looksPreinst ? L"preinstalled package" : L"font package") +
+                        L". Put it in its own slot; this slot needs the system firmware.");
+                    return;
+                }
                 PutPref(statusKey, L"0");
                 StorageApplicationPermissions::FutureAccessList->AddOrReplace(token, file);
                 SetStatus(L"Copying official firmware package into Vita3K system storage...");
