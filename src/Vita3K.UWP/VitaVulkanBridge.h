@@ -42,6 +42,14 @@ private:
     std::vector<VkSemaphore> waits_;
     std::vector<VkCommandBuffer> pending_;
     VkSemaphore signal_ = VK_NULL_HANDLE;
+    // Readback buffer and fence kept between frames; rebuilt when the frame grows.
+    VkBuffer readback_ = VK_NULL_HANDLE;
+    VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize readbackSize_ = 0;
+    void* readbackMapped_ = nullptr;
+    VkFence fence_ = VK_NULL_HANDLE;
+    bool gpuStalled_ = false;
+    void ReleaseReadback();
     static void SetImage(void*, const retro_vulkan_image*, uint32_t, const VkSemaphore*, uint32_t);
     static uint32_t SyncIndex(void*) { return 0; }
     static uint32_t SyncMask(void*) { return 1; }

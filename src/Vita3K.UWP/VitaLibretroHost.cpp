@@ -254,7 +254,7 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
         detail = L"Could not create the core execution thread.";
         return false;
     }
-    detail = L"Vita3K execution started. View + Menu stops the session. Visible game output requires the Vulkan interface.";
+    detail = L"Vita3K is running. Press View + Menu together to stop.";
     return true;
 }
 void VitaLibretroHost::SetOption(const std::string& key, const std::string& value) {
@@ -359,7 +359,11 @@ void __cdecl VitaLibretroHost::Video(
         if (!active_->framePresented_.exchange(true))
             Log(1, "First core video frame presented: %u x %u.\n", width, height);
     } else if (!error.empty()) {
-        Log(3, "Vulkan frame readback failed: %s\n", error.c_str());
+        // Once a frame fails the next ones usually fail the same way; keep the log readable.
+        static std::atomic<unsigned> failures{0};
+        const unsigned n = ++failures;
+        if (n <= 5) Log(3, "Vulkan frame readback failed: %s\n", error.c_str());
+        if (n == 5) Log(3, "Further frame readback errors are not logged.\n");
     }
 }
 void __cdecl VitaLibretroHost::Audio(std::int16_t left, std::int16_t right) {
