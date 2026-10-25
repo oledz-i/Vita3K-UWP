@@ -37,6 +37,25 @@ foreach ($path in $sourceList) {
   "$path => $present" | Add-Content -Path (Join-Path $out 'assessment.txt')
 }
 
+# Upstream's Windows libretro bootstrap explicitly builds VC-WIN64A OpenSSL.
+# A WindowsStore build must use the x64-uwp package selected by the toolchain.
+$externalCmake = Join-Path $upstream 'external/CMakeLists.txt'
+$external = Get-Content $externalCmake -Raw
+$desktopBootstrap = 'if(MSVC AND BUILD_LIBRETRO)'
+if (([regex]::Matches($external, [regex]::Escape($desktopBootstrap)).Count) -ne 1) {
+    throw 'OpenSSL bootstrap source changed; review the pinned source before patching.'
+}
+$external = $external.Replace($desktopBootstrap, 'if(MSVC AND BUILD_LIBRETRO AND NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")')
+$desktopFallback = 'if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)'
+if (!$external.Contains($desktopFallback)) { throw 'OpenSSL fallback source changed' }
+$external = $external.Replace($desktopFallback, @'
+if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore" AND NOT OPENSSL_FOUND)
+    message(FATAL_ERROR "UWP OpenSSL must come from x64-uwp; desktop fallback is disabled")
+endif()
+if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
+'@)
+[IO.File]::WriteAllText($externalCmake, $external)
+
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
 "Starting Windows Store CMake configure..." | Add-Content -Path (Join-Path $out 'assessment.txt')
