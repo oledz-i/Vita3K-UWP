@@ -5,6 +5,7 @@
 #include "SfoReader.h"
 #include "GameFormats.h"
 #include "VulkanDznProbe.h"
+#include "VitaGuestCpuUwpProbe.h"
 #include "UwpJitProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
@@ -1176,12 +1177,12 @@ void CatalogShell::Settings() {
 }
 void CatalogShell::Diagnostics() {
     Banner(L"UNDER THE HOOD", L"Developer laboratory.",
-        L"Real Vita3K upstream code, libretro core ABI and D3D12 diagnostics.");
-    Section(L"Experimental real Vita3K libretro core");
+        L"Vita3K CPU, graphics and emulator diagnostics.");
+    Section(L"Vita3K core");
     auto libretroBox = Vertical();
     libretroBox->Children->Append(Text(
-        L"This probes a genuine Vita3K libretro DLL packaged inside the APPX. "
-        L"Unlike a memory or loading-screen test, it checks the exported core API. "
+        L"Check for a Vita3K core DLL inside the app package. "
+        L"Verify the core API before attempting to load a game. "
         L"The desktop DLL cannot automatically run as UWP. Game execution needs a "
         L"successfully ported core and working Vulkan graphics (possibly Mesa Dozen).",
         16, false, true));
@@ -1203,8 +1204,8 @@ void CatalogShell::Diagnostics() {
     auto dzn = Vertical();
     dzn->Children->Append(Text(
         L"Mesa Dozen translates Vulkan to native D3D12 on Windows. "
-        L"On Xbox, a compatible Vulkan loader and Dozen ICD would have to "
-        L"be built for UWP and bundled in the signed APPX. "
+        L"On Xbox, the Vulkan loader and Dozen ICD must "
+        L"run inside the app package. "
         L"A native D3D12 test frame is not evidence that Vulkan works.", 16, false, true));
     auto dznResult = Text(L"No Vulkan / Dozen probe run on this Xbox.", 17, true);
     auto dznButton = Button(L"Probe actual packaged Vulkan device");
@@ -1215,6 +1216,22 @@ void CatalogShell::Diagnostics() {
     dzn->Children->Append(dznButton);
     dzn->Children->Append(dznResult);
     content_->Children->Append(Panel(dzn));
+
+    Section(L"Vita CPU test", L"Run a short ARMv7 program through Dynarmic.");
+    auto cpuPanel = Vertical();
+    cpuPanel->Children->Append(Text(
+        L"This test runs three ARM instructions through Vita3K's Dynarmic CPU: "
+        L"MOV, ADD and SVC. A pass means Xbox executed ARM guest code and returned "
+        L"R0 = 12. It does not launch a Vita game.", 15, false, true));
+    auto cpuReport = Text(L"ARM CPU test not started.", 15, false, true);
+    auto runCpu = Button(L"Run Vita ARM instructions", true);
+    runCpu->Click += ref new RoutedEventHandler(
+        [cpuReport](Platform::Object^, RoutedEventArgs^) {
+            cpuReport->Text = StringOf(RunVitaGuestArmCpuProbe());
+        });
+    cpuPanel->Children->Append(runCpu);
+    cpuPanel->Children->Append(cpuReport);
+    content_->Children->Append(Panel(cpuPanel));
 
     Section(L"Upstream Vita3K memory allocator");
     auto core = Vertical();
