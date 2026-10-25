@@ -11,10 +11,12 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 $summary = Join-Path $dir 'errors-summary.txt'
 $pattern = 'error\s+(?:C|D|LNK|MSB)\d+|fatal error|CMake Error|Could NOT find|error: |FAILED|vcpkg.*(failed|error)|unresolved external'
 '' | Set-Content $summary
-foreach ($name in @('configure.log', 'build.log', 'steps.log')) {
+foreach ($name in @('configure.log', 'build.log', 'steps.log', 'path-format-test.log', 'memory-fault-test.log')) {
   $p = Join-Path $dir $name
   if (!(Test-Path $p)) { "== ${name}: not produced" | Add-Content $summary; continue }
-  $lines = @(Select-String -Path $p -Pattern $pattern | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique)
+  $filePattern = $pattern
+  if (Select-String -Path $p -Pattern 'error C2220' -Quiet) { $filePattern += '|warning C\d+' }
+  $lines = @(Select-String -Path $p -Pattern $filePattern | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique)
   "== ${name}: $($lines.Count) distinct error lines" | Add-Content $summary
   $lines | Add-Content $summary
 }

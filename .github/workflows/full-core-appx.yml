@@ -313,7 +313,9 @@ jobs:
           ) | Set-Content $report
           $pattern = 'error\s+(?:C|D|LNK|MSB)\d+|fatal error|CMake Error|Could NOT find|error: |FAILED|Exception:|unresolved external'
           Get-ChildItem build-output -Recurse -File | Where-Object { $_.Extension -in '.log','.txt' -and $_.Name -ne 'ERROR-LOG.txt' } | ForEach-Object {
-            $matches = @(Select-String -Path $_.FullName -Pattern $pattern | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique)
+            $filePattern = $pattern
+            if (Select-String -Path $_.FullName -Pattern 'error C2220' -Quiet) { $filePattern += '|warning C\d+' }
+            $matches = @(Select-String -Path $_.FullName -Pattern $filePattern | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique)
             if ($matches.Count) {
               "`n== $($_.Name)" | Add-Content $report
               $matches | Add-Content $report
