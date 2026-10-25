@@ -60,6 +60,18 @@ jobs:
           if ((git -C upstream-core rev-parse HEAD).Trim() -ne $lock.libretro_candidate.commit) {
             throw 'Unpinned Vita3K core source'
           }
+      - name: Install NASM for upstream OpenSSL and x64 Vita3K core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nasm -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'NASM installation failed' }
+          $nasmDir = 'C:\Program Files\NASM'
+          if (!(Test-Path (Join-Path $nasmDir 'nasm.exe'))) { throw 'NASM binary was not installed' }
+          $env:PATH = "$nasmDir;$env:PATH"
+          if (!(Get-Command nasm -ErrorAction SilentlyContinue)) { throw 'NASM missing from PATH' }
+          nasm -v
+          Add-Content -Path $env:GITHUB_PATH -Value $nasmDir
       - name: Try real Vita3K WindowsStore libretro build with Onyx W^X and std::filesystem
         shell: pwsh
         run: ./scripts/probe-vita3k-uwp.ps1
