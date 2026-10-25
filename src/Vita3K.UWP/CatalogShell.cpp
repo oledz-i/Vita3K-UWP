@@ -954,6 +954,17 @@ void CatalogShell::GameDetails() {
         InspectLaunch(index);
     });
     actions->Children->Append(inspect);
+    // Show Launch only when a UWP-built, signed Vita3K core is present.
+    // No inactive button or simulated launch screen in frontend-only builds.
+    std::wstring coreStatus;
+    if (libretro_.Probe(coreStatus) && games_[index].file != nullptr) {
+        auto launch = Button(L"Launch Vita game", true);
+        launch->Click += ref new RoutedEventHandler(
+            [this,index](Platform::Object^, RoutedEventArgs^) {
+                AttemptBoot(index);
+            });
+        actions->Children->Append(launch);
+    }
     auto image = Button(L"Change cover art");
     image->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         ChooseCustomArtwork(index);
@@ -1705,6 +1716,66 @@ void CatalogShell::InspectLaunch(size_t index) {
     SetStatus(L"Input preflight: " + games_[index].validation +
         L". Game boot is blocked: Dynarmic CPU, Vita kernel, executable loader "
         L"and GXM renderer are not integrated in this UWP build.");
+}
+
+void CatalogShell::AttemptBoot(size_t index) {
+    if (index >= games_.size()) return;
+    auto game = games_[index].file;
+    if (game == nullptr) {
+        SetStatus(L"Cannot launch: choose a Vita VPK/PKG/ZIP/VCI file. "
+            L"Extracted game directories are not staged yet.");
+        return;
+    }
+    std::wstring probe;
+    if (!libretro_.Probe(probe)) {
+        SetStatus(StringOf(probe));
+        return;
+    }
+    // UWP's file picker grants a StorageFile capability; Vita3K's CRT-based
+    // loader requires a path inside our own app sandbox or a working VFS.
+    // CopyAsync streams disk data without buffering the entire Vita package.
+    SetStatus(L"Preparing game file in Vita3K's private content storage...");
+    create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
+        L"Vita3KContent", CreationCollisionOption::OpenIfExists))
+    .then([game,index](StorageFolder^ target) {
+        auto stagedName = L"vita-" + StringOf(std::to_wstring(index)) +
+            L"-" + game->Name;
+        return create_task(game->CopyAsync(
+            target, stagedName, NameCollisionOption::ReplaceExisting));
+    }).then([this](task<StorageFile^> staged) {
+        try {
+            auto file = staged.get();
+            if (file == nullptr) return;
+            auto folder = ApplicationData::Current->LocalFolder;
+            auto systemPath = folder->Path + L"\\Vita3KSystem";
+            auto gamePath = file->Path;
+            auto toUtf8 = [](Platform::String^ source) {
+                const int count = WideCharToMultiByte(
+                    CP_UTF8, 0, source->Data(), -1, nullptr, 0, nullptr, nullptr);
+                if (count <= 0) return std::string();
+                std::string result(static_cast<size_t>(count), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, source->Data(), -1,
+                    &result[0], count, nullptr, nullptr);
+                return result;
+            };
+            const std::string system = toUtf8(systemPath);
+            const std::string content = toUtf8(gamePath);
+            SetStatus(L"Vita file staged. Initializing Vita3K core...");
+            create_task([this,system,content]() {
+                std::wstring detail;
+                if (!libretro_.Initialize(system, detail)) return detail;
+                if (!libretro_.LoadGame(content, detail)) return detail;
+                return detail;
+            }).then([this](task<std::wstring> result) {
+                try { SetStatus(StringOf(result.get())); }
+                catch (...) {
+                    SetStatus(L"Vita3K loader failed. See core diagnostics.");
+                }
+            }, task_continuation_context::use_current());
+        } catch (Platform::Exception^ error) {
+            SetStatus(L"Couldn't stage game file: " + error->Message);
+        }
+    }, task_continuation_context::use_current());
 }
 
 void CatalogShell::ChooseGameFile() {
