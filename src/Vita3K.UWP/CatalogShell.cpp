@@ -18,6 +18,7 @@
 #include <vector>
 #include <windows.foundation.h>
 #include <windows.ui.xaml.media.imaging.h>
+#include <windows.ui.xaml.shapes.h>
 
 using namespace concurrency;
 using namespace Windows::ApplicationModel;
@@ -33,6 +34,7 @@ using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Controls::Primitives;
 using namespace Windows::UI::Xaml::Media;
 using namespace Windows::UI::Xaml::Media::Imaging;
+using namespace Windows::UI::Xaml::Shapes;
 
 namespace Vita3KUWP {
 namespace {
@@ -86,43 +88,43 @@ Platform::String^ PrettyFileName(Platform::String^ value) {
 }
 }
 Color CatalogShell::Bg() const {
-    switch(theme_) {
-    case 1: return RgbColor(5, 24, 35);       // Aurora
-    case 2: return RgbColor(28, 12, 19);      // Ember
-    case 3: return RgbColor(233, 241, 251);   // Glacier / light
-    case 4: return RgbColor(17, 14, 39);      // Orbit
-    default: return RgbColor(9, 13, 24);      // Onyx
+    switch (theme_) {
+    case 1: return RgbColor(7, 16, 19);       // Aurora: deep ocean
+    case 2: return RgbColor(18, 12, 11);      // Ember: dark theater
+    case 3: return RgbColor(10, 17, 25);      // Glacier: midnight blue
+    case 4: return RgbColor(13, 10, 23);      // Orbit: deep cosmic
+    default: return RgbColor(9, 10, 13);      // Onyx: charcoal
     }
 }
 Color CatalogShell::Card() const {
-    switch(theme_) {
-    case 1: return RgbColor(17, 49, 60);
-    case 2: return RgbColor(61, 31, 41);
-    case 3: return RgbColor(255, 255, 255);
-    case 4: return RgbColor(37, 30, 72);
-    default: return RgbColor(28, 35, 52);
+    switch (theme_) {
+    case 1: return RgbColor(16, 32, 35);
+    case 2: return RgbColor(35, 24, 22);
+    case 3: return RgbColor(22, 33, 46);
+    case 4: return RgbColor(27, 22, 41);
+    default: return RgbColor(24, 25, 30);
     }
 }
 Color CatalogShell::Accent() const {
-    switch(theme_) {
-    case 1: return RgbColor(58, 225, 199);
-    case 2: return RgbColor(255, 147, 101);
-    case 3: return RgbColor(28, 106, 209);
-    case 4: return RgbColor(183, 138, 255);
-    default: return RgbColor(130, 111, 255);
+    switch (theme_) {
+    case 1: return RgbColor(83, 225, 206);
+    case 2: return RgbColor(246, 163, 100);
+    case 3: return RgbColor(118, 179, 246);
+    case 4: return RgbColor(178, 149, 255);
+    default: return RgbColor(239, 69, 105);
     }
 }
 Color CatalogShell::Glow() const {
-    switch(theme_) {
-    case 1: return RgbColor(10, 72, 85);
-    case 2: return RgbColor(112, 37, 48);
-    case 3: return RgbColor(201, 225, 246);
-    case 4: return RgbColor(72, 44, 120);
-    default: return RgbColor(53, 39, 93);
+    switch (theme_) {
+    case 1: return RgbColor(16, 67, 65);
+    case 2: return RgbColor(103, 46, 32);
+    case 3: return RgbColor(28, 71, 109);
+    case 4: return RgbColor(75, 40, 105);
+    default: return RgbColor(99, 24, 49);
     }
 }
 Color CatalogShell::Muted() const {
-    return theme_ == 3 ? RgbColor(65, 82, 114) : RgbColor(170, 186, 210);
+    return RgbColor(153, 157, 169);
 }
 Brush^ CatalogShell::Solid(Color value) {
     return ref new SolidColorBrush(value);
@@ -147,25 +149,25 @@ TextBlock^ CatalogShell::Text(Platform::String^ value, double size, bool bold, b
     t->FontSize = size;
     t->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
     t->FontWeight = bold ? FontWeights::SemiBold : FontWeights::Normal;
-    t->Foreground = Solid(muted ? Muted() : (theme_ == 3 ? RgbColor(23, 39, 65) : Colors::White));
+    t->Foreground = Solid(muted ? Muted() : Colors::White);
     t->TextWrapping = TextWrapping::Wrap;
-    t->Margin = Thickness(0, 3, 0, 3);
+    t->TextTrimming = TextTrimming::CharacterEllipsis;
+    t->Margin = Thickness(0);
     return t;
 }
 Button^ CatalogShell::Button(Platform::String^ label, bool highlighted) {
     auto button = ref new Windows::UI::Xaml::Controls::Button();
     button->Content = label;
-    button->Padding = Thickness(20, 13, 20, 13);
-    button->Margin = Thickness(0, 4, 12, 4);
-    button->MinHeight = 48;
+    button->Padding = Thickness(23, 13, 23, 13);
+    button->Margin = Thickness(0, 0, 12, 0);
+    button->MinHeight = 49;
     button->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe UI");
     button->FontWeight = FontWeights::SemiBold;
-    button->FontSize = 16;
-    button->BorderThickness = Thickness(1);
-    button->BorderBrush = Solid(highlighted ? Accent() : Muted());
-    button->Background = highlighted ? Solid(Accent()) : Solid(Card());
-    button->Foreground = Solid(highlighted && theme_ != 3 ? Bg() :
-                              (theme_ == 3 ? RgbColor(26, 48, 72) : Colors::White));
+    button->FontSize = 15;
+    button->BorderThickness = Thickness(highlighted ? 0 : 1);
+    button->BorderBrush = Solid(RgbColor(75, 78, 88));
+    button->Background = Solid(highlighted ? Accent() : RgbColor(38, 39, 47));
+    button->Foreground = Solid(highlighted ? RgbColor(14, 14, 17) : Colors::White);
     button->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         PlayCue(0);
     });
@@ -182,9 +184,9 @@ StackPanel^ CatalogShell::Vertical(double spacing) {
 }
 Border^ CatalogShell::Panel(UIElement^ child, double pad) {
     auto border = ref new Border();
-    border->CornerRadius = Windows::UI::Xaml::CornerRadius(14);
+    border->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
     border->Padding = Thickness(pad);
-    border->Margin = Thickness(0, 9, 0, 16);
+    border->Margin = Thickness(0, 12, 0, 14);
     border->Background = Solid(Card());
     border->Child = child;
     return border;
@@ -209,38 +211,46 @@ CatalogShell::CatalogShell() {
     catch (...) { uiSoundVolume_ = 0.40; }
     uiSoundVolume_ = std::max(0.0, std::min(1.0, uiSoundVolume_));
 
+    // Cinematic television layout: permanently dark canvas, narrow icon rail,
+    // full-bleed content area, and an understated 30px status line.
     root_ = ref new Grid();
-    root_->Background = Gradient(Bg(), Glow());
-    auto navRow = ref new RowDefinition();
-    navRow->Height = GridLength(92);
-    auto pageRow = ref new RowDefinition();
-    pageRow->Height = GridLength(1, GridUnitType::Star);
+    root_->Background = Solid(Bg());
+    auto railColumn = ref new ColumnDefinition();
+    railColumn->Width = GridLength(102);
+    auto contentColumn = ref new ColumnDefinition();
+    contentColumn->Width = GridLength(1, GridUnitType::Star);
+    root_->ColumnDefinitions->Append(railColumn);
+    root_->ColumnDefinitions->Append(contentColumn);
+    auto mainRow = ref new RowDefinition();
+    mainRow->Height = GridLength(1, GridUnitType::Star);
     auto footerRow = ref new RowDefinition();
-    footerRow->Height = GridLength(42);
-    root_->RowDefinitions->Append(navRow);
-    root_->RowDefinitions->Append(pageRow);
+    footerRow->Height = GridLength(30);
+    root_->RowDefinitions->Append(mainRow);
     root_->RowDefinitions->Append(footerRow);
 
     navigation_ = ref new Border();
-    navigation_->Background = Solid(Card());
-    Grid::SetRow(navigation_, 0);
+    navigation_->Background = Solid(RgbColor(13, 14, 18));
+    Grid::SetColumn(navigation_, 0);
+    Grid::SetRowSpan(navigation_, 2);
     root_->Children->Append(navigation_);
 
     auto scroll = ref new ScrollViewer();
-    scroll->VerticalScrollBarVisibility = ScrollBarVisibility::Auto;
+    scroll->VerticalScrollBarVisibility = ScrollBarVisibility::Hidden;
     scroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Disabled;
     content_ = Vertical();
-    content_->Margin = Thickness(54, 24, 54, 44);
+    content_->Margin = Thickness(46, 30, 58, 36);
     scroll->Content = content_;
-    Grid::SetRow(scroll, 1);
+    Grid::SetColumn(scroll, 1);
+    Grid::SetRow(scroll, 0);
     root_->Children->Append(scroll);
 
     auto statusBar = ref new Border();
-    statusBar->Background = Solid(Card());
-    statusBar->Padding = Thickness(48, 8, 48, 8);
-    status_ = Text(L"PRE-ALPHA  |  Upstream CPU and Vita GPU integration pending  |  Games cannot launch yet", 13, false, true);
+    statusBar->Background = Solid(Bg());
+    statusBar->Padding = Thickness(48, 3, 16, 2);
+    status_ = Text(L"VITA3K  /  XBOX PREVIEW                         Core integration in progress", 11, false, true);
     statusBar->Child = status_;
-    Grid::SetRow(statusBar, 2);
+    Grid::SetColumn(statusBar, 1);
+    Grid::SetRow(statusBar, 1);
     root_->Children->Append(statusBar);
 
     musicPlayer_ = ref new MediaElement();
@@ -250,7 +260,8 @@ CatalogShell::CatalogShell() {
     musicPlayer_->Width = 0;
     musicPlayer_->Height = 0;
     musicPlayer_->IsHitTestVisible = false;
-    Grid::SetRow(musicPlayer_, 2);
+    Grid::SetRow(musicPlayer_, 1);
+    Grid::SetColumn(musicPlayer_, 1);
     root_->Children->Append(musicPlayer_);
     for (unsigned cue = 0; cue < 4; ++cue) {
         cuePlayers_[cue] = ref new MediaElement();
@@ -260,7 +271,8 @@ CatalogShell::CatalogShell() {
         cuePlayers_[cue]->Width = 0;
         cuePlayers_[cue]->Height = 0;
         cuePlayers_[cue]->IsHitTestVisible = false;
-        Grid::SetRow(cuePlayers_[cue], 2);
+        Grid::SetRow(cuePlayers_[cue], 1);
+        Grid::SetColumn(cuePlayers_[cue], 1);
         root_->Children->Append(cuePlayers_[cue]);
     }
 
@@ -291,49 +303,59 @@ CatalogShell::CatalogShell() {
     });
 }
 void CatalogShell::BuildNavigation() {
-    auto navigation = ref new StackPanel();
-    navigation->Orientation = Orientation::Horizontal;
-    navigation->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    navigation->Margin = Thickness(46, 0, 36, 0);
-
-    auto wordmark = Text(L"VITA3K", 27, true);
+    auto rail = ref new StackPanel();
+    rail->Orientation = Orientation::Vertical;
+    rail->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    rail->Width = 100;
+    rail->Margin = Thickness(0, 25, 0, 0);
+    auto wordmark = Text(L"V", 39, true);
+    wordmark->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
     wordmark->Foreground = Solid(Accent());
-    wordmark->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    wordmark->Margin = Thickness(0, 0, 7, 0);
-    navigation->Children->Append(wordmark);
+    wordmark->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    rail->Children->Append(wordmark);
+    auto tiny = Text(L"3K", 11, true, true);
+    tiny->CharacterSpacing = 260;
+    tiny->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    rail->Children->Append(tiny);
+    auto spacer = ref new Border();
+    spacer->Height = 76;
+    rail->Children->Append(spacer);
 
-    auto sub = Text(L"UWP  /  XBOX", 12, true, true);
-    sub->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    sub->Margin = Thickness(0, 4, 48, 0);
-    navigation->Children->Append(sub);
-
-    const wchar_t* labels[] = {L"DISCOVER", L"LIBRARY", L"SETTINGS", L"DEVELOPER"};
+    const wchar_t* glyphs[] = {L"\uE80F", L"\uE8B7", L"\uE713", L"\uE90F"};
+    const wchar_t* labels[] = {L"HOME", L"LIBRARY", L"SETTINGS", L"TOOLS"};
     for (int i = 0; i < 4; ++i) {
-        auto nav = Button(ref new Platform::String(labels[i]), page_ == i);
-        nav->MinHeight = 43;
-        nav->Margin = Thickness(2, 2, 8, 2);
-        nav->Padding = Thickness(16, 10, 16, 10);
-        nav->Click += ref new RoutedEventHandler([this, i](Platform::Object^, RoutedEventArgs^) {
+        const bool selected = page_ == i || (i == 1 && page_ == 4);
+        auto nav = ref new Windows::UI::Xaml::Controls::Button();
+        nav->Margin = Thickness(11, 0, 11, 14);
+        nav->Width = 78;
+        nav->Height = 79;
+        nav->Padding = Thickness(5);
+        nav->BorderThickness = Thickness(0);
+        nav->Background = Solid(selected ? Card() : RgbColor(13, 14, 18));
+        auto inside = Vertical();
+        inside->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+        auto symbol = Text(ref new Platform::String(glyphs[i]), 26, false);
+        symbol->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
+        symbol->Foreground = Solid(selected ? Accent() : RgbColor(178, 181, 190));
+        symbol->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+        inside->Children->Append(symbol);
+        auto label = Text(ref new Platform::String(labels[i]), 9, true, !selected);
+        label->Foreground = Solid(selected ? Colors::White : Muted());
+        label->CharacterSpacing = 60;
+        label->Margin = Thickness(0, 9, 0, 0);
+        label->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+        inside->Children->Append(label);
+        nav->Content = inside;
+        nav->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+            PlayCue(0);
+        });
+        nav->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) {
+            PlayCue(1);
             ShowPage(i);
         });
-        navigation->Children->Append(nav);
+        rail->Children->Append(nav);
     }
-
-    searchBox_ = ref new TextBox();
-    searchBox_->PlaceholderText = L"Search your library...";
-    searchBox_->Text = search_;
-    searchBox_->Width = 260;
-    searchBox_->Height = 44;
-    searchBox_->Margin = Thickness(20, 2, 0, 0);
-    searchBox_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    searchBox_->Background = Solid(Bg());
-    searchBox_->Foreground = Solid(theme_ == 3 ? RgbColor(20, 40, 70) : Colors::White);
-    searchBox_->TextChanged += ref new TextChangedEventHandler([this](Platform::Object^, TextChangedEventArgs^) {
-        search_ = searchBox_->Text;
-        if (page_ == 0 || page_ == 1) Render();
-    });
-    navigation->Children->Append(searchBox_);
-    navigation_->Child = navigation;
+    navigation_->Child = rail;
 }
 void CatalogShell::ShowPage(int nextPage) {
     if (nextPage < 0 || nextPage > 4) nextPage = 0;
@@ -345,26 +367,30 @@ void CatalogShell::ShowPage(int nextPage) {
 void CatalogShell::Banner(Platform::String^ eyebrow, Platform::String^ headline,
                           Platform::String^ description) {
     auto body = Vertical();
-    auto tag = Text(eyebrow, 14, true);
+    body->Margin = Thickness(3, 17, 0, 29);
+    auto tag = Text(eyebrow, 11, true);
+    tag->CharacterSpacing = 180;
     tag->Foreground = Solid(Accent());
     body->Children->Append(tag);
-    auto title = Text(headline, 48, true);
-    title->MaxWidth = 920;
+    auto title = Text(headline, 43, false);
+    title->FontWeight = FontWeights::Light;
+    title->Margin = Thickness(0, 12, 0, 7);
     body->Children->Append(title);
-    auto note = Text(description, 18, false, true);
-    note->MaxWidth = 920;
+    auto note = Text(description, 15, false, true);
+    note->MaxWidth = 880;
     body->Children->Append(note);
-    auto hero = Panel(body, 34);
-    hero->Background = Gradient(Card(), Glow());
-    hero->MinHeight = 198;
-    content_->Children->Append(hero);
+    content_->Children->Append(body);
 }
 void CatalogShell::Section(Platform::String^ label, Platform::String^ note) {
     auto row = Vertical();
-    row->Margin = Thickness(0, 20, 0, 7);
-    row->Children->Append(Text(label, 25, true));
-    if (note != nullptr && !note->IsEmpty())
-        row->Children->Append(Text(note, 15, false, true));
+    row->Margin = Thickness(3, 24, 0, 17);
+    auto heading = Text(label, 23, true);
+    row->Children->Append(heading);
+    if (note != nullptr && !note->IsEmpty()) {
+        auto secondary = Text(note, 14, false, true);
+        secondary->Margin = Thickness(0, 6, 0, 0);
+        row->Children->Append(secondary);
+    }
     content_->Children->Append(row);
 }
 Platform::String^ CatalogShell::ArtworkUri(size_t index) {
@@ -907,8 +933,8 @@ void CatalogShell::SaveTheme(int theme) {
     if (theme < 0 || theme > 4) return;
     theme_ = theme;
     PutPref(L"theme", StringOf(std::to_wstring(theme)));
-    root_->Background = Gradient(Bg(), Glow());
-    navigation_->Background = Solid(Card());
+    root_->Background = Solid(Bg());
+    navigation_->Background = Solid(RgbColor(13, 14, 18));
     auto footer = dynamic_cast<Border^>(root_->Children->GetAt(2));
     if (footer != nullptr) footer->Background = Solid(Card());
     if (status_ != nullptr) status_->Foreground = Solid(Muted());
