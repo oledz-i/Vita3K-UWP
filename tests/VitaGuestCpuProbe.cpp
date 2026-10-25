@@ -48,14 +48,17 @@ struct GuestMemory final : public Dynarmic::A32::UserCallbacks {
         }
         std::memcpy(bytes.data() + address - kBase, &value, sizeof(value));
     }
-    std::uint8_t MemoryRead8(VAddr a) override { return Read<std::uint8_t>(a); }
-    std::uint16_t MemoryRead16(VAddr a) override { return Read<std::uint16_t>(a); }
-    std::uint32_t MemoryRead32(VAddr a) override { return Read<std::uint32_t>(a); }
-    std::uint64_t MemoryRead64(VAddr a) override { return Read<std::uint64_t>(a); }
-    void MemoryWrite8(VAddr a, std::uint8_t v) override { Write(a, v); }
-    void MemoryWrite16(VAddr a, std::uint16_t v) override { Write(a, v); }
-    void MemoryWrite32(VAddr a, std::uint32_t v) override { Write(a, v); }
-    void MemoryWrite64(VAddr a, std::uint64_t v) override { Write(a, v); }
+    bool PreCodeReadHook(bool, Dynarmic::A32::VAddr, Dynarmic::A32::IREmitter&) override {
+        return false; // Let Dynarmic translate actual guest ARM instructions.
+    }
+    std::uint8_t MemoryRead8(Dynarmic::A32::VAddr a) override { return Read<std::uint8_t>(a); }
+    std::uint16_t MemoryRead16(Dynarmic::A32::VAddr a) override { return Read<std::uint16_t>(a); }
+    std::uint32_t MemoryRead32(Dynarmic::A32::VAddr a) override { return Read<std::uint32_t>(a); }
+    std::uint64_t MemoryRead64(Dynarmic::A32::VAddr a) override { return Read<std::uint64_t>(a); }
+    void MemoryWrite8(Dynarmic::A32::VAddr a, std::uint8_t v) override { Write(a, v); }
+    void MemoryWrite16(Dynarmic::A32::VAddr a, std::uint16_t v) override { Write(a, v); }
+    void MemoryWrite32(Dynarmic::A32::VAddr a, std::uint32_t v) override { Write(a, v); }
+    void MemoryWrite64(Dynarmic::A32::VAddr a, std::uint64_t v) override { Write(a, v); }
     void InterpreterFallback(VAddr, std::size_t) override {
         if (jit) jit->HaltExecution(Dynarmic::HaltReason::UserDefined1);
     }
