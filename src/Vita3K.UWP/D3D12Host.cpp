@@ -3,6 +3,7 @@
 #include <windows.ui.xaml.media.dxinterop.h>
 #include <vector>
 #include <cstring>
+#include <algorithm>
 
 using Microsoft::WRL::ComPtr;
 
@@ -265,6 +266,51 @@ bool D3D12Host::PresentBgraFrame(const std::uint8_t* pixels, unsigned width,
 
     result = L"BGRA framebuffer upload, copy and GPU presentation succeeded (not Vita GPU rendering)";
     return true;
+}
+
+bool D3D12Host::PresentScaledBgraFrame(const std::uint8_t* pixels, unsigned width,
+    unsigned height, unsigned strideBytes, bool sourceRgba, std::wstring& result) {
+    if (!Ready() || !pixels || width == 0 || height == 0 ||
+        width > 4096u || height > 4096u || strideBytes < width * 4u) {
+        result = L"Invalid Vita guest framebuffer dimensions";
+        return false;
+    }
+    if (width == width_ && height == height_ && !sourceRgba)
+        return PresentBgraFrame(pixels, width, height, strideBytes, result);
+
+    // Prototype path: CPU nearest-neighbor scaling after Vulkan->CPU readback.
+    // This preserves Vita's output while the faster GPU-copy path is ported.
+    // Letterbox to retain the source aspect ratio (960x544 typically).
+    std::vector<std::uint8_t> scaled(static_cast<size_t>(width_) * height_ * 4, 0);
+    const double factor = std::min(
+        static_cast<double>(width_) / width, static_cast<double>(height_) / height);
+    const unsigned fitW = std::min(width_, static_cast<unsigned>(width * factor));
+    const unsigned fitH = std::min(height_, static_cast<unsigned>(height * factor));
+    if (!fitW || !fitH) {
+        result = L"Guest framebuffer cannot fit the Xbox display";
+        return false;
+    }
+    const unsigned xOffset = (width_ - fitW) / 2;
+    const unsigned yOffset = (height_ - fitH) / 2;
+    for (unsigned y = 0; y < fitH; ++y) {
+        const unsigned srcY = static_cast<unsigned>(
+            (static_cast<std::uint64_t>(y) * height) / fitH);
+        const auto* srcRow = pixels + static_cast<size_t>(srcY) * strideBytes;
+        auto* dstRow = scaled.data() +
+            (static_cast<size_t>(y + yOffset) * width_ + xOffset) * 4;
+        for (unsigned x = 0; x < fitW; ++x) {
+            const unsigned srcX = static_cast<unsigned>(
+                (static_cast<std::uint64_t>(x) * width) / fitW);
+            const auto* p = srcRow + static_cast<size_t>(srcX) * 4;
+            auto* d = dstRow + static_cast<size_t>(x) * 4;
+            d[0] = sourceRgba ? p[2] : p[0];
+            d[1] = p[1];
+            d[2] = sourceRgba ? p[0] : p[2];
+            d[3] = 255;
+        }
+    }
+    return PresentBgraFrame(
+        scaled.data(), width_, height_, width_ * 4u, result);
 }
 
 bool D3D12Host::DrawUploadTestFrame(std::wstring& result) {
