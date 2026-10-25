@@ -67,3 +67,16 @@ The errors-summary script also had a PowerShell variable-colon parse error.
 It now uses braced interpolation, and the workflow parses every PowerShell
 script before fetching and compiling the core. Full logs were preserved even
 when the old summary script failed.
+
+## Firmware preparation before guest loading
+
+The UWP loader now asks the existing Vita3K installer to unpack staged PUPs
+before opening game content. A missing-only mode skips already installed
+components; the core's explicit reinstall command retains its previous behavior.
+The load stops with a core log error if system firmware remains absent. This
+uses only the PUPs supplied by the user; no firmware is added to the package.
+
+The libretro wrapper's separate desktop VEH trace hook is also guarded on UWP,
+matching the utility logger fix while preserving ordinary core trace logging.
+These source changes applied cleanly to the pinned source; firmware extraction
+has not been exercised here because no firmware/game data or Xbox is attached.

@@ -322,3 +322,58 @@ new = '''#if !defined(SPDLOG_USE_STD_FORMAT) && FMT_VERSION >= 120000
 text = text.replace(old, new, 1)
 logger.write_text(text)
 print('Fixed UWP utility exception logging, network enumeration and fmt 12 compatibility.')
+
+# The libretro wrapper has its own optional desktop VEH logger too. Keep its
+# trace callback, but do not compile the unavailable registration functions.
+core = source / 'vita3k/libretro/libretro_vita3k.cpp'
+text = core.read_text()
+for suffix in [
+    'static PVOID g_lr_vectored_exception_handler_handle',
+    'static LONG CALLBACK lr_vectored_exception_handler',
+    '    lr_install_vectored_exception_handler();',
+    '    lr_remove_vectored_exception_handler();',
+]:
+    old = '#ifdef _WIN32\n' + suffix
+    assert old in text, suffix
+    text = text.replace(old, '#if defined(_WIN32) && !defined(VITA3K_UWP)\n' + suffix, 1)
+core.write_text(text)
+
+# The frontend stages the user's PUP files in system/vita3k. Install missing
+# parts before loading guest modules; copying a PUP alone cannot boot a game.
+header = source / 'vita3k/libretro/libretro_installer.h'
+text = header.read_text()
+old = 'std::string install_firmware_from_folder(const fs::path &pref_path, const fs::path &system_dir);'
+assert old in text
+text = text.replace(old, 'std::string install_firmware_from_folder(const fs::path &pref_path, const fs::path &system_dir, bool missing_only = false);', 1)
+header.write_text(text)
+installer = source / 'vita3k/libretro/libretro_installer.cpp'
+text = installer.read_text()
+old = 'std::string install_firmware_from_folder(const fs::path &pref_path, const fs::path &system_dir) {'
+assert old in text
+text = text.replace(old, 'std::string install_firmware_from_folder(const fs::path &pref_path, const fs::path &system_dir, bool missing_only) {', 1)
+old = '    for (const auto &[kind, label] : parts) {\n        const fs::path pup = firmware_pup(pref_path, system_dir, kind);'
+assert old in text
+new = '''    const FirmwareStatus before = check_firmware_status(pref_path);
+    for (const auto &[kind, label] : parts) {
+        if (missing_only && ((kind == PupKind::Preinst && before.preinst_installed) ||
+            (kind == PupKind::Firmware && before.firmware_installed) ||
+            (kind == PupKind::Font && before.font_installed))) continue;
+        const fs::path pup = firmware_pup(pref_path, system_dir, kind);'''
+text = text.replace(old, new, 1)
+installer.write_text(text)
+text = core.read_text()
+old = '    if (!check_firmware_installed(pref_path, system_dir)) {'
+assert text.count(old) == 1
+text = text.replace(old, '''#ifdef VITA3K_UWP
+    if (!check_firmware_status(pref_path).all_installed()) {
+        lr_log(RETRO_LOG_INFO, "Preparing staged firmware before game load\\n");
+        install_firmware_from_folder(pref_path, system_dir, true);
+    }
+    if (!check_firmware_installed(pref_path, system_dir)) {
+        lr_log(RETRO_LOG_ERROR, "Game load stopped: system firmware is not installed\\n");
+        return false;
+    }
+#endif
+''' + old, 1)
+core.write_text(text)
+print('Connected staged firmware installation to UWP game loading; skipped installed components.')
