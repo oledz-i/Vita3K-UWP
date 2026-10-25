@@ -846,56 +846,104 @@ void CatalogShell::RefreshLibraryItems() {
 }
 void CatalogShell::GameDetails() {
     if (selectedGame_ < 0 || static_cast<size_t>(selectedGame_) >= games_.size()) {
-        ShowPage(1); return;
+        ShowPage(1);
+        return;
     }
     const size_t index = static_cast<size_t>(selectedGame_);
-    Banner(L"GAME DETAILS", games_[index].name, games_[index].sourceType +
-        L"  /  Artwork, metadata and library customization");
-    auto horizontal = ref new StackPanel();
-    horizontal->Orientation = Orientation::Horizontal;
-    horizontal->Children->Append(MakeTile(index));
-    auto actions = Vertical(4);
-    actions->Width = 560;
-    actions->Margin = Thickness(24, 0, 0, 0);
-    actions->Children->Append(Text(L"Source format: " + games_[index].sourceType, 20, true));
-    actions->Children->Append(Text(games_[index].validation, 16, false, true));
-    actions->Children->Append(Text(L"Ready for your collection", 24, true));
-    actions->Children->Append(Text(L"Game launching is unavailable until the full Vita3K CPU, kernel, firmware and GXM renderer have been integrated.", 17, false, true));
-    auto preflight = Button(L"Inspect game for launch readiness");
-    preflight->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+    auto back = Button(L"\u2039  All games");
+    back->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(1); });
+    back->Margin = Thickness(3, 5, 0, 23);
+    content_->Children->Append(back);
+
+    auto feature = ref new Border();
+    feature->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
+    feature->MinHeight = 465;
+    feature->Padding = Thickness(50, 38, 40, 38);
+    feature->Background = Gradient(Card(), Bg());
+
+    auto layout = ref new Grid();
+    auto artColumn = ref new ColumnDefinition();
+    artColumn->Width = GridLength(295);
+    auto infoColumn = ref new ColumnDefinition();
+    infoColumn->Width = GridLength(1, GridUnitType::Star);
+    layout->ColumnDefinitions->Append(artColumn);
+    layout->ColumnDefinitions->Append(infoColumn);
+
+    auto cover = ref new Border();
+    cover->Width = 270;
+    cover->Height = 370;
+    cover->CornerRadius = Windows::UI::Xaml::CornerRadius(9);
+    cover->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    cover->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+    ConfigureCover(cover, index);
+    if (ArtworkUri(index)->IsEmpty() && games_[index].icon == nullptr) {
+        auto fallback = Vertical();
+        fallback->Margin = Thickness(22, 17, 22, 30);
+        fallback->Children->Append(Text(L"PS VITA", 12, true));
+        auto emblem = Text(L"V", 178, true);
+        emblem->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
+        emblem->Opacity = 0.21;
+        emblem->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+        fallback->Children->Append(emblem);
+        fallback->Children->Append(Text(games_[index].name, 19, true));
+        cover->Child = fallback;
+    }
+    layout->Children->Append(cover);
+
+    auto right = Vertical();
+    right->Margin = Thickness(30, 16, 15, 12);
+    Grid::SetColumn(right, 1);
+    auto category = Text(L"PLAYSTATION VITA  /  " + games_[index].sourceType, 12, true);
+    category->CharacterSpacing = 100;
+    category->Foreground = Solid(Accent());
+    right->Children->Append(category);
+    auto title = Text(games_[index].name, 50, true);
+    title->FontWeight = FontWeights::Light;
+    title->Margin = Thickness(0, 13, 0, 17);
+    title->MaxWidth = 790;
+    right->Children->Append(title);
+    auto note = Text(L"Added to your personal collection. This build can display metadata and artwork while the emulator core is being ported.", 17, false, true);
+    note->MaxWidth = 700;
+    right->Children->Append(note);
+
+    auto actions = ref new StackPanel();
+    actions->Orientation = Orientation::Horizontal;
+    actions->Margin = Thickness(0, 28, 0, 12);
+    auto inspect = Button(L"Inspect game", true);
+    inspect->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         InspectLaunch(index);
     });
-    actions->Children->Append(preflight);
+    actions->Children->Append(inspect);
+    auto image = Button(L"Change cover art");
+    image->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+        ChooseCustomArtwork(index);
+    });
+    actions->Children->Append(image);
+    auto find = Button(L"Find artwork online");
+    find->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+        FetchArtwork(index);
+    });
+    actions->Children->Append(find);
+    right->Children->Append(actions);
+
+    auto validation = Text(L"SOURCE CHECK:  " + games_[index].validation, 14, false, true);
+    validation->MaxWidth = 750;
+    validation->Margin = Thickness(0, 12, 0, 6);
+    right->Children->Append(validation);
     if (games_[index].format == vita3k_uwp::GameFormat::Pkg) {
-        auto licenseToken = L"vita-license-" + games_[index].key;
-        const bool hasLicense = StorageApplicationPermissions::FutureAccessList->ContainsItem(licenseToken);
-        actions->Children->Append(Text(hasLicense ?
-            L"PKG license file selected. Decryption not available until the core is linked." :
-            L"PKG content usually requires its matching license from a legitimately owned Vita game.",
-            15, false, true));
-        auto license = Button(L"Choose matching owned PKG license file");
+        auto license = Button(L"Select owned PKG license");
+        license->Margin = Thickness(0, 14, 0, 0);
         license->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
             ChooseLicenseForGame(index);
         });
-        actions->Children->Append(license);
+        right->Children->Append(license);
     }
-    auto custom = Button(L"Choose custom box art", true);
-    custom->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
-        ChooseCustomArtwork(index);
-    });
-    actions->Children->Append(custom);
-    auto online = Button(L"Find matching SteamGridDB cover");
-    online->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
-        FetchArtwork(index);
-    });
-    actions->Children->Append(online);
-    auto back = Button(L"Back to collection");
-    back->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
-        ShowPage(1);
-    });
-    actions->Children->Append(back);
-    horizontal->Children->Append(actions);
-    content_->Children->Append(Panel(horizontal));
+    layout->Children->Append(right);
+    feature->Child = layout;
+    content_->Children->Append(feature);
+    auto status = Text(L"EARLY ACCESS  /  Vita3K CPU, kernel, package installation and game rendering are still in development.", 13, false, true);
+    status->Margin = Thickness(3, 22, 0, 0);
+    content_->Children->Append(status);
 }
 void CatalogShell::Render() {
     content_->Children->Clear();
