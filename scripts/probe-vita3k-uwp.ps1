@@ -106,8 +106,6 @@ $buildExit = $LASTEXITCODE
 "Build exit: $buildExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $buildLog -Tail 90 | Out-File (Join-Path $out 'build-tail.txt')
 if ($buildExit -ne 0) {
-  try { & "$PSScriptRoot/build-keep-going.ps1" -BuildDir "$root/build/core-uwp-probe" -OutDir $out }
-  catch { Write-Host "::warning::Diagnostic compile pass failed: $($_.Exception.Message)" }
   throw "Real Vita3K libretro code could not be linked for UWP. See build.log and keepgoing-errors.txt."
 }
 $cores = Get-ChildItem "$root/build/core-uwp-probe" -Recurse -Filter 'vita3k_libretro.dll' -File

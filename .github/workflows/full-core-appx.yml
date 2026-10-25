@@ -24,7 +24,7 @@ on:
       - src/**
 concurrency:
   group: full-core-appx-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 permissions:
   contents: read
   actions: read
@@ -118,6 +118,23 @@ jobs:
             New-Item -ItemType Directory -Force artifacts/core-port | Out-Null
             ./scripts/probe-vita3k-uwp.ps1
           } finally { Stop-Transcript }
+      - name: Upload primary build logs before downstream diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vita3k-core-primary-logs
+          path: artifacts/core-port/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Compile downstream core modules to collect remaining errors
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path build/core-uwp-probe/vita3k) {
+            ./scripts/build-keep-going.ps1 -BuildDir build/core-uwp-probe -OutDir artifacts/core-port
+          } else {
+            Write-Host 'No generated core projects: inspect the primary configure/fetch logs.'
+          }
       - name: Stage core DLL and runtime dependencies for the APPX
         shell: pwsh
         run: |

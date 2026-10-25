@@ -81,3 +81,12 @@ replace('vita3k/codec/src/aac.cpp', '''        LOG_WARN("Error sending Aac packe
         av_frame_unref(frame);
         return false;''')
 print('Applied checked UWP CLI argv, filesystem semantics and padded AAC decoder fixes.')
+
+# The app library is downstream of config/io. Catch the same known Boost
+# assumptions here before waiting for another compile layer to expose them.
+replace('vita3k/app/src/apps_list.cpp',
+        'entry.path().filename_is_dot() || entry.path().filename_is_dot_dot()',
+        'entry.path().filename() == fs::path(".") || entry.path().filename() == fs::path("..")')
+replace('vita3k/app/src/apps_list.cpp',
+        'static_cast<int64_t>(fs::last_write_time(path))',
+        'static_cast<int64_t>(fs::last_write_time(path).time_since_epoch().count())')

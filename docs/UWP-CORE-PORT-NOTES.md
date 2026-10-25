@@ -128,3 +128,7 @@ AAC fixture data is a generated 440 Hz stereo tone, with no game or firmware.
 The codec test can optionally compare PCM against an independently decoded
 reference supplied as its second argument. Linux checks used the exact pinned
 source and FFmpeg 6.1.1; Windows and Xbox verification remain necessary.
+
+A further source sweep also adapted app-cache dot-entry checks and native file-clock timestamps, which are downstream of the failed config/IO targets.
+
+The follow-up workflow uploads primary failure logs before running downstream diagnostics, so the first failure is downloadable while the longer diagnostic pass continues.
