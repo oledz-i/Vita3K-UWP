@@ -8,7 +8,7 @@ permissions:
   actions: read
 concurrency:
   group: vita-guest-xbox-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   build-vita-arm-jit:
     name: Compile Vita guest ARM executable test for UWP
