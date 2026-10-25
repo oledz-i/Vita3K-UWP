@@ -59,14 +59,14 @@ struct GuestMemory final : public Dynarmic::A32::UserCallbacks {
     void MemoryWrite16(Dynarmic::A32::VAddr a, std::uint16_t v) override { Write(a, v); }
     void MemoryWrite32(Dynarmic::A32::VAddr a, std::uint32_t v) override { Write(a, v); }
     void MemoryWrite64(Dynarmic::A32::VAddr a, std::uint64_t v) override { Write(a, v); }
-    void InterpreterFallback(VAddr, std::size_t) override {
+    void InterpreterFallback(Dynarmic::A32::VAddr, std::size_t) override {
         if (jit) jit->HaltExecution(Dynarmic::HaltReason::UserDefined1);
     }
     void CallSVC(std::uint32_t immediate) override {
         if (immediate == 1) ++svcCalls;
         if (jit) jit->HaltExecution(Dynarmic::HaltReason::UserDefined1);
     }
-    void ExceptionRaised(VAddr, Dynarmic::A32::Exception) override {
+    void ExceptionRaised(Dynarmic::A32::VAddr, Dynarmic::A32::Exception) override {
         badAddress = true;
         if (jit) jit->HaltExecution(Dynarmic::HaltReason::UserDefined1);
     }
