@@ -1615,11 +1615,12 @@ const FirmwareSlot kFirmwareSlots[3] = {
       L"The PS Vita system software update from Sony's PS Vita system software page. "
       L"Sony names it PSP2UPDAT.PUP (some older copies are called PSVUPDAT.PUP)." },
     { L"Preinstalled package", true, L"PSP2UPDAT_PREINST.PUP", L"pd0", L"vita-firmware-preinst",
-      L"Sony's preinstalled-apps package, linked from Vita3K's quickstart guide. Its download is "
-      L"also named PSP2UPDAT.PUP, so rename it (for example PREINST.PUP) to keep it apart from the system firmware." },
+      L"Sony's preinstalled-apps package, from Sony's update servers (Vita3K's Discord gives the link "
+      L"with the -firmware command). Its download is also named PSP2UPDAT.PUP, so rename it (for example "
+      L"PREINST.PUP) to keep it apart from the system firmware." },
     { L"Font package", false, L"PSP2UPDAT_FONT.PUP", L"sa0", L"vita-firmware-font",
-      L"Fonts that some games and system dialogs use, linked from Vita3K's quickstart guide. "
-      L"Also downloaded as PSP2UPDAT.PUP; rename it (for example FONT.PUP)." },
+      L"The system fonts. Without them some games and dialogs show no text. From Sony's update servers, "
+      L"like the preinstalled package; also downloaded as PSP2UPDAT.PUP, so rename it (for example FONT.PUP)." },
 };
 
 std::wstring FirmwareRoot() {
@@ -1739,9 +1740,9 @@ void CatalogShell::FirmwareSettings() {
     Section(L"Firmware", L"Vita3K needs Sony's PS Vita firmware. This app ships none of it.");
     auto box = Vertical();
     box->Children->Append(Text(
-        L"Download the files from Sony on a PC: the system firmware from Sony's PS Vita system software "
-        L"page, and the preinstalled and font packages from the links in Vita3K's quickstart guide "
-        L"(vita3k.org/quickstart). All three downloads are named PSP2UPDAT.PUP. Rename the second and third "
+        L"Download the files on a PC: the system firmware from Sony's PS Vita system software page; the "
+        L"preinstalled and font packages come from Sony's update servers, and Vita3K's Discord gives the links "
+        L"(-firmware command). All three downloads are named PSP2UPDAT.PUP. Rename the second and third "
         L"(for example PREINST.PUP and FONT.PUP), copy them to a USB drive or network share, and choose "
         L"each one in its own slot below. They install the first time a game starts.", 13, false, true));
     for (int i = 0; i < 3; ++i) {

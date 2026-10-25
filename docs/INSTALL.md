@@ -1,43 +1,53 @@
-# Install the development UI
+# Install and test on Xbox
 
-**This package cannot run PS Vita games.** On the `core-integration` branch it contains a native streaming-style catalog UI, Vita3K allocator diagnostics and a D3D12 display bootstrap. Xbox behavior still needs testing.
+**Pre-alpha.** The package contains the full Vita3K core, but no game has been confirmed to boot on Xbox yet. Expect crashes, and send the log (below) when one happens.
 
-## Get the files
+## 1. Get the build
 
-On GitHub, open `oledz-i/Vita3K-UWP` → Actions → UWP development package. Choose a successful run and choose the **core-integration** branch build and download `Vita3K-UWP-core-d3d12-x64-<run number>`. The default `main` branch currently has the older development shell. Extract the ZIP. Locate the application `.appx` and any x64 dependencies below `Dependencies/`. The artifact also includes `Development.cer`, `build-info.json`, and `SHA256SUMS.txt`.
+On GitHub, open `oledz-i/Vita3K-UWP` → **Actions** → **Full Vita3K core + Dozen signed APPX (gameplay path)**. Pick the latest successful run on `astra-undertale` and download **`Vita3K-Build-Output-x64-<run number>`**. That is the one to install. The other artifacts are build intermediates and logs.
 
-## Optional Onyx-backed GPU prototype
+Unzip it. Inside are the `.appx`, any x64 dependencies under `Dependencies/`, `Development.cer`, `build-info.json` and `SHA256SUMS.txt`.
 
-For the `onyx-dozen-integration` branch, use the separate [Onyx Dozen build workflow](https://github.com/oledz-i/Vita3K-UWP/actions/workflows/onyx-dozen.yml). If **both** the Mesa UWP build and signed APPX package jobs succeed, download the artifact whose name begins `Vita3K-UWP-ONYX-Dozen-x64-`. It includes the genuine patched `vulkan_dzn.dll` GPU driver and `dxil.dll` shader support dependency inside the APPX. The `source-host-smoke` artifact compiles the same host without Dozen, for safe comparison.
+## 2. Deploy through Developer Mode
 
-On your Xbox, open **Developer → Probe actual packaged Vulkan device**. Record whether the test reports driver discovery, a Vulkan instance, GPU adapters and a created logical graphics device. If there is a `VkResult` or loader error, capture the exact text. This is **not** a PS Vita game boot test: the CPU/core and Vita Vulkan frame bridge are still required.
+1. Put the Xbox in Developer Mode ([Microsoft's guide](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/devkit-activation)).
+2. Open the Xbox Device Portal from a PC on the same network: `https://<xbox-ip>:11443`.
+3. **Add** the `.appx`, plus the x64 dependencies if the portal asks. Skip ARM and x86 ones.
+4. Launch it from Dev Home. Each CI run signs with a new test certificate, so a newer build may need the old one uninstalled first. **Uninstalling deletes the app's data, firmware and copied games included.**
 
-The prototype code derives from your [OnyxEMU renderer](https://github.com/oledz-i/OnyxEMU) and carries GPLv3 attribution in `COPYING.GPLv3.txt` and `NOTICE.md`. See [renderer source details](ONYX_GPU_PORT.md).
+## 3. Firmware
 
-## Xbox Series X|S Developer Mode
+Vita3K needs Sony's PS Vita firmware. This project ships none of it. Download on a PC:
 
-1. Activate and enter Xbox Developer Mode using Microsoft's official setup instructions.
-2. Open the console's Xbox Device Portal from a computer on the same network.
-3. Use its app deployment page to upload the application APPX. Add the included x64 runtime dependencies if requested. Do not upload ARM or x86 dependencies.
-4. Deploy and launch **Vita3K UWP Development** from Dev Home.
-5. Expected result: the new **Discover** page with a featured banner and library shelves. Navigate to **Settings** to try five themes, four original menu tracks and four interface cues (focus, select, back and swipe). Cues have an independent on/off setting and volume slider.
-6. Navigate the interface with Xbox controls, including **B** to return to the preceding page. Try scanning a folder containing extracted Vita games and supported file formats, or add an individual VPK/ZIP/PKG/VCI file. Open a card to see its input-header check. The test will not launch a game.
-7. Navigate to **Developer** and select **Check for actual Vita3K core** and **Probe actual packaged Vulkan device**. The normal APPX does not contain a full UWP Vita3K DLL or Mesa Dozen ICD, so both may report missing. These are **missing-dependency diagnostics**, not reasons to assume Xbox is incompatible. An experimental UWP source compilation report is recorded in the GitHub Actions port-probe artifact.
-8. Run the Vita3K allocator test and initialize the D3D12 preview. The test should paint a native frame on Xbox; a successful Windows APPX build does not prove the console API will work.
-9. Record whether the interface launches, controller focus works, menu music plays, stored paths and custom artwork persist, and the app can resume and close normally. **Do not expect game booting, even for homebrew:** the executable loader, CPU, kernel and Vita GXM renderer remain unavailable in the Xbox port.
+| Part | Status | Where | Download name | Rename to (suggested) |
+| --- | --- | --- | --- | --- |
+| System firmware | Required | Sony's PS Vita system software page | `PSP2UPDAT.PUP` (older copies: `PSVUPDAT.PUP`) | keep the name |
+| Preinstalled package | Required | Sony's update servers; Vita3K's Discord gives the link (`-firmware` command) | `PSP2UPDAT.PUP` | `PREINST.PUP` |
+| Font package | Optional, but some games show no text without it | Sony's update servers; same as above | `PSP2UPDAT.PUP` | `FONT.PUP` |
 
-Developer Mode and Device Portal setup: https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/devkit-activation and https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal-xbox . Portal controls can differ across console versions. If certificate validation fails, record the exact portal error rather than disabling security checks or treating a successful build as a deployment guarantee.
+All three downloads share one name, so rename the second and third before copying them to a USB drive or network share. In the app, open **Settings → Firmware** and choose each file in its own slot. The app checks that each one is a PlayStation update package and refuses a file whose name says it is another part.
 
-This frontend makes no claim to expanded game resources. Later renderer and memory tests must log the actual resource limits on hardware. No retail-mode installation is provided.
+The firmware installs the first time a game starts, which takes a few minutes. Each slot then shows **Installed**. If an install went wrong, **Reinstall firmware on next start** removes the installed parts but keeps the chosen files.
 
-## Windows test installation
+## 4. Games
 
-Use a Windows system configured for development/sideloading. Inspect the certificate and package provenance before trusting the included **public development certificate**. If needed, import it into **Local Computer → Trusted People** using Windows Certificate Import Wizard, then install any included x64 dependencies and the APPX. Remove the test certificate when finished. Never import it into Trusted Root Certification Authorities.
+Supported: `.vpk`, `.zip`, `.pkg` with its license (`work.bin`, `.rif` or `.zrif`), or an extracted game folder (the folder that holds `eboot.bin` and `sce_sys`).
 
-Each CI run creates a new test certificate. In-place upgrades across builds may require removing the previous shell and trusting the new certificate. Uninstalling an app removes its local app data; this development UI has no emulator saves, but future builds will require backup instructions and a stable release-signing identity.
+- **Choose a folder** can be a folder of games or a single game's folder.
+- On first start the app copies the game into its own storage, because Vita3K can only read files there. A large game takes a while. Later starts reuse the copy.
+- An `eboot.bin` picked on its own cannot start. Add its whole folder instead.
 
-APPX is the supplied format. Changing its extension to `.msix` does not port or improve the app.
+## 5. Emulator settings
 
-## Report results
+**Settings → Emulation** lists Vita3K's options for graphics, CPU, content, system, audio and network. They are saved on the console and take effect when a game starts. **Restore default emulation options** puts them back.
 
-Include source commit and package version from `build-info.json`, console model/OS, deployment error code if any, and what appears after launch. Attach relevant logs after removing private paths or account details. Use this repository's bug report template. Read [frontend usage](UI.md) for themes, artwork, soundtracks and metadata behavior, and [real core port status](CORE_PORT.md) for the upstream libretro and Dozen experiments. Do not file this port's issues against upstream Vita3K.
+## 6. When something goes wrong: the log
+
+The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → oledz.Vita3KUWP.Dev_… → LocalState** and download `vita3k-runtime.log`. Send that with:
+
+- the commit from `build-info.json`
+- the console (Series S or X)
+- the game and its format
+- what was on screen when it stopped
+
+Do not report this port's problems to upstream Vita3K.
