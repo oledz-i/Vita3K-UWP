@@ -363,7 +363,13 @@ void CatalogShell::BuildNavigation() {
 
     const wchar_t* glyphs[] = {L"\uE80F", L"\uE8B7", L"\uE713", L"\uE90F"};
     const wchar_t* labels[] = {L"HOME", L"LIBRARY", L"SETTINGS", L"TOOLS"};
-    for (int i = 0; i < 4; ++i) {
+    // Preview builds expose diagnostics. Public release builds hide Tools.
+#if defined(VITA3K_RELEASE_BUILD)
+    constexpr int visibleTabs = 3;
+#else
+    constexpr int visibleTabs = 4;
+#endif
+    for (int i = 0; i < visibleTabs; ++i) {
         const bool selected = page_ == i || (i == 1 && page_ == 4);
         auto nav = ref new Windows::UI::Xaml::Controls::Button();
         nav->Margin = Thickness(11, 0, 11, 14);
@@ -398,6 +404,9 @@ void CatalogShell::BuildNavigation() {
     navigation_->Child = rail;
 }
 void CatalogShell::ShowPage(int nextPage) {
+#if defined(VITA3K_RELEASE_BUILD)
+    if (nextPage == 3) nextPage = 0;
+#endif
     if (nextPage < 0 || nextPage > 4) nextPage = 0;
     if (page_ == 3 && nextPage != 3) renderer_.Shutdown();
     page_ = nextPage;
