@@ -37,14 +37,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'APPX signature verification failed.' }
     Copy-Item "$root/docs/INSTALL.md" "$packages/INSTALL.md"
     Copy-Item "$root/COPYING.txt" "$packages/COPYING.txt"
+    if (Test-Path "$root/COPYING.GPLv3.txt") { Copy-Item "$root/COPYING.GPLv3.txt" "$packages/COPYING.GPLv3.txt" }
     Copy-Item "$root/NOTICE.md" "$packages/NOTICE.md"
     $hash = Get-FileHash $appx[0].FullName -Algorithm SHA256
     "$($hash.Hash)  $($appx[0].Name)" | Set-Content "$packages/SHA256SUMS.txt"
     $commit = git -C $root rev-parse HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source commit.' }
-    @{source_commit=$commit; version="0.1.$BuildNumber.0"; architecture='x64'; kind='library-ui-and-core-d3d12-preflight'; emulator_core_integrated=$false; vita3k_allocator_integrated=$true; d3d12_host_linked=$true; ui_sound_effects=$true; formats_recognized=@('vpk','zip','pkg','vci','eboot.bin','extracted-folders'); game_boot_supported=$false; game_package_installer_integrated=$false; libretro_core_dll_packaged=(Test-Path "$root/src/Vita3K.UWP/vita3k_libretro.dll"); vulkan_dozen_verified_on_xbox=$false; certificate_thumbprint=$cert.Thumbprint} | ConvertTo-Json | Set-Content "$packages/build-info.json"
+    @{source_commit=$commit; version="0.1.$BuildNumber.0"; architecture='x64'; kind='library-ui-and-core-d3d12-preflight'; emulator_core_integrated=$false; vita3k_allocator_integrated=$true; d3d12_host_linked=$true; ui_sound_effects=$true; formats_recognized=@('vpk','zip','pkg','vci','eboot.bin','extracted-folders'); game_boot_supported=$false; game_package_installer_integrated=$false; libretro_core_dll_packaged=(Test-Path "$root/src/Vita3K.UWP/vita3k_libretro.dll"); onyx_dozen_icd_packaged=(Test-Path "$root/src/Vita3K.UWP/vulkan_dzn.dll"); onyx_dxil_packaged=(Test-Path "$root/src/Vita3K.UWP/dxil.dll"); onyx_source_revision='78f2561a16fe7a65e59893f896611263f10575c5'; vulkan_dozen_verified_on_xbox=$false; certificate_thumbprint=$cert.Thumbprint} | ConvertTo-Json | Set-Content "$packages/build-info.json"
     if ($env:GITHUB_STEP_SUMMARY) {
-        "## Vita3K UWP core/renderer integration`nBuilt signed x64 APPX **0.1.$BuildNumber.0** from $commit.`n`n**Streaming library, focus/select/back/swipe sounds, Vita input-format preflight, upstream bitmap allocator and D3D12 presentation are included. No actual Vita loader, CPU/kernel/GXM renderer or game booting is integrated.** Download the package artifact for APPX, dependencies, public test certificate and installation instructions. Xbox launch must be tested on hardware." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+        "## Vita3K UWP core/renderer integration`nBuilt signed x64 APPX **0.1.$BuildNumber.0** from $commit.`n`n**Streaming library, UI audio, Vita file recognition, genuine Vita3K allocator and D3D12 presentation are included. This branch supports packaging Onyx-patched Mesa Dozen when its own source build succeeds. No complete Vita3K CPU/kernel, Vulkan game-render bridge, or game booting has been demonstrated.** Download the package artifact for APPX, dependencies, public test certificate and installation instructions. Xbox launch must be tested on hardware." | Out-File $env:GITHUB_STEP_SUMMARY -Append
     }
 } finally {
     [IO.File]::WriteAllText($manifestPath, $originalManifest)
