@@ -28,6 +28,7 @@ replace_once(
     """if(BUILD_LIBRETRO AND CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
     # Xbox libretro audio is passed to the frontend, not the WinMM backend.
     add_library(cubeb INTERFACE)
+    target_include_directories(cubeb INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/cubeb/include")
 else()
     add_subdirectory(cubeb EXCLUDE_FROM_ALL)
 endif()"""
@@ -52,6 +53,11 @@ replace_once(
         src/audio.cpp
         src/impl/libretro_audio.cpp
         @CUBEB_SOURCE@)""".replace("@CUBEB_SOURCE@", "${VITA3K_LIBRETRO_CUBEB_SOURCE}")
+)
+replace_once(
+    "vita3k/audio/src/audio.cpp",
+    "#include <audio/impl/cubeb_audio.h>",
+    "#ifndef VITA3K_UWP\\n#include <audio/impl/cubeb_audio.h>\\n#endif".replace("\\\\n", "\\n")
 )
 replace_once(
     "vita3k/audio/src/audio.cpp",
