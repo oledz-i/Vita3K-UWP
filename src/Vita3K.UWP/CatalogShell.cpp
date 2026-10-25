@@ -436,7 +436,20 @@ Platform::String^ CatalogShell::ArtworkUri(size_t index) {
     return Pref(L"art.remote." + key);
 }
 void CatalogShell::ConfigureCover(Border^ cover, size_t index) {
-    cover->Background = Gradient(Card(), Glow());
+    // Give every title a film-poster-like palette even when offline or when
+    // SteamGridDB has no match. Never display made-up third-party game art.
+    const Color posterTops[] = {
+        RgbColor(99, 34, 63), RgbColor(31, 78, 112),
+        RgbColor(40, 92, 91), RgbColor(109, 71, 41),
+        RgbColor(70, 50, 113)
+    };
+    const Color posterBottoms[] = {
+        RgbColor(23, 15, 30), RgbColor(14, 22, 35),
+        RgbColor(13, 30, 32), RgbColor(33, 19, 16),
+        RgbColor(18, 17, 36)
+    };
+    const auto palette = static_cast<unsigned>(index % 5);
+    cover->Background = Gradient(posterTops[palette], posterBottoms[palette]);
     const auto url = ArtworkUri(index);
     if (!url->IsEmpty()) {
         try {
@@ -445,7 +458,7 @@ void CatalogShell::ConfigureCover(Border^ cover, size_t index) {
             brush->Stretch = Stretch::UniformToFill;
             cover->Background = brush;
         } catch (Platform::Exception^) {
-            cover->Background = Gradient(Card(), Glow());
+            cover->Background = Gradient(posterTops[palette], posterBottoms[palette]);
         }
     } else if (index < games_.size() && games_[index].icon != nullptr) {
         // Local icon0.png is a fallback only. It is not mislabeled as box art.
@@ -961,20 +974,56 @@ void CatalogShell::Render() {
 void CatalogShell::Settings() {
     Banner(L"PERSONALIZE YOUR EXPERIENCE", L"Your Vita. Your atmosphere.",
         L"Change the entire interface, choose a menu soundtrack, manage folders and artwork.");
-    Section(L"Appearance", L"Five visual palettes with distinct accent colors.");
+    Section(L"Appearance", L"Five moods. One beautifully simple library.");
     const wchar_t* styles[] = {
-        L"ONYX / Violet night", L"AURORA / Teal haze", L"EMBER / Warm cinema",
-        L"GLACIER / Arctic daylight", L"ORBIT / Cosmic purple"
+        L"Onyx", L"Aurora", L"Ember", L"Glacier", L"Orbit"
     };
-    auto colors = ref new StackPanel();
-    colors->Orientation = Orientation::Horizontal;
+    const wchar_t* captions[] = {
+        L"Midnight & rose", L"Electric teal", L"Warm cinema",
+        L"Arctic blue", L"Cosmic violet"
+    };
+    const Color samples[] = {
+        RgbColor(111, 34, 56), RgbColor(23, 95, 94),
+        RgbColor(127, 65, 37), RgbColor(48, 95, 145),
+        RgbColor(83, 55, 131)
+    };
+    auto palettes = ref new StackPanel();
+    palettes->Orientation = Orientation::Horizontal;
     for (int i = 0; i < 5; ++i) {
-        auto b = Button(ref new Platform::String(styles[i]), theme_ == i);
-        b->MinHeight = 74;
-        b->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) { SaveTheme(i); });
-        colors->Children->Append(b);
+        const bool active = theme_ == i;
+        auto choice = ref new Windows::UI::Xaml::Controls::Button();
+        choice->Width = 179;
+        choice->Height = 108;
+        choice->Margin = Thickness(0, 3, 13, 3);
+        choice->Padding = Thickness(0);
+        choice->BorderThickness = Thickness(active ? 2 : 1);
+        choice->BorderBrush = Solid(active ? Accent() : RgbColor(54, 56, 65));
+        auto swatch = ref new Border();
+        swatch->Background = Gradient(RgbColor(23, 23, 29), samples[i]);
+        swatch->Padding = Thickness(15);
+        auto caption = Vertical();
+        caption->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
+        auto name = Text(ref new Platform::String(styles[i]), 19, true);
+        caption->Children->Append(name);
+        auto sub = Text(ref new Platform::String(captions[i]), 11, false, true);
+        sub->Foreground = Solid(RgbColor(214, 212, 225));
+        sub->Margin = Thickness(0, 4, 0, 0);
+        caption->Children->Append(sub);
+        swatch->Child = caption;
+        choice->Content = swatch;
+        choice->GotFocus += ref new RoutedEventHandler(
+            [this](Platform::Object^, RoutedEventArgs^) { PlayCue(0); });
+        choice->Click += ref new RoutedEventHandler(
+            [this,i](Platform::Object^, RoutedEventArgs^) { SaveTheme(i); });
+        palettes->Children->Append(choice);
     }
-    content_->Children->Append(colors);
+    auto themeScroll = ref new ScrollViewer();
+    themeScroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Hidden;
+    themeScroll->HorizontalScrollMode = ScrollMode::Enabled;
+    themeScroll->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
+    themeScroll->Content = palettes;
+    content_->Children->Append(themeScroll);
+
     Section(L"Home menu soundtrack", L"Original loopable music, your own audio, or silence.");
     const wchar_t* names[] = {
         L"Off", L"Ambient Drift", L"Neon Pulse", L"Stardust", L"Tidal Blue", L"Custom track"
