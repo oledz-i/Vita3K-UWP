@@ -27,6 +27,7 @@ public:
 
 private:
     std::vector<LibraryGame> games_;
+    bool booting_ = false;
     Windows::UI::Xaml::Controls::Grid^ root_;
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
@@ -104,6 +105,7 @@ private:
     void CheckGameFolder(size_t index, unsigned revision);
     void InspectLaunch(size_t index);
     void AttemptBoot(size_t index);
+    void StartCore(Platform::String^ contentPath);
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
     void ChoosePreinstalledFirmware();

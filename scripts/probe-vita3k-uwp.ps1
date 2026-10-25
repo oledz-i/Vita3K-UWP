@@ -62,6 +62,8 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 if ($LASTEXITCODE -ne 0) { throw 'Pinned filesystem port failed' }
 & python "$root/scripts/patch-vita3k-uwp-round2.py" "$upstream" 2>&1 | Tee-Object -FilePath (Join-Path $out 'config-codec-io-port.log')
 if ($LASTEXITCODE -ne 0) { throw 'Checked config/codec/io port adapter failed' }
+& python "$root/scripts/patch-vita3k-uwp-round3.py" "$upstream" 2>&1 | Tee-Object -FilePath (Join-Path $out 'firmware-install-port.log')
+if ($LASTEXITCODE -ne 0) { throw 'Firmware installation hardening failed' }
 & "$root/scripts/test-uwp-path-format.ps1"
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }

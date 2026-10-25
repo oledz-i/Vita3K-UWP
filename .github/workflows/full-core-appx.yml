@@ -16,6 +16,8 @@ on:
       - scripts/probe-vita3k-uwp.ps1
       - scripts/patch-vita3k-uwp.py
       - scripts/patch-vita3k-uwp-round2.py
+      - scripts/patch-vita3k-uwp-round3.py
+      - scripts/core-patches/**
       - scripts/build-keep-going.ps1
       - third_party/ffmpeg-internal/**
       - scripts/fix-sdl-uwp-vcxproj.ps1

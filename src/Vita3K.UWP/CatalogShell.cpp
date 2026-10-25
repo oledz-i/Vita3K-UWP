@@ -9,7 +9,10 @@
 #include "UwpJitProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
+#include <collection.h>
 #include <algorithm>
+#include <atomic>
+#include <functional>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1716,7 +1719,17 @@ void CatalogShell::ScanGames() {
     SetStatus(L"Scanning up to 300 entries and checking supported Vita source formats...");
     create_task(access->GetFolderAsync(L"vita-games")).then(
         [](StorageFolder^ folder) {
-            return create_task(folder->GetItemsAsync(0, 300));
+            // The chosen folder may be one game rather than a folder of games
+            // (its eboot.bin is right there). Then it is the only entry.
+            return create_task(folder->TryGetItemAsync(L"eboot.bin")).then(
+                [folder](IStorageItem^ eboot) -> task<Windows::Foundation::Collections::IVectorView<IStorageItem^>^> {
+                    if (eboot != nullptr) {
+                        auto single = ref new Platform::Collections::Vector<IStorageItem^>();
+                        single->Append(folder);
+                        return task_from_result(single->GetView());
+                    }
+                    return create_task(folder->GetItemsAsync(0, 300));
+                });
         }).then([this](task<Windows::Foundation::Collections::IVectorView<IStorageItem^>^> work) {
             try {
                 auto items = work.get();
@@ -1854,12 +1867,88 @@ void CatalogShell::InspectLaunch(size_t index) {
         L"and GXM renderer are not integrated in this UWP build.");
 }
 
+namespace {
+// Progress of one staging copy, shared by its tasks.
+struct StageProgress {
+    std::atomic<uint32_t> files{0};
+    std::atomic<uint32_t> skipped{0};
+    std::atomic<uint64_t> bytes{0};
+};
+
+// Copies one file unless an identical-sized copy is already there, so a game
+// that was staged before starts without copying gigabytes again, and an
+// interrupted copy resumes where it stopped.
+task<void> StageFile(StorageFile^ source, StorageFolder^ target, std::shared_ptr<StageProgress> progress) {
+    return create_task(target->TryGetItemAsync(source->Name))
+    .then([source,target,progress](IStorageItem^ existing) -> task<void> {
+        auto copy = [source,target,progress]() {
+            return create_task(source->CopyAsync(target, source->Name, NameCollisionOption::ReplaceExisting))
+                .then([progress](StorageFile^) { progress->files++; });
+        };
+        auto existingFile = dynamic_cast<StorageFile^>(existing);
+        if (existingFile == nullptr) return copy();
+        return create_task(source->GetBasicPropertiesAsync())
+        .then([existingFile](FileProperties::BasicProperties^ from) {
+            return create_task(existingFile->GetBasicPropertiesAsync())
+                .then([from](FileProperties::BasicProperties^ to) { return from->Size == to->Size; });
+        }).then([copy,progress](bool same) -> task<void> {
+            if (same) { progress->skipped++; return task_from_result(); }
+            return copy();
+        });
+    });
+}
+
+task<void> StageFolder(StorageFolder^ source, StorageFolder^ target, std::shared_ptr<StageProgress> progress,
+                       std::function<void()> report) {
+    return create_task(source->GetFilesAsync())
+    .then([source,target,progress,report](Collections::IVectorView<StorageFile^>^ files) {
+        task<void> chain = task_from_result();
+        for (auto file : files) {
+            chain = chain.then([file,target,progress,report]() {
+                return StageFile(file, target, progress).then([report]() { report(); });
+            });
+        }
+        return chain;
+    }).then([source]() { return create_task(source->GetFoldersAsync()); })
+    .then([target,progress,report](Collections::IVectorView<StorageFolder^>^ folders) {
+        task<void> chain = task_from_result();
+        for (auto folder : folders) {
+            chain = chain.then([folder,target,progress,report]() {
+                return create_task(target->CreateFolderAsync(folder->Name, CreationCollisionOption::OpenIfExists))
+                    .then([folder,progress,report](StorageFolder^ child) {
+                        return StageFolder(folder, child, progress, report);
+                    });
+            });
+        }
+        return chain;
+    });
+}
+
+std::string Utf8Of(Platform::String^ source) {
+    const int count = WideCharToMultiByte(CP_UTF8, 0, source->Data(), -1, nullptr, 0, nullptr, nullptr);
+    if (count <= 1) return std::string();
+    std::string result(static_cast<size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, source->Data(), -1, &result[0], count, nullptr, nullptr);
+    result.resize(static_cast<size_t>(count - 1));
+    return result;
+}
+}
+
 void CatalogShell::AttemptBoot(size_t index) {
     if (index >= games_.size()) return;
-    auto game = games_[index].file;
-    if (game == nullptr) {
-        SetStatus(L"Cannot launch: choose a Vita VPK/PKG/ZIP/VCI file. "
-            L"Extracted game directories are not staged yet.");
+    if (booting_) {
+        SetStatus(L"A game is already starting. Wait for it to finish.");
+        return;
+    }
+    auto folder = games_[index].directory;
+    // A folder game also carries its eboot.bin; the whole folder is what runs.
+    auto file = folder != nullptr ? nullptr : games_[index].file;
+    if (file == nullptr && folder == nullptr) {
+        SetStatus(L"This entry has no game file or folder to start.");
+        return;
+    }
+    if (file != nullptr && _wcsicmp(file->Name->Data(), L"eboot.bin") == 0) {
+        SetStatus(L"An eboot.bin can't start on its own. Add the game's whole folder with Choose a folder.");
         return;
     }
     std::wstring probe;
@@ -1867,71 +1956,100 @@ void CatalogShell::AttemptBoot(size_t index) {
         SetStatus(StringOf(probe));
         return;
     }
-    // UWP's file picker grants a StorageFile capability; Vita3K's CRT-based
-    // loader requires a path inside our own app sandbox or a working VFS.
-    // CopyAsync streams disk data without buffering the entire Vita package.
-    SetStatus(L"Preparing game file in Vita3K's private content storage...");
+    booting_ = true;
+    // Vita3K reads games with ordinary file APIs, which UWP only allows inside
+    // the app's own storage, so the game is copied there first. The copy keeps
+    // the original names (the core recognises eboot.bin and folder layouts by
+    // name) and is reused on the next start.
+    auto progress = std::make_shared<StageProgress>();
+    auto dispatcher = Dispatcher;
+    auto lastReport = std::make_shared<std::atomic<uint32_t>>(0);
+    std::function<void()> report = [this,progress,dispatcher,lastReport]() {
+        const uint32_t done = progress->files + progress->skipped;
+        if (done - lastReport->load() < 10) return;
+        lastReport->store(done);
+        dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Low,
+            ref new Windows::UI::Core::DispatchedHandler([this,progress]() {
+                SetStatus(L"Copying the game into Vita3K storage: " +
+                    StringOf(std::to_wstring(progress->files.load())) + L" copied, " +
+                    StringOf(std::to_wstring(progress->skipped.load())) + L" already there...");
+            }));
+    };
+    SetStatus(folder != nullptr
+        ? L"Copying the game folder into Vita3K storage. The first start of a large game takes a while."
+        : L"Copying the game into Vita3K storage...");
     create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
         L"Vita3KContent", CreationCollisionOption::OpenIfExists))
-    .then([game,index](StorageFolder^ target) {
-        auto stagedName = L"vita-" + StringOf(std::to_wstring(index)) +
-            L"-" + game->Name;
-        return create_task(game->CopyAsync(
-            target, stagedName, NameCollisionOption::ReplaceExisting));
-    }).then([this](task<StorageFile^> staged) {
+    .then([file,folder,progress,report](StorageFolder^ content) -> task<Platform::String^> {
+        if (file != nullptr) {
+            return create_task(content->CreateFolderAsync(L"files", CreationCollisionOption::OpenIfExists))
+            .then([file,progress](StorageFolder^ files) {
+                // eboot.bin is only meaningful inside its game folder.
+                return StageFile(file, files, progress).then([files,file]() {
+                    return files->Path + L"\\" + file->Name;
+                });
+            });
+        }
+        return create_task(content->CreateFolderAsync(folder->Name, CreationCollisionOption::OpenIfExists))
+        .then([folder,progress,report](StorageFolder^ target) {
+            return StageFolder(folder, target, progress, report).then([target]() { return target->Path; });
+        });
+    }).then([this,progress](task<Platform::String^> staged) {
         try {
-            auto file = staged.get();
-            if (file == nullptr) return;
-            auto folder = ApplicationData::Current->LocalFolder;
-            auto systemPath = folder->Path + L"\\Vita3KSystem";
-            auto gamePath = file->Path;
-            auto toUtf8 = [](Platform::String^ source) {
-                const int count = WideCharToMultiByte(
-                    CP_UTF8, 0, source->Data(), -1, nullptr, 0, nullptr, nullptr);
-                if (count <= 0) return std::string();
-                std::string result(static_cast<size_t>(count), '\0');
-                WideCharToMultiByte(CP_UTF8, 0, source->Data(), -1,
-                    &result[0], count, nullptr, nullptr);
-                return result;
-            };
-            const std::string system = toUtf8(systemPath);
-            const std::string content = toUtf8(gamePath);
-            libretro_.StopRunning();
-            renderer_.Shutdown();
-            content_->Children->Clear();
-            renderSurface_ = ref new SwapChainPanel();
-            renderSurface_->Height = 544;
-            renderSurface_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
-            content_->Children->Append(renderSurface_);
-            auto stop = Button(L"Stop game");
-            stop->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
-                libretro_.StopRunning(); libretro_.UnloadGame(); ShowPage(1);
-            });
-            content_->Children->Append(stop);
-            std::wstring displayError;
-            if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
-                SetStatus(StringOf(displayError)); return;
-            }
-            libretro_.SetFrameSink([this](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
-                std::wstring error;
-                if (!renderer_.PresentScaledBgraFrame(pixels, width, height, width * 4, rgba, error))
-                    throw std::runtime_error("D3D12 frame presentation failed");
-            });
-            SetStatus(L"Vita file staged. Initializing Vita3K core...");
-            create_task([this,system,content]() {
-                std::wstring detail;
-                if (!libretro_.Initialize(system, detail)) return detail;
-                if (!libretro_.LoadGame(content, detail)) return detail;
-                if (!libretro_.StartRunning(detail)) return detail;
-                return detail;
-            }).then([this](task<std::wstring> result) {
-                try { SetStatus(StringOf(result.get())); }
-                catch (...) {
-                    SetStatus(L"Vita3K loader failed. See core diagnostics.");
-                }
-            }, task_continuation_context::use_current());
+            auto path = staged.get();
+            SetStatus(L"Game ready (" + StringOf(std::to_wstring(progress->files.load())) +
+                L" files copied, " + StringOf(std::to_wstring(progress->skipped.load())) +
+                L" reused). Starting Vita3K...");
+            StartCore(path);
         } catch (Platform::Exception^ error) {
-            SetStatus(L"Couldn't stage game file: " + error->Message);
+            booting_ = false;
+            SetStatus(L"Couldn't copy the game into Vita3K storage: " + error->Message +
+                L" Check free space on the console.");
+        } catch (...) {
+            booting_ = false;
+            SetStatus(L"Couldn't copy the game into Vita3K storage.");
+        }
+    }, task_continuation_context::use_current());
+}
+
+void CatalogShell::StartCore(Platform::String^ contentPath) {
+    const std::string system = Utf8Of(ApplicationData::Current->LocalFolder->Path + L"\\Vita3KSystem");
+    const std::string content = Utf8Of(contentPath);
+    libretro_.StopRunning();
+    renderer_.Shutdown();
+    content_->Children->Clear();
+    renderSurface_ = ref new SwapChainPanel();
+    renderSurface_->Height = 544;
+    renderSurface_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+    content_->Children->Append(renderSurface_);
+    auto stop = Button(L"Stop game");
+    stop->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        libretro_.StopRunning(); libretro_.UnloadGame(); booting_ = false; ShowPage(1);
+    });
+    content_->Children->Append(stop);
+    std::wstring displayError;
+    if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
+        booting_ = false;
+        SetStatus(StringOf(displayError));
+        return;
+    }
+    libretro_.SetFrameSink([this](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
+        std::wstring error;
+        if (!renderer_.PresentScaledBgraFrame(pixels, width, height, width * 4, rgba, error))
+            throw std::runtime_error("D3D12 frame presentation failed");
+    });
+    SetStatus(L"Starting Vita3K. The first start installs the firmware, which can take a few minutes.");
+    create_task([this,system,content]() {
+        std::wstring detail;
+        if (!libretro_.Initialize(system, detail)) return detail;
+        if (!libretro_.LoadGame(content, detail)) return detail;
+        if (!libretro_.StartRunning(detail)) return detail;
+        return detail;
+    }).then([this](task<std::wstring> result) {
+        booting_ = false;
+        try { SetStatus(StringOf(result.get())); }
+        catch (...) {
+            SetStatus(L"Vita3K stopped while loading. vita3k-runtime.log in the app's LocalState folder says where.");
         }
     }, task_continuation_context::use_current());
 }
