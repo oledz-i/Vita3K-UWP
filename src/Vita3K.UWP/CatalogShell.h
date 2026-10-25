@@ -31,6 +31,9 @@ private:
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
     Windows::UI::Xaml::Controls::MediaElement^ musicPlayer_;
+    Windows::Storage::Streams::IRandomAccessStream^ customMusicStream_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ musicStatus_ = nullptr;
+    Platform::String^ playbackStatus_ = L"Not started";
     Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[4] = {};
     Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[4] = {};
     bool cueReady_[4] = {};
@@ -45,6 +48,8 @@ private:
     Windows::UI::Xaml::Controls::TextBlock^ memoryResult_;
     Windows::UI::Xaml::Controls::SwapChainPanel^ renderSurface_;
     Windows::UI::Xaml::Controls::TextBox^ searchBox_;
+    Windows::UI::Xaml::Controls::StackPanel^ libraryResults_;
+    void RefreshLibraryItems();
     D3D12Host renderer_;
     VitaLibretroHost libretro_;
     int page_ = 0;
@@ -81,7 +86,8 @@ private:
     void GameDetails();
     void Settings();
     void Diagnostics();
-    void MakeShelf(Platform::String^ heading, const std::vector<size_t>& items);
+    void MakeShelf(Platform::String^ heading, const std::vector<size_t>& items,
+        Windows::UI::Xaml::Controls::StackPanel^ target = nullptr);
     Windows::UI::Xaml::Controls::Button^ MakeTile(size_t index);
     Platform::String^ ArtworkUri(size_t index);
     void ConfigureCover(Windows::UI::Xaml::Controls::Border^ border, size_t index);
