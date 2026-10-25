@@ -2,7 +2,7 @@ name: Real Vita3K libretro core UWP port attempt
 on:
   workflow_dispatch:
   push:
-    branches: [core-integration]
+    branches: [core-integration, astra-undertale]
     paths:
       - .github/workflows/core-port.yml
       - core-candidates.lock.json
@@ -30,6 +30,9 @@ jobs:
           $actual = (git -C upstream-core rev-parse HEAD).Trim()
           if ($actual -ne $lock.libretro_candidate.commit) { throw 'Pinned core SHA mismatch' }
           Set-Content -Path pinned-core-commit.txt -Value $actual
+      - name: Apply Xbox JIT memory port to the full emulator dependency
+        shell: pwsh
+        run: ./scripts/apply-onyx-dynarmic.ps1 -DynarmicSource upstream-core/external/dynarmic
       - name: Inspect Vita3K port dependencies and try UWP CMake configure
         shell: pwsh
         run: ./scripts/probe-vita3k-uwp.ps1

@@ -8,7 +8,10 @@ using namespace Windows::UI::Xaml;
 namespace Vita3KUWP {
 public ref class App sealed : Application {
 public:
-    App() {}
+    App() {
+        RequiresPointerMode = ApplicationRequiresPointerMode::WhenRequested;
+        ElementSoundPlayer::State = ElementSoundPlayerState::Off;
+    }
 protected:
     virtual void OnLaunched(LaunchActivatedEventArgs^ args) override {
         if (args->PrelaunchActivated) return;

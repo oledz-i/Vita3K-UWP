@@ -612,42 +612,44 @@ void CatalogShell::Home() {
     topLine->Children->Append(hint);
     content_->Children->Append(topLine);
 
-    // The featured experience is the primary view, just as in a streaming
-    // catalog. This is rendered entirely from original shapes and real local art.
-    auto hero = ref new Border();
-    hero->Height = 404;
-    hero->Margin = Thickness(0, 0, 0, 27);
-    hero->CornerRadius = Windows::UI::Xaml::CornerRadius(9);
-    hero->Background = Gradient(RgbColor(21, 21, 26), Glow());
-    auto heroLayout = ref new Grid();
-    auto leftCol = ref new ColumnDefinition();
-    leftCol->Width = GridLength(1.28, GridUnitType::Star);
-    auto rightCol = ref new ColumnDefinition();
-    rightCol->Width = GridLength(0.82, GridUnitType::Star);
-    heroLayout->ColumnDefinitions->Append(leftCol);
-    heroLayout->ColumnDefinitions->Append(rightCol);
-
-    auto copy = Vertical();
-    copy->Margin = Thickness(52, 42, 12, 32);
-    copy->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     const bool hasGames = !games_.empty();
-    auto kicker = Text(hasGames ? L"F E A T U R E D   /   F R O M   Y O U R   L I B R A R Y"
-        : L"Y O U R   G A M E S  .  Y O U R   W O R L D", 12, true);
-    kicker->Foreground = Solid(Accent());
-    copy->Children->Append(kicker);
-    auto headline = Text(hasGames ? games_[0].name : L"Your Vita library.\nBeautifully yours.", 56, true);
-    headline->FontWeight = FontWeights::Light;
-    headline->MaxWidth = 760;
-    headline->MaxHeight = 150;
-    headline->Margin = Thickness(0, 16, 0, 13);
-    copy->Children->Append(headline);
-    auto detail = Text(hasGames ?
-        L"Explore cover art, details and your collection in a home designed for the big screen." :
-        L"Discover your collection in a space built for the games you love. Add a Vita title to begin.",
-        17, false, true);
-    detail->MaxWidth = 590;
-    detail->Margin = Thickness(0, 0, 0, 22);
-    copy->Children->Append(detail);
+    auto hero = ref new Border();
+    hero->Height = 480;
+    hero->Margin = Thickness(-46, -12, -58, 30);
+    auto heroLayout = ref new Grid();
+    heroLayout->Background = Gradient(RgbColor(16, 17, 23), Glow());
+    if (hasGames && !ArtworkUri(0)->IsEmpty()) {
+        auto art = ref new Image();
+        art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(0)));
+        art->Stretch = Stretch::UniformToFill;
+        art->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
+        art->Width = 820;
+        art->Opacity = 0.78;
+        heroLayout->Children->Append(art);
+    }
+    auto fade = ref new LinearGradientBrush();
+    fade->StartPoint = Point(0, 0.5); fade->EndPoint = Point(1, 0.5);
+    auto stop = ref new GradientStop(); stop->Color = Bg(); stop->Offset = 0; fade->GradientStops->Append(stop);
+    stop = ref new GradientStop(); stop->Color = Bg(); stop->Offset = 0.30; fade->GradientStops->Append(stop);
+    stop = ref new GradientStop(); stop->Color = ColorHelper::FromArgb(0, 0, 0, 0); stop->Offset = 1; fade->GradientStops->Append(stop);
+    auto veil = ref new Border(); veil->Background = fade; heroLayout->Children->Append(veil);
+    auto copy = Vertical();
+    copy->Margin = Thickness(50, 45, 48, 45);
+    copy->MaxWidth = 760;
+    copy->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    copy->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+    auto logo = ref new Image(); logo->Width = 64; logo->Height = 64;
+    logo->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    logo->Source = ref new BitmapImage(ref new Uri(L"ms-appx:///Assets/Square150x150Logo.png"));
+    copy->Children->Append(logo);
+    auto kicker = Text(L"Y O U R   P L A Y S T A T I O N   V I T A   C O L L E C T I O N", 11, true, true);
+    kicker->Margin = Thickness(0, 18, 0, 10); copy->Children->Append(kicker);
+    auto headline = Text(hasGames ? games_[0].name : L"Every game.\nA new world.", 66, true);
+    headline->FontWeight = FontWeights::SemiBold;
+    headline->MaxWidth = 680; headline->MaxLines = 2;
+    headline->Margin = Thickness(0, 0, 0, 16); copy->Children->Append(headline);
+    auto detail = Text(hasGames ? L"Picked from your library. Explore the details, choose your artwork, and make it yours." : L"Your collection deserves the big screen. Add your Vita games to get started.", 18, false, true);
+    detail->MaxWidth = 520; detail->Margin = Thickness(0, 0, 0, 25); copy->Children->Append(detail);
     auto controls = ref new StackPanel();
     controls->Orientation = Orientation::Horizontal;
     auto primary = Button(hasGames ? L"View game" : L"Add a game", true);
@@ -665,85 +667,6 @@ void CatalogShell::Home() {
     controls->Children->Append(secondary);
     copy->Children->Append(controls);
     heroLayout->Children->Append(copy);
-
-    auto stage = ref new Grid();
-    stage->Margin = Thickness(0, 12, 12, 12);
-    Grid::SetColumn(stage, 1);
-    auto orb = ref new Ellipse();
-    orb->Width = 365;
-    orb->Height = 365;
-    orb->Fill = Solid(Accent());
-    orb->Opacity = 0.095;
-    orb->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-    orb->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    stage->Children->Append(orb);
-    if (hasGames) {
-        auto featured = ref new Border();
-        featured->Width = 250;
-        featured->Height = 345;
-        featured->CornerRadius = Windows::UI::Xaml::CornerRadius(9);
-        featured->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-        featured->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-        featured->BorderBrush = Solid(RgbColor(94, 93, 103));
-        featured->BorderThickness = Thickness(1);
-        ConfigureCover(featured, 0);
-        if (ArtworkUri(0)->IsEmpty()) {
-            auto centered = Vertical();
-            centered->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-            auto v = Text(L"V", 165, true);
-            v->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
-            v->Opacity = 0.23;
-            v->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-            centered->Children->Append(v);
-            auto name = Text(games_[0].name, 16, true);
-            name->MaxWidth = 205;
-            name->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-            centered->Children->Append(name);
-            featured->Child = centered;
-        }
-        stage->Children->Append(featured);
-    } else {
-        auto backCover = ref new Border();
-        backCover->Width = 242;
-        backCover->Height = 310;
-        backCover->CornerRadius = Windows::UI::Xaml::CornerRadius(12);
-        backCover->Background = Gradient(RgbColor(56, 35, 46), RgbColor(26, 21, 35));
-        backCover->RenderTransformOrigin = Point(0.5, 0.5);
-        auto backRotate = ref new RotateTransform();
-        backRotate->Angle = 14;
-        backCover->RenderTransform = backRotate;
-        backCover->Margin = Thickness(105, 16, 0, 0);
-        stage->Children->Append(backCover);
-
-        auto cover = ref new Border();
-        cover->Width = 252;
-        cover->Height = 336;
-        cover->CornerRadius = Windows::UI::Xaml::CornerRadius(11);
-        cover->Background = Gradient(RgbColor(36, 34, 44), RgbColor(15, 15, 20));
-        cover->BorderBrush = Solid(RgbColor(99, 91, 103));
-        cover->BorderThickness = Thickness(1);
-        cover->RenderTransformOrigin = Point(0.5, 0.5);
-        auto tilt = ref new RotateTransform();
-        tilt->Angle = -8;
-        cover->RenderTransform = tilt;
-        cover->Margin = Thickness(0, 3, 46, 3);
-        auto coverBody = Vertical();
-        coverBody->Margin = Thickness(26, 18, 26, 24);
-        auto mark = Text(L"PS VITA", 12, true);
-        mark->CharacterSpacing = 150;
-        coverBody->Children->Append(mark);
-        auto monogram = Text(L"V", 170, true);
-        monogram->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Bahnschrift");
-        monogram->Foreground = Solid(Accent());
-        monogram->Opacity = 0.6;
-        monogram->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
-        monogram->Margin = Thickness(0, 14, 0, 0);
-        coverBody->Children->Append(monogram);
-        coverBody->Children->Append(Text(L"YOUR COLLECTION", 12, true));
-        cover->Child = coverBody;
-        stage->Children->Append(cover);
-    }
-    heroLayout->Children->Append(stage);
     hero->Child = heroLayout;
     content_->Children->Append(hero);
 
