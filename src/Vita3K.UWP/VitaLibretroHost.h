@@ -10,6 +10,8 @@
 #include <mutex>
 #include <atomic>
 #include <thread>
+#include <map>
+#include <set>
 #include <Xinput.h>
 #include "CoreAudio.h"
 #include "VitaVulkanBridge.h"
@@ -39,6 +41,10 @@ public:
     bool Running() const { return running_.load(); }
     void SetFrameSink(VitaVulkanBridge::FrameSink sink) { vulkan_.sink = std::move(sink); }
     void UnloadGame();
+    // Core options (retro_variable keys). Values set before Initialize are
+    // what the core reads at start; later changes reach it through
+    // GET_VARIABLE_UPDATE.
+    void SetOption(const std::string& key, const std::string& value);
     std::wstring RecentLog() const;
     void Shutdown();
 
@@ -111,5 +117,9 @@ private:
     std::string latestCoreLogs_;
     bool unsupportedVideo_ = false;
     std::wstring coreVersion_;
+    std::mutex optionsMutex_;
+    std::map<std::string, const char*> options_;
+    std::set<std::string> optionStrings_; // stable storage for returned values
+    std::atomic<bool> optionsChanged_{false};
     static VitaLibretroHost* active_;
 };

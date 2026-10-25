@@ -257,6 +257,15 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
     detail = L"Vita3K execution started. View + Menu stops the session. Visible game output requires the Vulkan interface.";
     return true;
 }
+void VitaLibretroHost::SetOption(const std::string& key, const std::string& value) {
+    std::lock_guard<std::mutex> guard(optionsMutex_);
+    const char* stored = optionStrings_.insert(value).first->c_str();
+    auto& slot = options_[key];
+    if (slot == nullptr || std::strcmp(slot, stored) != 0) {
+        slot = stored;
+        optionsChanged_.store(true);
+    }
+}
 void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
     auto* host = active_;
     if (!host || !format) return;
@@ -310,8 +319,24 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
         *static_cast<const retro_hw_render_interface_vulkan**>(data) = api;
         return true;
     }
+    case 15: { // GET_VARIABLE
+        auto* variable = static_cast<retro_variable*>(data);
+        if (!variable->key) return false;
+        std::lock_guard<std::mutex> guard(host->optionsMutex_);
+        const auto found = host->options_.find(variable->key);
+        if (found == host->options_.end()) { variable->value = nullptr; return false; }
+        variable->value = found->second;
+        return true;
+    }
+    case 70: { // SET_VARIABLE: the core changes one of its own options
+        const auto* variable = static_cast<const retro_variable*>(data);
+        if (!variable->key || !variable->value) return false;
+        std::lock_guard<std::mutex> guard(host->optionsMutex_);
+        host->options_[variable->key] = host->optionStrings_.insert(variable->value).first->c_str();
+        return true;
+    }
     case 17: // GET_VARIABLE_UPDATE
-        *static_cast<bool*>(data) = false;
+        *static_cast<bool*>(data) = host->optionsChanged_.exchange(false);
         return true;
     case 18: // SET_SUPPORT_NO_GAME
         return true;

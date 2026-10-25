@@ -43,7 +43,7 @@ private:
     double uiSoundVolume_ = 0.40;
     Windows::UI::Xaml::Controls::TextBlock^ status_;
     Windows::UI::Xaml::Controls::TextBlock^ folderLabel_;
-    Windows::UI::Xaml::Controls::TextBlock^ firmwareLabel_;
+    Windows::UI::Xaml::Controls::TextBlock^ firmwareStatus_[3] = {};
     Windows::UI::Xaml::Controls::TextBlock^ rendererResult_;
     Windows::UI::Xaml::Controls::TextBlock^ coreResult_;
     Windows::UI::Xaml::Controls::TextBlock^ libretroResult_;
@@ -109,7 +109,12 @@ private:
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
     void ChoosePreinstalledFirmware();
-    void ChooseFirmwareSlot(bool preinstalled);
+    void ChooseFirmwareSlot(int slot);
+    void RefreshFirmwareStatus();
+    void ResetInstalledFirmware();
+    void FirmwareSettings();
+    void EmulationSettings();
+    void ApplyCoreOptions();
     void RestorePaths();
     void ScanGames();
     void ReadSfo(size_t index, Windows::Storage::StorageFolder^ folder);
