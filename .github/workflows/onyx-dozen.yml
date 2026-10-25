@@ -54,6 +54,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Python Meson dependency setup failed' }
           choco install winflexbison3 -y --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'winflexbison3 setup failed' }
+      - name: Cache pinned Onyx Mesa sources and UWP native build
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            build/onyx-dozen-source/deps/mesa/
+            build/onyx-dozen-source/deps/build/mesa/
+            build/onyx-dozen-source/deps/bin/
+          key: onyx-dzn-uwp-${{ hashFiles('core-candidates.lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            onyx-dzn-uwp-${{ hashFiles('core-candidates.lock.json') }}-
       - name: Build pinned Onyx Mesa Dozen with original UWP patches
         shell: pwsh
         run: ./scripts/build-onyx-dozen.ps1
