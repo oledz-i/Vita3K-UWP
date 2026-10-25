@@ -12,6 +12,7 @@
 #include <thread>
 #include <Xinput.h>
 #include "CoreAudio.h"
+#include "VitaVulkanBridge.h"
 
 class VitaLibretroHost final {
 public:
@@ -36,6 +37,7 @@ public:
     bool StartRunning(std::wstring& detail);
     void StopRunning();
     bool Running() const { return running_.load(); }
+    void SetFrameSink(VitaVulkanBridge::FrameSink sink) { vulkan_.sink = std::move(sink); }
     void UnloadGame();
     std::wstring RecentLog() const;
     void Shutdown();
@@ -88,6 +90,7 @@ private:
     std::recursive_mutex lifecycleMutex_;
     std::atomic<bool> running_{false};
     std::thread runThread_;
+    VitaVulkanBridge vulkan_;
     CoreAudio audio_;
     std::vector<std::int16_t> sampleBuffer_;
     XINPUT_STATE inputState_{};

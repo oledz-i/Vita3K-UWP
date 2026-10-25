@@ -16,6 +16,7 @@
 #include <memory>
 #include <cwctype>
 #include <string>
+#include <stdexcept>
 #include <vector>
 #include <windows.foundation.h>
 #include <windows.ui.xaml.media.imaging.h>
@@ -1700,6 +1701,27 @@ void CatalogShell::AttemptBoot(size_t index) {
             };
             const std::string system = toUtf8(systemPath);
             const std::string content = toUtf8(gamePath);
+            libretro_.StopRunning();
+            renderer_.Shutdown();
+            content_->Children->Clear();
+            renderSurface_ = ref new SwapChainPanel();
+            renderSurface_->Height = 544;
+            renderSurface_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+            content_->Children->Append(renderSurface_);
+            auto stop = Button(L"Stop game");
+            stop->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+                libretro_.StopRunning(); libretro_.UnloadGame(); ShowPage(1);
+            });
+            content_->Children->Append(stop);
+            std::wstring displayError;
+            if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
+                SetStatus(StringOf(displayError)); return;
+            }
+            libretro_.SetFrameSink([this](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
+                std::wstring error;
+                if (!renderer_.PresentScaledBgraFrame(pixels, width, height, width * 4, rgba, error))
+                    throw std::runtime_error("D3D12 frame presentation failed");
+            });
             SetStatus(L"Vita file staged. Initializing Vita3K core...");
             create_task([this,system,content]() {
                 std::wstring detail;

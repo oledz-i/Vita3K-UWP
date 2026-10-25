@@ -143,6 +143,7 @@ std::wstring VitaLibretroHost::RecentLog() const {
 void VitaLibretroHost::UnloadGame() {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     StopRunning();
+    vulkan_.Shutdown();
     if (gameLoaded_ && unloadGame_) unloadGame_();
     gameLoaded_ = false;
     sampleBuffer_.clear();
@@ -177,6 +178,12 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
             detail += L"Vulkan hardware context is not yet connected to Dozen. ";
         }
         detail += L"Core log: " + RecentLog();
+        return false;
+    }
+    std::string vulkanError;
+    if (!vulkan_.Initialize(vulkanError)) {
+        detail = L"Vulkan initialization failed: " + FromUtf8(vulkanError.c_str());
+        UnloadGame();
         return false;
     }
     detail = L"Vita3K retro_load_game returned true. Guest execution and "
@@ -270,8 +277,16 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
         *static_cast<unsigned*>(data) = 6; // Vulkan (Onyx Dozen backend)
         return true;
     case 14: // SET_HW_RENDER (OpenGL/Vulkan context negotiation)
-        host->unsupportedVideo_ = true;
-        return false;
+        host->unsupportedVideo_ = !host->vulkan_.Accept(static_cast<retro_hw_render_callback*>(data));
+        return !host->unsupportedVideo_;
+    case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
+        return host->vulkan_.Negotiate(static_cast<const retro_hw_render_context_negotiation_interface_vulkan*>(data));
+    case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE: {
+        auto api = host->vulkan_.Interface();
+        if (!api) return false;
+        *static_cast<const retro_hw_render_interface_vulkan**>(data) = api;
+        return true;
+    }
     case 17: // GET_VARIABLE_UPDATE
         *static_cast<bool*>(data) = false;
         return true;
@@ -289,9 +304,11 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
 }
 
 void __cdecl VitaLibretroHost::Video(
-    const void*, unsigned, unsigned, std::size_t) {
-    // Hardware video frames require Vulkan and cannot be consumed by our
-    // D3D12 BGRA test surface without a real Vulkan/D3D12 interop layer.
+    const void* data, unsigned width, unsigned height, std::size_t) {
+    if (!active_ || data != RETRO_HW_FRAME_BUFFER_VALID) return;
+    std::string error;
+    if (!active_->vulkan_.Present(width, height, error) && !error.empty())
+        Log(3, "Vulkan frame readback failed: %s\n", error.c_str());
 }
 void __cdecl VitaLibretroHost::Audio(std::int16_t left, std::int16_t right) {
     if (!active_) return;

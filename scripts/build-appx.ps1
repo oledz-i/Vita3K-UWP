@@ -17,6 +17,8 @@ $signTool = Join-Path $sdk 'signtool.exe'
 if (!(Test-Path $signTool)) { throw 'Windows SDK 10.0.22621.0 is required.' }
 $manifestPath = Join-Path $root 'src/Vita3K.UWP/Package.appxmanifest'
 $originalManifest = [IO.File]::ReadAllText($manifestPath)
+& python "$root/scripts/prepare-render-abi.py"
+if ($LASTEXITCODE -ne 0) { throw 'Render ABI header preparation failed' }
 $cert = $null
 try {
     [xml]$manifest = $originalManifest
