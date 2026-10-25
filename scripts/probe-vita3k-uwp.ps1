@@ -61,7 +61,10 @@ $cmdArgs = @(
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
   "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
   "-DUSE_LTO=NEVER",
-  "-DVITA3K_FORCE_SYSTEM_BOOST=ON"
+  "-DVITA3K_FORCE_SYSTEM_BOOST=ON",
+  "-DBoost_INCLUDE_DIR:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
+  "-DBOOST_ROOT:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
+  "-DBoost_NO_BOOST_CMAKE=ON"
 )
 $log = Join-Path $out 'configure.log'
 & cmake @cmdArgs 2>&1 | Out-File -FilePath $log
