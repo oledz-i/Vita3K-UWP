@@ -7,41 +7,65 @@
   <a href="COPYING.txt"><img src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue" alt="GPL license"></a>
 </p>
 
-<p align="center"><b>An independent, experimental Vita3K port targeting Xbox Series X|S through UWP.</b><br>Native console foundations. Open development. Built on the work of the Vita3K community.</p>
+<p align="center"><b>An independent, experimental Vita3K port for Xbox Series X|S, built on UWP.</b><br>Native console UI. Open development. Built on the work of the Vita3K community.</p>
 
-<p align="center"><a href="docs/BUILDING.md">Build</a> · <a href="docs/INSTALL.md">Install the shell</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="docs/RENDERERS.md">Renderers</a> · <a href="docs/UPSTREAM.md">Upstream research</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
+<p align="center"><a href="docs/INSTALL.md">Install</a> · <a href="docs/BUILDING.md">Build</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="docs/RENDERERS.md">Renderers</a></p>
+
+<p align="center"><img src="docs/assets/screens/home.png" alt="Home screen of the Xbox frontend" width="100%"></p>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/assets/screens/library.png" alt="Library"></td>
+<td width="50%"><img src="docs/assets/screens/settings.png" alt="Settings"></td>
+</tr>
+</table>
+<p align="center"><sub>Rendered previews of the frontend at the Xbox's 960×540 layout size. Library games and cover art are sample placeholders.</sub></p>
 
 ## Where things stand
 
-**This is a port foundation, not a playable emulator yet.** The repository contains a small native C++/CX UWP development shell and a GitHub Actions pipeline that builds an x64 APPX. The shell displays project status; Vita3K's emulation core is not linked into it. There are no supported games, performance claims, or implemented emulation renderers in this port today.
+**Pre-alpha. Nothing is playable yet.** The pinned Vita3K libretro core now compiles for UWP and ships inside the APPX together with the Mesa Dozen Vulkan-on-Direct3D12 layer. The first on-console test launched the core and reached firmware installation, then crashed. Fixing that is the current work. No game has booted in this port, and there are no compatibility or performance claims.
 
-| Area | Current status |
+| Area | Status |
 | --- | --- |
-| UWP application and packaging | Development shell and automated APPX workflow |
-| Xbox Series X\|S | Primary target; hardware installation and launch need testing |
-| Vita3K core | Upstream reviewed and revision pinned; integration pending |
-| D3D12 | Planned dedicated native Xbox renderer; not implemented |
-| Vulkan / OpenGL | Existing upstream backends; Xbox feasibility research pending |
-| Game compatibility | Not available; upstream compatibility does not describe this port |
-| UI, controls, storage, audio | Product requirements and core integration pending |
+| UWP app and packaging | Signed x64 APPX built by GitHub Actions |
+| Vita3K core | Compiles and packages for UWP (WizzardSK/vita3k-libretro, pinned) |
+| Graphics | Vulkan through Mesa Dozen to D3D12, from the OnyxEMU work |
+| CPU | Dynarmic with a UWP W^X patch |
+| Firmware install | Crashes on first console test; under investigation |
+| Game loading | Single files only; whole-folder games (for example extracted dumps) are next |
+| Frontend | Home, Library, Settings, five themes, original music and interface sounds, artwork |
+| Settings | Appearance and storage only; emulator options are being added |
+| Xbox hardware | Primary target; Series S used for testing |
 
-## Development builds
+## Try a development build
 
-Open **[Actions → UWP development package](https://github.com/oledz-i/Vita3K-UWP/actions/workflows/uwp-package.yml)** and choose a successful run. Download `Vita3K-UWP-dev-shell-x64-<run number>` from its Artifacts section. GitHub may require sign-in. Builds run on pushes to `main`, pull requests, and manual dispatch.
+1. Gameplay work happens on the **[`astra-undertale` branch](https://github.com/oledz-i/Vita3K-UWP/tree/astra-undertale)**. Open its **Full core APPX** workflow under Actions and pick the latest successful run.
+2. Download the artifact named **`Vita3K-Build-Output-x64-<run number>`**. It holds the signed APPX, the test certificate and install instructions.
+3. Follow the [install guide](docs/INSTALL.md) to deploy through Xbox Dev Mode.
 
-The artifact contains a development-signed **APPX**, any generated runtime dependencies, a public test certificate, source-commit metadata, a SHA-256 checksum, and installation instructions. Artifacts expire after 14 days. No stable release is available. The workflow does not publish releases automatically.
+Artifacts expire after 14 days, and GitHub may ask you to sign in. Release builds hide the developer Tools page.
 
-Read the **[installation guide](docs/INSTALL.md)** before deploying. These packages test the app foundation only; installing one will not let you play Vita games. APPX is the initial Xbox packaging format; an MSIX/desktop packaging target can be added separately if needed.
+If the app crashes, the Xbox Device Portal (File Explorer → LocalAppData → the app's `LocalState` folder) holds `vita3k-runtime.log`. Attach it to an issue.
 
-## Graphics direction
+## What you need to bring
 
-The goal is a dedicated **D3D12** backend for Xbox and retention of **Vulkan** and **OpenGL** where the host supports them. Upstream's renderer is not a drop-in Xbox component: Xbox exposes DirectX, and a loader DLL alone cannot provide a native Vulkan/OpenGL driver. Translation layers are a separate research task with capability, performance and UWP compatibility requirements.
+This project ships no games, firmware or keys.
 
-See the [renderer matrix and implementation plan](docs/RENDERERS.md). A D3D12 device or clear-screen demo will not be described as a completed Vita GPU backend.
+- **Firmware (two files, one optional).** Sony distributes all three under the same name, `PSP2UPDAT.PUP`, so rename the preinstalled package and font package before picking them.
+  - Main system firmware, required.
+  - Preinstalled package (name contains `PREINST`), required.
+  - Font package (name contains `FONT`), optional.
+- **Games.** `.vpk`, `.zip`, `.pkg` with its license, or an extracted game folder.
+
+## Project notes
+
+- [Roadmap](docs/ROADMAP.md)
+- [Graphics plan](docs/RENDERERS.md)
+- [Upstream research](docs/UPSTREAM.md)
 
 ## Building and helping
 
-The shell uses Visual Studio 2022, C++ UWP tools, and Windows SDK 10.0.22621.0. The hosted workflow uses `windows-2022`; you do not need to register a self-hosted runner or provide signing secrets. See [BUILDING.md](docs/BUILDING.md) for the local command and [CONTRIBUTING.md](CONTRIBUTING.md) for scope and issue reporting.
+The shell uses Visual Studio 2022, C++ UWP tools, and Windows SDK 10.0.22621.0. The hosted workflow uses `windows-2022`; you do not need to register a self-hosted runner or provide signing secrets. See [BUILDING.md](docs/BUILDING.md) for the local command and the issue tracker for scope and issue reporting.
 
 Useful first contributions include reproducible Xbox launch reports, UWP dependency audits, JIT/memory feasibility tests, and D3D12 capability investigations. Please report port issues **in this repository**, not to upstream Vita3K.
 
