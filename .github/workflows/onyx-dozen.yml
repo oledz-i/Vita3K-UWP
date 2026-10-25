@@ -1,10 +1,10 @@
 name: OnyxEMU Mesa Dozen for Vita3K UWP
 on:
   push:
-    branches: [onyx-dozen-integration]
+    branches: [onyx-dozen-integration, cinematic-ui-overhaul]
   workflow_dispatch:
   pull_request:
-    branches: [core-integration]
+    branches: [core-integration, onyx-dozen-integration]
 permissions:
   contents: read
 concurrency:
