@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <string>
+#pragma comment(lib, "xinputuap.lib")
 
 VitaLibretroHost* VitaLibretroHost::active_ = nullptr;
 
@@ -242,6 +243,35 @@ void __cdecl VitaLibretroHost::Video(
 void __cdecl VitaLibretroHost::Audio(std::int16_t, std::int16_t) {}
 std::size_t __cdecl VitaLibretroHost::AudioBatch(
     const std::int16_t*, std::size_t frames) { return frames; }
-void __cdecl VitaLibretroHost::PollInput() {}
+void __cdecl VitaLibretroHost::PollInput() {
+    if (!active_) return;
+    // Take one coherent controller snapshot for the emulated frame.
+    active_->inputConnected_ = XInputGetState(0, &active_->inputState_) == ERROR_SUCCESS;
+    if (!active_->inputConnected_) active_->inputState_ = {};
+}
 std::int16_t __cdecl VitaLibretroHost::Input(
-    unsigned, unsigned, unsigned, unsigned) { return 0; }
+    unsigned port, unsigned device, unsigned index, unsigned id) {
+    if (!active_ || !active_->inputConnected_ || port != 0) return 0;
+    const auto& pad = active_->inputState_.Gamepad;
+    if ((device & 0xff) == 1 && index == 0) {
+        // libretro RetroPad IDs: B,Y,Select,Start,Up,Down,Left,Right,A,X,L,R,L2,R2,L3,R3.
+        static const WORD buttons[] = {XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_X,
+            XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_DPAD_UP,
+            XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT,
+            XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_Y, XINPUT_GAMEPAD_LEFT_SHOULDER,
+            XINPUT_GAMEPAD_RIGHT_SHOULDER, 0, 0, XINPUT_GAMEPAD_LEFT_THUMB,
+            XINPUT_GAMEPAD_RIGHT_THUMB};
+        if (id == 12) return pad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+        if (id == 13) return pad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+        return id < 16 && (pad.wButtons & buttons[id]) ? 1 : 0;
+    }
+    if ((device & 0xff) == 5 && index < 2 && id < 2) {
+        const short axis = index == 0 ? (id == 0 ? pad.sThumbLX : pad.sThumbLY)
+                                      : (id == 0 ? pad.sThumbRX : pad.sThumbRY);
+        const int deadzone = index == 0 ? XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE : XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+        if (axis > -deadzone && axis < deadzone) return 0;
+        // libretro analog Y is positive down; saturate -(-32768).
+        return id == 0 ? axis : static_cast<std::int16_t>(axis == -32768 ? 32767 : -axis);
+    }
+    return 0;
+}

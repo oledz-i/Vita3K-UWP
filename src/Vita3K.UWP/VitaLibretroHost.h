@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <mutex>
+#include <Xinput.h>
 
 class VitaLibretroHost final {
 public:
@@ -78,6 +79,8 @@ private:
     static void __cdecl PollInput();
     static std::int16_t __cdecl Input(unsigned port, unsigned device, unsigned index, unsigned id);
 
+    XINPUT_STATE inputState_{};
+    bool inputConnected_ = false;
     HMODULE module_ = nullptr;
     Init init_ = nullptr;
     Deinit deinit_ = nullptr;
