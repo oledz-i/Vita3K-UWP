@@ -151,3 +151,26 @@ assert '#include <Windows.h>' in text
 text = text.replace('#include <Windows.h>', '#include <Windows.h>\n#ifdef VITA3K_UWP\n#define VirtualAlloc VirtualAllocFromApp\n#define VirtualProtect VirtualProtectFromApp\n#endif', 1)
 memory.write_text(text)
 print('Guest address-space allocation/protection now uses the FromApp APIs on UWP.')
+
+# Upstream ffmpeg-core downloads desktop static libraries and links user32,
+# psapi, and other desktop dependencies. Build the codecs for x64-uwp instead.
+manifest = json.loads(manifest_file.read_text())
+manifest['dependencies'].append({'name': 'ffmpeg', 'default-features': False,
+    'features': ['avcodec', 'avdevice', 'avfilter', 'avformat', 'swresample', 'swscale']})
+# Preserve the older codec API used by this pinned Vita3K source.
+manifest.setdefault('overrides', []).append({'name': 'ffmpeg', 'version': '6.1.1', 'port-version': 11})
+manifest_file.write_text(json.dumps(manifest, indent=2) + '\n')
+text = external.read_text()
+old = 'add_subdirectory(ffmpeg)'
+assert text.count(old) == 1
+text = text.replace(old, '''if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+  find_package(FFMPEG REQUIRED)
+  add_library(ffmpeg INTERFACE)
+  target_include_directories(ffmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
+  target_link_directories(ffmpeg INTERFACE ${FFMPEG_LIBRARY_DIRS})
+  target_link_libraries(ffmpeg INTERFACE ${FFMPEG_LIBRARIES})
+else()
+  add_subdirectory(ffmpeg)
+endif()''')
+external.write_text(text)
+print('Codec dependencies use source-built UWP FFmpeg 6.1.1 instead of desktop binaries.')
