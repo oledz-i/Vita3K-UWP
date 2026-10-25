@@ -559,7 +559,7 @@ void CatalogShell::Home() {
     auto stretch = ref new ColumnDefinition();
     stretch->Width = GridLength(1, GridUnitType::Star);
     auto rightColumn = ref new ColumnDefinition();
-    rightColumn->Width = GridLength(GridUnitType::Auto);
+    rightColumn->Width = GridLength(1, GridUnitType::Auto);
     topLine->ColumnDefinitions->Append(stretch);
     topLine->ColumnDefinitions->Append(rightColumn);
     auto label = Text(L"FOR YOU   /   YOUR PLAYSTATION VITA COLLECTION", 11, true, true);
@@ -899,6 +899,8 @@ void CatalogShell::GameDetails() {
 }
 void CatalogShell::Render() {
     content_->Children->Clear();
+    musicStatus_ = nullptr;
+    libraryResults_ = nullptr;
     switch(page_) {
     case 1: Library(); break;
     case 2: Settings(); break;
@@ -940,6 +942,9 @@ void CatalogShell::Settings() {
         music->Children->Append(b);
     }
     content_->Children->Append(music);
+    musicStatus_ = Text(L"Audio: " + playbackStatus_, 13, false, true);
+    musicStatus_->Margin = Thickness(3, 11, 0, 11);
+    content_->Children->Append(musicStatus_);
     content_->Children->Append(Text(L"MUSIC VOLUME", 14, true, true));
     auto volume = ref new Slider();
     volume->Minimum = 0;
