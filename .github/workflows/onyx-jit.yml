@@ -19,6 +19,8 @@ jobs:
         run: |
           python tests/test_patch_vita3k_uwp.py
           if ($LASTEXITCODE -ne 0) { throw 'Filesystem port regression failed' }
+          python tests/test_patch_vita3k_uwp_deps.py
+          if ($LASTEXITCODE -ne 0) { throw 'Audio/CppCommon WindowsStore patch regression failed' }
       - name: Fetch pinned actual Vita3K ARM JIT sources
         shell: pwsh
         run: |
