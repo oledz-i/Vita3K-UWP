@@ -1509,9 +1509,9 @@ void CatalogShell::ChooseFirmwareSlot(bool preinstalled) {
     // Vita3K libretro requires BOTH official update and preinstalled firmware.
     // A UWP FutureAccessList token does not grant CRT fopen() access. Copy
     // the selected package into the frontend's writable system directory.
-    const auto token = preinstalled ? L"vita-firmware-preinst" : L"vita-firmware";
-    const auto name = preinstalled ? L"PSP2UPDAT_PREINST.PUP" : L"PSP2UPDAT.PUP";
-    const auto statusKey = preinstalled ? L"firmware.stage.preinst" : L"firmware.stage.main";
+    Platform::String^ token = preinstalled ? L"vita-firmware-preinst" : L"vita-firmware";
+    Platform::String^ name = preinstalled ? L"PSP2UPDAT_PREINST.PUP" : L"PSP2UPDAT.PUP";
+    Platform::String^ statusKey = preinstalled ? L"firmware.stage.preinst" : L"firmware.stage.main";
 
     auto picker = ref new FileOpenPicker();
     picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
