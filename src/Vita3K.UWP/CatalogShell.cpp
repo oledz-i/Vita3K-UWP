@@ -526,8 +526,20 @@ Button^ CatalogShell::MakeTile(size_t index) {
     kind->Margin = Thickness(3, 2, 0, 0);
     card->Children->Append(kind);
     tile->Content = card;
-    tile->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+    auto focusScale = ref new ScaleTransform();
+    tile->RenderTransformOrigin = Point(0.5, 0.5);
+    tile->RenderTransform = focusScale;
+    tile->GotFocus += ref new RoutedEventHandler([this,tile,focusScale](Platform::Object^, RoutedEventArgs^) {
+        focusScale->ScaleX = 1.035;
+        focusScale->ScaleY = 1.035;
+        tile->BorderThickness = Thickness(2);
+        tile->BorderBrush = Solid(Accent());
         PlayCue(0);
+    });
+    tile->LostFocus += ref new RoutedEventHandler([tile,focusScale](Platform::Object^, RoutedEventArgs^) {
+        focusScale->ScaleX = 1.0;
+        focusScale->ScaleY = 1.0;
+        tile->BorderThickness = Thickness(0);
     });
     tile->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         PlayCue(1);
@@ -1143,15 +1155,17 @@ void CatalogShell::Settings() {
         14, false, true));
     content_->Children->Append(Panel(art));
 
-    Section(L"Vita3K core settings", L"Full settings parity is planned, not simulated.");
+    Section(L"Emulation engine", L"Technical details stay out of the way.");
     auto advanced = Vertical();
     advanced->Children->Append(Text(
-        L"CPU/Dynarmic, GPU backend, shader cache, filtering, render scale, anisotropy, "
-        L"VSync, language, controller remapping, rear touch, audio emulation, "
-        L"logging and game overrides require the Vita3K core.", 16, false, true));
-    advanced->Children->Append(Text(
-        L"These will become editable settings once they can actually affect game execution. "
-        L"The current active GPU path is D3D12 presentation only, not Vita GXM.", 15, false, true));
+        L"Game execution, firmware installation and full Vita3K CPU / GPU settings "
+        L"will be available as the core integration progresses.", 15, false, true));
+    auto openTools = Button(L"Developer diagnostics");
+    openTools->Margin = Thickness(0, 15, 0, 0);
+    openTools->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        ShowPage(3);
+    });
+    advanced->Children->Append(openTools);
     content_->Children->Append(Panel(advanced));
     RestorePaths();
 }
