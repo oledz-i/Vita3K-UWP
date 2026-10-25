@@ -1964,9 +1964,9 @@ void CatalogShell::ProbeLibretro(bool initialize) {
                     std::wstring detail;
                     const bool loaded = libretro_.Initialize(narrow, detail);
                     libretroResult_->Text = StringOf(detail);
-                    SetStatus(loaded ? L"Real Vita3K libretro initialization returned. "
+                    SetStatus(loaded ? L"Vita3K core initialization returned. "
                         L"No game execution or Vulkan context is available." :
-                        L"Real Vita3K core initialization blocked. See developer report.");
+                        L"Vita3K core initialization blocked. See diagnostic details.");
                 } catch (Platform::Exception^ e) {
                     libretroResult_->Text = L"Cannot create private Vita3K system directory: " + e->Message;
                 }
