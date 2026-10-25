@@ -43,6 +43,11 @@ foreach ($path in $sourceList) {
     Tee-Object -FilePath (Join-Path $out 'port-patch.log')
 if ($LASTEXITCODE -ne 0) { throw 'Pinned source UWP filesystem adapter failed' }
 
+# Apply exactly the OnyxEMU W^X/JIT Xbox patches to Vita3K's own Dynarmic.
+# Cross-fork compatibility already passed in its isolated real-source CI job.
+& "$root/scripts/apply-onyx-dynarmic.ps1" -DynarmicSource (Join-Path $upstream "external/dynarmic")
+"Applied Onyx Xbox Dynarmic W^X patches." | Add-Content (Join-Path $out 'assessment.txt')
+
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
 "Starting Windows Store CMake configure..." | Add-Content -Path (Join-Path $out 'assessment.txt')
@@ -61,6 +66,7 @@ $cmdArgs = @(
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
   "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
   "-DUSE_LTO=NEVER",
+  "-DDYNARMIC_ENABLE_NO_EXECUTE_SUPPORT=ON",
   "-DVITA3K_FORCE_SYSTEM_BOOST=ON",
   "-DBoost_INCLUDE_DIR:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
   "-DBOOST_ROOT:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
