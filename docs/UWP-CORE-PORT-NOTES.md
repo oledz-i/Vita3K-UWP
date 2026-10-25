@@ -100,3 +100,31 @@ instructions to resume and verifies delegation and filter restoration. The test
 uses the exact header copied into Vita3K. It is not an AppContainer/Xbox test:
 platform exception boundaries, debuggers, and other installed filters can alter
 delivery, so Xbox validation is still necessary.
+
+## Config, codec and IO compilation (run 40164666388)
+
+Applied the third patch's header and diagnostic-build approach, with checked
+source replacements rather than a broad regex sweep. CLI11 now uses its normal
+supplied-argv branch on UWP instead of a null CommandLineToArgvW result. File
+removal, dot entries and trailing-separator handling use std::filesystem, with
+root preservation verified against actual directory operations.
+
+The supplied FFCodec struct exactly matches the pinned FFmpeg n6.1.1 declaration.
+Added a compile-time ABI/version guard and retained the raw-AAC consumed-byte
+contract. Also fixed unpadded guest packet input, an uninitialized got_frame
+flag, and release-build acceptance of a missing frame. The actual patched AAC
+source passed decoding and exact-PCM comparison against FFmpeg 6.1.1, plus
+malformed/empty-input checks. See third_party/ffmpeg-internal/README.md.
+
+The diagnostic build compiles each core project with /t:ClCompile and
+BuildProjectReferences=false. It does not attempt to link incomplete projects
+or rebuild all external dependencies. Every per-project log is uploaded, along
+with keepgoing-errors.txt and keepgoing-top-causes.txt, so skipped dependencies
+no longer hide all later source errors. Diagnostic results cannot produce a
+package: only a successful ordinary core build proceeds to APPX packaging.
+
+Native checks are in tests/aac-decoder-test.cpp and tests/uwp-path-compat-test.cpp.
+AAC fixture data is a generated 440 Hz stereo tone, with no game or firmware.
+The codec test can optionally compare PCM against an independently decoded
+reference supplied as its second argument. Linux checks used the exact pinned
+source and FFmpeg 6.1.1; Windows and Xbox verification remain necessary.

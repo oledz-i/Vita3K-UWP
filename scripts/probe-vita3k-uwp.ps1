@@ -60,6 +60,8 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 
 & python "$root/scripts/patch-vita3k-uwp.py" "$upstream" 2>&1 | Tee-Object -FilePath (Join-Path $out 'filesystem-port.log')
 if ($LASTEXITCODE -ne 0) { throw 'Pinned filesystem port failed' }
+& python "$root/scripts/patch-vita3k-uwp-round2.py" "$upstream" 2>&1 | Tee-Object -FilePath (Join-Path $out 'config-codec-io-port.log')
+if ($LASTEXITCODE -ne 0) { throw 'Checked config/codec/io port adapter failed' }
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
 "Starting Windows Store CMake configure..." | Add-Content -Path (Join-Path $out 'assessment.txt')
@@ -104,7 +106,9 @@ $buildExit = $LASTEXITCODE
 "Build exit: $buildExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $buildLog -Tail 90 | Out-File (Join-Path $out 'build-tail.txt')
 if ($buildExit -ne 0) {
-  throw "Real Vita3K libretro code could not be linked for UWP. See uploaded build.log."
+  try { & "$PSScriptRoot/build-keep-going.ps1" -BuildDir "$root/build/core-uwp-probe" -OutDir $out }
+  catch { Write-Host "::warning::Diagnostic compile pass failed: $($_.Exception.Message)" }
+  throw "Real Vita3K libretro code could not be linked for UWP. See build.log and keepgoing-errors.txt."
 }
 $cores = Get-ChildItem "$root/build/core-uwp-probe" -Recurse -Filter 'vita3k_libretro.dll' -File
 if (!$cores) { throw 'No vita3k_libretro.dll was produced by the Windows Store build' }
