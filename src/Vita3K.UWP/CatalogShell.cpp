@@ -1127,14 +1127,22 @@ void CatalogShell::Settings() {
     firmwareLabel_ = Text(L"Firmware file: not selected", 17, false, true);
     storage->Children->Append(firmwareLabel_);
     storage->Children->Append(Text(
-        L"Obtain an official PS Vita update .PUP from Sony using another device, transfer "
-        L"it to accessible storage, and select it here. This saves your file selection "
-        L"but does not install firmware: the full emulator core is not integrated.", 15, false, true));
-    auto fw = Button(L"Choose official firmware .PUP");
+        L"Choose both official Sony firmware packages. They'll be copied into "
+        L"Vita3K's private system directory, so the emulator can find them later. "
+        L"Selecting a package does not install it until the Vita3K core is linked.",
+        15, false, true));
+    auto fw = Button(L"Choose main system firmware");
     fw->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
         ChooseFirmware();
     });
     storage->Children->Append(fw);
+    auto preinstalled = Button(L"Choose preinstalled firmware");
+    preinstalled->Margin = Thickness(0, 11, 0, 0);
+    preinstalled->Click += ref new RoutedEventHandler(
+        [this](Platform::Object^, RoutedEventArgs^) {
+            ChoosePreinstalledFirmware();
+        });
+    storage->Children->Append(preinstalled);
     content_->Children->Append(Panel(storage));
     Section(L"Game artwork", L"Use original cover images or bring in your own.");
     auto art = Vertical();
@@ -1436,9 +1444,13 @@ void CatalogShell::RestorePaths() {
             ? L"Game folder access saved." : L"No game folder chosen yet.";
     }
     if (firmwareLabel_ != nullptr) {
-        firmwareLabel_->Text = future->ContainsItem(L"vita-firmware")
-            ? L"Official firmware selection saved (not installed)."
-            : L"No firmware .PUP selected.";
+        const bool mainReady = Pref(L"firmware.stage.main", L"0")->Equals(L"1");
+        const bool preinstReady = Pref(L"firmware.stage.preinst", L"0")->Equals(L"1");
+        firmwareLabel_->Text = mainReady && preinstReady
+            ? L"Both firmware packages are in Vita3K's system directory (not installed)."
+            : mainReady ? L"Main firmware staged; preinstalled firmware still needed."
+            : preinstReady ? L"Preinstalled firmware staged; main update still needed."
+            : L"Two official firmware packages required.";
     }
     if (future->ContainsItem(L"vita-games")) {
         create_task(future->GetFolderAsync(L"vita-games")).then(
@@ -1459,7 +1471,8 @@ void CatalogShell::RestorePaths() {
                 try {
                     auto file = work.get();
                     if (firmwareLabel_ != nullptr)
-                        firmwareLabel_->Text = L"Selected firmware: " + file->Name + L" (not installed)";
+                        firmwareLabel_->Text = L"Firmware selected: " + file->Name +
+                            L" (installation pending)";
                 } catch (Platform::Exception^) {
                     if (firmwareLabel_ != nullptr)
                         firmwareLabel_->Text = L"Firmware permission expired. Select again.";
@@ -1487,19 +1500,57 @@ void CatalogShell::ChooseGameFolder() {
         }, task_continuation_context::use_current());
 }
 void CatalogShell::ChooseFirmware() {
+    ChooseFirmwareSlot(false);
+}
+void CatalogShell::ChoosePreinstalledFirmware() {
+    ChooseFirmwareSlot(true);
+}
+void CatalogShell::ChooseFirmwareSlot(bool preinstalled) {
+    // Vita3K libretro requires BOTH official update and preinstalled firmware.
+    // A UWP FutureAccessList token does not grant CRT fopen() access. Copy
+    // the selected package into the frontend's writable system directory.
+    const auto token = preinstalled ? L"vita-firmware-preinst" : L"vita-firmware";
+    const auto name = preinstalled ? L"PSP2UPDAT_PREINST.PUP" : L"PSP2UPDAT.PUP";
+    const auto statusKey = preinstalled ? L"firmware.stage.preinst" : L"firmware.stage.main";
+
     auto picker = ref new FileOpenPicker();
-    picker->SuggestedStartLocation = PickerLocationId::Downloads;
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
     picker->FileTypeFilter->Append(L".PUP");
     picker->FileTypeFilter->Append(L".pup");
-    SetStatus(L"Choose your official PS Vita firmware update .PUP file.");
+    SetStatus(preinstalled
+        ? L"Select the official PS Vita preinstalled firmware package."
+        : L"Select the official PS Vita system software update package.");
     create_task(picker->PickSingleFileAsync()).then(
-        [this](task<StorageFile^> work) {
+        [this,token,name,statusKey](task<StorageFile^> selection) {
             try {
-                auto file = work.get();
+                auto file = selection.get();
                 if (file == nullptr) return;
-                StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-firmware", file);
-                RestorePaths();
-                SetStatus(L"Firmware file selected. Installation is blocked until core integration.");
+                PutPref(statusKey, L"0");
+                StorageApplicationPermissions::FutureAccessList->AddOrReplace(token, file);
+                SetStatus(L"Copying official firmware package into Vita3K system storage...");
+                create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
+                    L"Vita3KSystem", CreationCollisionOption::OpenIfExists))
+                .then([](StorageFolder^ system) {
+                    return create_task(system->CreateFolderAsync(
+                        L"vita3k", CreationCollisionOption::OpenIfExists));
+                }).then([file,name](StorageFolder^ data) {
+                    // Memory-safe for large firmware files, unlike
+                    // loading the whole .PUP into an IBuffer.
+                    return create_task(file->CopyAsync(
+                        data, name, NameCollisionOption::ReplaceExisting));
+                }).then([this,statusKey,name](task<StorageFile^> copied) {
+                    try {
+                        auto staged = copied.get();
+                        if (staged == nullptr) return;
+                        PutPref(statusKey, L"1");
+                        SetStatus(L"Firmware file prepared as " + name +
+                            L". Vita3K installation still requires the emulator core.");
+                        RestorePaths();
+                    } catch (Platform::Exception^ e) {
+                        SetStatus(L"Couldn't stage Vita firmware: " + e->Message);
+                        RestorePaths();
+                    }
+                }, task_continuation_context::use_current());
             } catch (Platform::Exception^ e) {
                 SetStatus(L"Firmware picker failed: " + e->Message);
             }
