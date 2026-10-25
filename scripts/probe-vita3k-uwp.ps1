@@ -42,6 +42,9 @@ foreach ($path in $sourceList) {
 & python "$root/scripts/patch-vita3k-uwp.py" "$upstream" 2>&1 |
     Tee-Object -FilePath (Join-Path $out 'port-patch.log')
 if ($LASTEXITCODE -ne 0) { throw 'Pinned source UWP filesystem adapter failed' }
+& python "$root/scripts/patch-vita3k-uwp-deps.py" "$upstream" 2>&1 |
+    Tee-Object -FilePath (Join-Path $out 'port-audio-patch.log')
+if ($LASTEXITCODE -ne 0) { throw 'Vita3K UWP libretro audio and host detection patch failed' }
 
 # Apply exactly the OnyxEMU W^X/JIT Xbox patches to Vita3K's own Dynarmic.
 # Cross-fork compatibility already passed in its isolated real-source CI job.
