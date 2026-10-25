@@ -6,6 +6,14 @@
 
 On GitHub, open `oledz-i/Vita3K-UWP` → Actions → UWP development package. Choose a successful run and choose the **core-integration** branch build and download `Vita3K-UWP-core-d3d12-x64-<run number>`. The default `main` branch currently has the older development shell. Extract the ZIP. Locate the application `.appx` and any x64 dependencies below `Dependencies/`. The artifact also includes `Development.cer`, `build-info.json`, and `SHA256SUMS.txt`.
 
+## Optional Onyx-backed GPU prototype
+
+For the `onyx-dozen-integration` branch, use the separate [Onyx Dozen build workflow](https://github.com/oledz-i/Vita3K-UWP/actions/workflows/onyx-dozen.yml). If **both** the Mesa UWP build and signed APPX package jobs succeed, download the artifact whose name begins `Vita3K-UWP-ONYX-Dozen-x64-`. It includes the genuine patched `vulkan_dzn.dll` GPU driver and `dxil.dll` shader support dependency inside the APPX. The `source-host-smoke` artifact compiles the same host without Dozen, for safe comparison.
+
+On your Xbox, open **Developer → Probe actual packaged Vulkan device**. Record whether the test reports driver discovery, a Vulkan instance, GPU adapters and a created logical graphics device. If there is a `VkResult` or loader error, capture the exact text. This is **not** a PS Vita game boot test: the CPU/core and Vita Vulkan frame bridge are still required.
+
+The prototype code derives from your [OnyxEMU renderer](https://github.com/oledz-i/OnyxEMU) and carries GPLv3 attribution in `COPYING.GPLv3.txt` and `NOTICE.md`. See [renderer source details](ONYX_GPU_PORT.md).
+
 ## Xbox Series X|S Developer Mode
 
 1. Activate and enter Xbox Developer Mode using Microsoft's official setup instructions.
