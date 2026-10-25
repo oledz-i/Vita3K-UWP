@@ -169,3 +169,17 @@ replace('vita3k/modules/SceSysmem/SceSysmemForDriver.cpp',
 print('Applied checked fmt filesystem, Winsock 2 and guest network/parameter/alignment fixes.')
 
 replace('vita3k/modules/SceAppUtil/SceAppUtil.cpp', '#include <util/safe_time.h>', '#include <util/safe_time.h>\n#include <algorithm>')
+
+# Our UWP bridge creates no VkSurfaceKHR or Vulkan swapchain. Requesting
+# VK_KHR_swapchain would require VK_KHR_surface on the frontend's instance.
+# Retain the upstream extension list for frontends that supply a surface.
+replace('vita3k/renderer/src/vulkan/renderer.cpp',
+'''        for (const char *name : required_device_extensions)
+            add(name);''',
+'''        for (const char *name : required_device_extensions) {
+#ifdef VITA3K_UWP
+            if (!surface && strcmp(name, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0)
+                continue;
+#endif
+            add(name);
+        }''')

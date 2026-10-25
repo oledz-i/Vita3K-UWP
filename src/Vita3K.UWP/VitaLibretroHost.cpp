@@ -266,7 +266,8 @@ void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
     va_end(arguments);
     std::lock_guard<std::mutex> guard(host->logsMutex_);
     if (!host->runtimeLogPath_.empty()) {
-        if (FILE* file = _wfopen(host->runtimeLogPath_.c_str(), L"ab")) {
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, host->runtimeLogPath_.c_str(), L"ab") == 0 && file) {
             std::fwrite(message, 1, std::strlen(message), file);
             std::fclose(file);
         }
