@@ -47,6 +47,22 @@ text = text.replace(
 )
 cmake.write_text(text)
 
+# The libretro fork also invokes get_boost() inside vita3k/CMakeLists.txt.
+# The first WindowsStore attempt bypassed only the top-level CMake call.
+vita_cmake = source / "vita3k/CMakeLists.txt"
+vita_text = vita_cmake.read_text()
+assert vita_text.count("\nget_boost()\n") == 1, "Nested Boost integration moved"
+vita_text = vita_text.replace(
+    "\nget_boost()\n",
+    "\nif(CMAKE_SYSTEM_NAME STREQUAL \"WindowsStore\")\n"
+    "  # Vita3K UWP uses C++17 std::filesystem, not Boost.Filesystem.\n"
+    "  set(Boost_INCLUDE_DIRS \"${CMAKE_SOURCE_DIR}/external/boost\")\n"
+    "else()\n"
+    "  get_boost()\n"
+    "endif()\n"
+)
+vita_cmake.write_text(vita_text)
+
 filesystem = source / "vita3k/util/include/util/fs.h"
 original = filesystem.read_text()
 old = (
@@ -81,6 +97,20 @@ original = original.replace(
     "struct fmt::formatter<fs::path> : ostream_formatter {};"
 )
 filesystem.write_text(original)
+
+# The libretro install/load/firmware paths pass errors to std::filesystem.
+# Boost error_code cannot bind to the std::error_code overload. These three
+# files consistently use the error codes for fs:: operations.
+for relative in (
+    "vita3k/libretro/libretro_vita3k.cpp",
+    "vita3k/libretro/libretro_game_loader.cpp",
+    "vita3k/libretro/libretro_installer.cpp",
+):
+    file = source / relative
+    data = file.read_text()
+    assert "boost::system::error_code" in data, f"Expected upstream fs error type in {relative}"
+    data = data.replace("boost::system::error_code", "std::error_code")
+    file.write_text(data)
 
 print("Applied experimental genuine Vita3K WindowsStore std::filesystem port patch.")
 print(f"Removed manifest dependencies: {', '.join(sorted(existing & removed))}")

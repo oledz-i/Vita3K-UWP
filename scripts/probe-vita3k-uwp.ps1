@@ -42,6 +42,14 @@ foreach ($path in $sourceList) {
 & python "$root/scripts/patch-vita3k-uwp.py" "$upstream" 2>&1 |
     Tee-Object -FilePath (Join-Path $out 'port-patch.log')
 if ($LASTEXITCODE -ne 0) { throw 'Pinned source UWP filesystem adapter failed' }
+& python "$root/scripts/patch-vita3k-uwp-deps.py" "$upstream" 2>&1 |
+    Tee-Object -FilePath (Join-Path $out 'port-audio-patch.log')
+if ($LASTEXITCODE -ne 0) { throw 'Vita3K UWP libretro audio and host detection patch failed' }
+
+# Apply exactly the OnyxEMU W^X/JIT Xbox patches to Vita3K's own Dynarmic.
+# Cross-fork compatibility already passed in its isolated real-source CI job.
+& "$root/scripts/apply-onyx-dynarmic.ps1" -DynarmicSource (Join-Path $upstream "external/dynarmic")
+"Applied Onyx Xbox Dynarmic W^X patches." | Add-Content (Join-Path $out 'assessment.txt')
 
 $vcpkg = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 if (!(Test-Path $vcpkg)) { throw "GitHub Windows runner does not include $vcpkg" }
@@ -61,6 +69,7 @@ $cmdArgs = @(
   "-DVCPKG_TARGET_TRIPLET=x64-uwp",
   "-DVCPKG_INSTALL_OPTIONS=--allow-unsupported",
   "-DUSE_LTO=NEVER",
+  "-DDYNARMIC_ENABLE_NO_EXECUTE_SUPPORT=ON",
   "-DVITA3K_FORCE_SYSTEM_BOOST=ON",
   "-DBoost_INCLUDE_DIR:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
   "-DBOOST_ROOT:PATH=$(($upstream -replace '\\\\','/') + '/external/boost')",
@@ -72,7 +81,9 @@ $configurationExit = $LASTEXITCODE
 "Configure exit: $configurationExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $log -Tail 90 | Out-File -FilePath (Join-Path $out 'configure-tail.txt')
 if ($configurationExit -ne 0) {
-  throw "Actual Vita3K core failed to configure for UWP. See uploaded configure.log for the exact blocking dependencies."
+  Write-Host "----- CMake UWP configure failure (last 90 lines) -----"
+  Get-Content $log -Tail 90 | ForEach-Object { Write-Host $_ }
+  throw "Vita3K UWP configuration failed; full diagnostic archive uploaded."
 }
 
 "Starting genuine Vita3K libretro UWP compilation..." | Add-Content -Path (Join-Path $out 'assessment.txt')
@@ -82,7 +93,9 @@ $buildExit = $LASTEXITCODE
 "Build exit: $buildExit" | Add-Content -Path (Join-Path $out 'assessment.txt')
 Get-Content $buildLog -Tail 90 | Out-File (Join-Path $out 'build-tail.txt')
 if ($buildExit -ne 0) {
-  throw "Real Vita3K libretro code could not be linked for UWP. See uploaded build.log."
+  Write-Host "----- Vita3K UWP compiler failure (last 90 lines) -----"
+  Get-Content $buildLog -Tail 90 | ForEach-Object { Write-Host $_ }
+  throw "Vita3K UWP source could not be linked; full compiler archive uploaded."
 }
 $cores = Get-ChildItem "$root/build/core-uwp-probe" -Recurse -Filter 'vita3k_libretro.dll' -File
 if (!$cores) { throw 'No vita3k_libretro.dll was produced by the Windows Store build' }
