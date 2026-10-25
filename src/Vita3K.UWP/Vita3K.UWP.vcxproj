@@ -97,6 +97,19 @@
     <ClInclude Include="GameFormats.h" />
     <ClInclude Include="..\\..\\third_party\\vita3k\\mem\\include\\mem\\allocator.h" />
   </ItemGroup>
+  <!-- The patched OnyxEMU Mesa Dozen ICD and DXIL dependency are only
+       packaged after the separate WindowsStore source-build CI produces them.
+       An Xbox-native Vulkan device must still be verified on hardware. -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\vulkan_dzn.dll')">
+    <Content Include="vulkan_dzn.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\dxil.dll')">
+    <Content Include="dxil.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <!-- A genuine UWP-built Vita3K libretro DLL can be packaged by core-port CI.
        Never copy an arbitrary desktop Win32 DLL here and claim it works. -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\vita3k_libretro.dll')">
