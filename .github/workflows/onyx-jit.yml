@@ -14,6 +14,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate UWP filesystem source patch before expensive core builds
+        shell: pwsh
+        run: |
+          python tests/test_patch_vita3k_uwp.py
+          if ($LASTEXITCODE -ne 0) { throw 'Filesystem port regression failed' }
       - name: Fetch pinned actual Vita3K ARM JIT sources
         shell: pwsh
         run: |
@@ -46,6 +51,19 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Restore UWP vcpkg binary cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: vcpkg-bincache
+          key: vita3k-uwp-vcpkg-v2-${{ hashFiles('core-candidates.lock.json', 'scripts/patch-vita3k-uwp.py') }}
+          restore-keys: |
+            vita3k-uwp-vcpkg-v2-
+      - name: Configure reproducible UWP binary cache
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:GITHUB_WORKSPACE 'vcpkg-bincache'
+          New-Item -ItemType Directory -Path $cache -Force | Out-Null
+          Add-Content $env:GITHUB_ENV "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite"
       - name: Checkout complete pinned Vita3K libretro core
         shell: pwsh
         run: |
