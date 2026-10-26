@@ -9,6 +9,7 @@
 #include <vector>
 #include <cstdint>
 #include <atomic>
+#include <mutex>
 
 namespace Vita3KUWP {
 struct LibraryGame {
@@ -45,6 +46,11 @@ private:
     unsigned long long gameRunningSince_ = 0;
     std::atomic<bool> pictureSeen_{false};
     std::atomic<unsigned long long> framesShown_{0};
+    std::atomic<unsigned> lastLevel_{0};
+    std::atomic<unsigned> lastLit_{0};
+    std::mutex presentErrorMutex_;
+    std::wstring presentError_;
+    Windows::UI::Xaml::Controls::TextBlock^ statsLabel_ = nullptr;
     Windows::UI::Xaml::Controls::Grid^ root_;
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
@@ -132,6 +138,7 @@ private:
     void ShowLoadFailure(Platform::String^ detail);
     void ExitGameView();
     void GameTick();
+    void UpdateGameStats();
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
     void ChooseFirmwareFolder();
@@ -143,6 +150,8 @@ private:
     void CleanUpOldCopies();
     bool SystemFirmwareInstalled();
     void SetupCard();
+    void SaveLogToDrive();
+    std::wstring RecentLogText();
     void RefreshFirmwareStatus();
     void ResetInstalledFirmware();
     void FirmwareSettings();

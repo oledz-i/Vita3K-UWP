@@ -57,6 +57,10 @@ public:
         progressSink_ = std::move(sink);
     }
     unsigned long long FramesExecuted() const { return framesExecuted_; }
+    // Debug lines from the core go to the log only when this is on.
+    void SetVerboseLog(bool on) { verboseLog_ = on; }
+    // Flushes the log so its file can be copied.
+    void FlushLog() { std::lock_guard<std::mutex> guard(logsMutex_); if (logFile_) std::fflush(logFile_); }
     // Writes one line to vita3k-runtime.log.
     void LogLine(const std::string& line);
     const std::wstring& LogPath() const { return runtimeLogPath_; }
@@ -140,6 +144,7 @@ private:
     std::wstring coreVersion_;
     std::string redirectReport_;
     FILE* logFile_ = nullptr;
+    bool verboseLog_ = false;
     std::wstring logFilePath_;
     // Loading progress worked out from the core's log, for the loading screen.
     std::function<void(const std::string&, int)> progressSink_;

@@ -5,6 +5,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <share.h>
 #include <string>
 #include <chrono>
 #pragma comment(lib, "xinputuap.lib")
@@ -398,9 +399,12 @@ void VitaLibretroHost::SetOption(const std::string& key, const std::string& valu
         optionsChanged_.store(true);
     }
 }
-void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
+void __cdecl VitaLibretroHost::Log(unsigned level, const char* format, ...) {
     auto* host = active_;
     if (!host || !format) return;
+    // Debug lines (every shader instruction the recompiler translates, each
+    // file a game opens) cost more to write than the work they describe.
+    if (level == 0 && !host->verboseLog_) return;
     char message[2048] = {};
     va_list arguments;
     va_start(arguments, format);
@@ -413,7 +417,9 @@ void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
         if (!host->logFile_ || host->logFilePath_ != host->runtimeLogPath_) {
             if (host->logFile_) std::fclose(host->logFile_);
             host->logFile_ = nullptr;
-            _wfopen_s(&host->logFile_, host->runtimeLogPath_.c_str(), L"ab");
+            // Shared, so the Device Portal (or anything else) can read it while
+            // the app runs; _wfopen_s would lock it.
+            host->logFile_ = _wfsopen(host->runtimeLogPath_.c_str(), L"ab", _SH_DENYNO);
             host->logFilePath_ = host->runtimeLogPath_;
         }
         if (host->logFile_) {

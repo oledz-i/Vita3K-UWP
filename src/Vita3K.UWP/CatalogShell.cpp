@@ -9,6 +9,8 @@
 #include "CoreOptions.h"
 #include "UwpFileRedirect.h"
 #include <fileapifromapp.h>
+#include <share.h>
+#include <cstdio>
 #include "UwpJitProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
@@ -1332,8 +1334,37 @@ void CatalogShell::Settings() {
     Section(L"Diagnostics", L"Where to look when something goes wrong.");
     auto advanced = Vertical();
     advanced->Children->Append(Text(
-        L"Vita3K writes vita3k-runtime.log to this app's LocalState folder. On Xbox, open the Device "
-        L"Portal, then File Explorer, LocalAppData, this app, LocalState.", 13, false, true));
+        L"When a game or install goes wrong, the log says why. Save it to your drive and open it on a PC, "
+        L"or look at the end of it here.", 13, false, true));
+    auto logActions = ref new StackPanel();
+    logActions->Orientation = Orientation::Horizontal;
+    logActions->Margin = Thickness(0, 12, 0, 0);
+    auto saveLog = Button(L"Save log to your drive", true);
+    saveLog->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { SaveLogToDrive(); });
+    logActions->Children->Append(saveLog);
+    auto showLog = Button(L"Show the recent log");
+    showLog->Margin = Thickness(10, 0, 0, 0);
+    logActions->Children->Append(showLog);
+    advanced->Children->Append(logActions);
+    auto logView = Text(L"", 10, false, true);
+    logView->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Consolas");
+    logView->IsTextSelectionEnabled = true;
+    logView->TextWrapping = TextWrapping::Wrap;
+    logView->TextTrimming = TextTrimming::None;
+    auto logScroll = ref new ScrollViewer();
+    logScroll->MaxHeight = 320;
+    logScroll->Margin = Thickness(0, 12, 0, 0);
+    logScroll->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    logScroll->Content = logView;
+    advanced->Children->Append(logScroll);
+    showLog->Click += ref new RoutedEventHandler([this,logView,logScroll](Platform::Object^, RoutedEventArgs^) {
+        logView->Text = ref new Platform::String(RecentLogText().c_str());
+        logScroll->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        logScroll->ChangeView(nullptr, ref new Platform::Box<double>(1e9), nullptr, true);
+    });
+    advanced->Children->Append(Text(
+        L"It is also in the Device Portal: File Explorer, LocalAppData, this app, LocalState, vita3k-runtime.log.",
+        11, false, true));
 #if !defined(VITA3K_RELEASE_BUILD)
     // Development builds only; release builds ship without the Tools page.
     auto openTools = Button(L"Developer diagnostics");
@@ -1680,6 +1711,28 @@ const wchar_t* PupKindName(std::uint32_t partitions) {
     if (partitions & 8) return L"Font package";
     return nullptr;
 }
+// The most telling line of a failure's log text: the last error, else the last line.
+std::wstring ProblemLine(const std::wstring& text) {
+    std::wstring best, last;
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find(L'\n', start);
+        if (end == std::wstring::npos) end = text.size();
+        std::wstring line = text.substr(start, end - start);
+        start = end + 1;
+        if (line.empty()) continue;
+        last = line;
+        std::wstring lower = line;
+        for (auto& c : lower) c = static_cast<wchar_t>(towlower(c));
+        if (lower.find(L"fail") != std::wstring::npos || lower.find(L"error") != std::wstring::npos ||
+            lower.find(L"could not") != std::wstring::npos || lower.find(L"crash") != std::wstring::npos ||
+            lower.find(L"denied") != std::wstring::npos || lower.find(L"|e|") != std::wstring::npos)
+            best = line;
+    }
+    std::wstring pick = best.empty() ? last : best;
+    if (pick.size() > 220) pick = pick.substr(0, 220) + L"...";
+    return pick.empty() ? std::wstring(L"Save the log in Settings, Diagnostics, for the details.") : pick;
+}
 struct FirmwareResult {
     std::wstring name;
     std::uint32_t partitions = 0;
@@ -1822,6 +1875,64 @@ void CatalogShell::SetupCard() {
     content_->Children->Append(card);
 }
 
+std::wstring CatalogShell::RecentLogText() {
+    libretro_.FlushLog();
+    const std::wstring path = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-runtime.log";
+    FILE* file = _wfsopen(path.c_str(), L"rb", _SH_DENYNO);
+    if (!file) return L"No log yet. It is written when Vita3K starts.";
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    const long take = std::min<long>(size, 24 * 1024);
+    std::fseek(file, size - take, SEEK_SET);
+    std::string tail(static_cast<size_t>(take), '\0');
+    std::fread(&tail[0], 1, tail.size(), file);
+    std::fclose(file);
+    const auto firstLine = tail.find('\n');
+    if (size > take && firstLine != std::string::npos) tail.erase(0, firstLine + 1);
+    return WidenUtf8(tail);
+}
+
+void CatalogShell::SaveLogToDrive() {
+    libretro_.FlushLog();
+    // To the drive Vita3K's data is on, else the games folder, else ask.
+    auto save = [this](StorageFolder^ target) {
+        create_task(ApplicationData::Current->LocalFolder->GetFileAsync(L"vita3k-runtime.log"))
+        .then([target](StorageFile^ log) {
+            return create_task(log->CopyAsync(target, L"vita3k-runtime.log", NameCollisionOption::ReplaceExisting));
+        }).then([this,target](task<StorageFile^> copied) {
+            try {
+                copied.get();
+                SetStatus(L"Log saved to " + target->Path + L"\\vita3k-runtime.log");
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Couldn't save the log: " + e->Message);
+            }
+        }, task_continuation_context::use_current());
+    };
+    auto pick = [this,save]() {
+        auto picker = ref new FolderPicker();
+        picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+        picker->FileTypeFilter->Append(L"*");
+        create_task(picker->PickSingleFolderAsync()).then([save](task<StorageFolder^> picked) {
+            try { if (auto folder = picked.get()) save(folder); } catch (Platform::Exception^) {}
+        }, task_continuation_context::use_current());
+    };
+    auto chosen = Pref(L"storage.dataRoot", L"");
+    if (!chosen->IsEmpty()) {
+        create_task(StorageFolder::GetFolderFromPathAsync(chosen)).then([save,pick](task<StorageFolder^> found) {
+            try { save(found.get()); } catch (Platform::Exception^) { pick(); }
+        }, task_continuation_context::use_current());
+        return;
+    }
+    auto access = StorageApplicationPermissions::FutureAccessList;
+    if (access->ContainsItem(L"vita-games")) {
+        create_task(access->GetFolderAsync(L"vita-games")).then([save,pick](task<StorageFolder^> found) {
+            try { save(found.get()); } catch (Platform::Exception^) { pick(); }
+        }, task_continuation_context::use_current());
+        return;
+    }
+    pick();
+}
+
 void CatalogShell::CleanUpOldCopies() {
     // Earlier builds copied every game into app storage and parked firmware
     // files in the system folder. Games now play where they are and firmware
@@ -1892,8 +2003,10 @@ void CatalogShell::ChooseFirmwareFolder() {
 
 void CatalogShell::ShowFirmwareProgress(double value, Platform::String^ message) {
     if (firmwareProgress_ != nullptr) {
-        firmwareProgress_->Visibility = value < 0 ? Windows::UI::Xaml::Visibility::Collapsed
-                                                  : Windows::UI::Xaml::Visibility::Visible;
+        // -1 hides the bar, -2 shows it without a percentage.
+        firmwareProgress_->Visibility = value == -1 ? Windows::UI::Xaml::Visibility::Collapsed
+                                                    : Windows::UI::Xaml::Visibility::Visible;
+        firmwareProgress_->IsIndeterminate = value == -2;
         if (value >= 0) firmwareProgress_->Value = value;
     }
     if (message != nullptr) {
@@ -1940,6 +2053,14 @@ void CatalogShell::InstallFirmwareFiles(std::vector<StorageFile^> files) {
     }).then([this,paths,system,dispatcher]() {
         std::vector<FirmwareResult> results;
         const size_t total = paths->size();
+        // With Vita3K's data on a USB drive, each package installs into the
+        // app's own storage first and the finished parts are then copied to
+        // the drive: the installer's temporary files and deletions stay off
+        // the drive, where they go through the slower brokered file access.
+        const std::wstring finalRoot = WidenUtf8(system);
+        const bool staged = _wcsicmp(finalRoot.c_str(), InternalDataRoot().c_str()) != 0;
+        const std::wstring stagingRoot = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\Vita3KStaging";
+        const std::string installRoot = staged ? NarrowUtf8(stagingRoot) : system;
         for (size_t i = 0; i < total; ++i) {
             FirmwareResult result;
             result.name = (*paths)[i].second;
@@ -1963,8 +2084,34 @@ void CatalogShell::InstallFirmwareFiles(std::vector<StorageFile^> files) {
             };
             notify(0);
             std::string version;
-            result.installed = libretro_.InstallFirmware(system, pup, notify, version, result.detail);
+            result.installed = libretro_.InstallFirmware(installRoot, pup, notify, version, result.detail);
             result.version = version.empty() ? FirmwareVersionText(result.headerVersion) : WidenUtf8(version);
+            if (result.installed && staged) {
+                dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
+                    ref new Windows::UI::Core::DispatchedHandler([this]() {
+                        ShowFirmwareProgress(-2, L"Copying the firmware to your drive...");
+                    }));
+                for (const wchar_t* part : { L"os0", L"vs0", L"pd0", L"sa0" }) {
+                    const std::wstring from = stagingRoot + L"\\vita3k\\" + part;
+                    if (!HasFiles(from)) continue;
+                    const std::wstring to = finalRoot + L"\\vita3k\\" + part;
+                    std::error_code ec;
+                    std::filesystem::remove_all(to, ec);
+                    ec.clear();
+                    std::filesystem::create_directories(to, ec);
+                    ec.clear();
+                    std::filesystem::copy(from, to, std::filesystem::copy_options::recursive |
+                        std::filesystem::copy_options::overwrite_existing, ec);
+                    if (ec) {
+                        result.installed = false;
+                        result.detail = L"Copying " + std::wstring(part) + L" to the drive failed: " + WidenUtf8(ec.message());
+                        libretro_.LogLine("Firmware: copying " + NarrowUtf8(part) + " to the drive failed: " + ec.message());
+                        break;
+                    }
+                }
+                std::error_code ec;
+                std::filesystem::remove_all(stagingRoot, ec);
+            }
             results.push_back(result);
         }
         return results;
@@ -1998,7 +2145,7 @@ void CatalogShell::InstallFirmwareFiles(std::vector<StorageFile^> files) {
             }
             if (r.partitions & 2) ++systemCount;
             if (!r.installed) {
-                summary += r.name + L": " + kind + L", install failed. vita3k-runtime.log has the details.";
+                summary += r.name + L": " + kind + L", install failed. " + ProblemLine(r.detail);
                 continue;
             }
             summary += r.name + L": " + kind + (r.version.empty() ? std::wstring() : L" " + r.version) + L", installed.";
@@ -2748,6 +2895,12 @@ void CatalogShell::EnterGameView(Platform::String^ title) {
     gameRunningSince_ = 0;
     pictureSeen_ = false;
     framesShown_ = 0;
+    lastLevel_ = 0;
+    lastLit_ = 0;
+    {
+        std::lock_guard<std::mutex> guard(presentErrorMutex_);
+        presentError_.clear();
+    }
     // The game owns the whole screen: the menus go away (and can't take
     // focus or controller input), the menu music stops.
     navigation_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
@@ -2808,6 +2961,15 @@ void CatalogShell::EnterGameView(Platform::String^ title) {
     column->Children->Append(loadingHint_);
     loadingLayer_->Children->Append(column);
     gameLayer_->Children->Append(loadingLayer_);
+#if !defined(VITA3K_RELEASE_BUILD)
+    // Development builds: what the display path sees, always in a corner.
+    statsLabel_ = Text(L"", 10, false, true);
+    statsLabel_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
+    statsLabel_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
+    statsLabel_->Margin = Thickness(0, 0, 24, 14);
+    statsLabel_->Opacity = 0.6;
+    gameLayer_->Children->Append(statsLabel_);
+#endif
     root_->Children->Append(gameLayer_);
 
     if (!gameTimer_) {
@@ -2827,10 +2989,11 @@ void CatalogShell::GameTick() {
         ExitGameView();
         return;
     }
-    if (!gameStarted_ || loadingHidden_) return;
+    if (!gameStarted_) return;
+    if (loadingHidden_) { UpdateGameStats(); return; }
     const auto now = GetTickCount64();
     if (!gameRunningSince_) gameRunningSince_ = now;
-    if (pictureSeen_.load() || now - gameRunningSince_ > 45000) {
+    if (pictureSeen_.load() || now - gameRunningSince_ > 60000) {
         // The game is drawing: fade the loading screen out.
         loadingHidden_ = true;
         auto fade = ref new DoubleAnimation();
@@ -2850,6 +3013,21 @@ void CatalogShell::GameTick() {
     if (now - gameRunningSince_ > 8000 && loadingStage_) {
         loadingStage_->Text = L"The game is running and getting its first picture ready. Some games stay dark for a while at start.";
     }
+    UpdateGameStats();
+}
+
+void CatalogShell::UpdateGameStats() {
+    std::wstring presenter;
+    {
+        std::lock_guard<std::mutex> guard(presentErrorMutex_);
+        presenter = presentError_;
+    }
+    wchar_t text[256] = {};
+    swprintf_s(text, L"Frames %llu  \u00B7  picture level %u (%u of 225 points lit)  \u00B7  display %s",
+        framesShown_.load(), lastLevel_.load(), lastLit_.load(), presenter.empty() ? L"OK" : presenter.c_str());
+    if (loadingHint_ && gameStarted_ && !loadFailed_)
+        loadingHint_->Text = ref new Platform::String(text);
+    if (statsLabel_) statsLabel_->Text = ref new Platform::String(text);
 }
 
 void CatalogShell::ShowLoadFailure(Platform::String^ detail) {
@@ -2898,6 +3076,7 @@ void CatalogShell::ExitGameView() {
         loadingHint_ = nullptr;
         loadingBar_ = nullptr;
         renderSurface_ = nullptr;
+        statsLabel_ = nullptr;
         booting_ = false;
         navigation_->Visibility = Windows::UI::Xaml::Visibility::Visible;
         if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Visible;
@@ -2925,13 +3104,19 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
     std::wstring displayError;
     if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
         booting_ = false;
+        libretro_.LogLine("Display: the presenter could not start: " + NarrowUtf8(displayError));
         ShowLoadFailure(StringOf(displayError));
         return;
     }
+    libretro_.LogLine("Display: presenter ready (" + NarrowUtf8(displayError) + ")");
     libretro_.SetFrameSink([this](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
         std::wstring error;
-        renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
+        const bool presented = renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
         const auto shown = ++framesShown_;
+        if (!presented) {
+            std::lock_guard<std::mutex> guard(presentErrorMutex_);
+            presentError_ = error.empty() ? L"presenter not ready" : error;
+        }
         if (!pictureSeen_.load() || shown == 60 || shown == 600 || shown % 3600 == 0) {
             // Sample a grid of the frame: is anything visible yet, and how bright is it?
             unsigned lit = 0, total = 0;
@@ -2948,6 +3133,8 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
                 }
             }
             if (lit > 0) pictureSeen_ = true;
+            lastLevel_ = static_cast<unsigned>(total ? sum / total : 0);
+            lastLit_ = lit;
             if (shown == 1 || shown == 60 || shown == 600 || shown % 3600 == 0) {
                 char line[160];
                 std::snprintf(line, sizeof(line), "Display: frame %llu, %ux%u, %u of %u samples lit, average level %llu",

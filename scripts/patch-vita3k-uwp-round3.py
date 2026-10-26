@@ -696,3 +696,24 @@ for header in ['#include <algorithm>', '#include <cstring>']:
         text = header + '\n' + text
 write(sce, text)
 print('FAT images are unpacked from memory.')
+
+# ── Log level ──────────────────────────────────────────────────────────────
+# At trace level the shader recompiler logs every instruction it translates;
+# on the console each shader took over a second, mostly spent logging.
+replace('vita3k/libretro/libretro_log.cpp', '    logger->set_level(spdlog::level::trace);',
+        '    // Info, not trace: per-instruction recompiler logging slowed every shader.\n    logger->set_level(spdlog::level::info);')
+replace('vita3k/libretro/libretro_log.cpp', '    spdlog::set_level(spdlog::level::trace);', '    spdlog::set_level(spdlog::level::info);')
+print('Core logging at info level.')
+# The emulator also applies its config's log level when it starts a game;
+# its default is trace too.
+replace('vita3k/config/include/config/config.h', 'code(int, "log-level", 0 /*SPDLOG_LEVEL_TRACE*/, log_level)',
+        'code(int, "log-level", 2 /*SPDLOG_LEVEL_INFO*/, log_level)')
+# A config.yml written by an earlier build may still say trace: clamp it.
+replace('vita3k/interface.cpp', 'logging::set_level(static_cast<spdlog::level::level_enum>(emuenv.cfg.log_level));',
+        'logging::set_level(static_cast<spdlog::level::level_enum>(std::max(emuenv.cfg.log_level, 2)));')
+replace('vita3k/config/src/config.cpp', 'logging::set_level(static_cast<spdlog::level::level_enum>(cfg.log_level));',
+        'logging::set_level(static_cast<spdlog::level::level_enum>(std::max(cfg.log_level, 2)));')
+print('Log level clamped to info.')
+text = read('vita3k/interface.cpp')
+if '#include <algorithm>' not in text:
+    write('vita3k/interface.cpp', '#include <algorithm>\n' + text)
