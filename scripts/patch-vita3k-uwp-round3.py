@@ -873,3 +873,88 @@ replace('vita3k/renderer/src/vulkan/pipeline_cache.cpp', '''        subpass.setC
 #endif
         subpass.setInputAttachments(color_ref);''')
 print('Dozen rendering: positive viewports, framebuffer fetch only with high accuracy, no texture viewport.')
+
+# ── The frame's way out, measured ───────────────────────────────────────────
+# With the three changes above the game's frames were still black on Xbox,
+# while the overlay showed. Two steps between the game and the frontend were
+# never seen working on Dozen: the game's surface itself, and the blit that
+# copies it into the image handed over (the overlay is drawn straight into
+# that image). The surface is now read back at nine points each time it is
+# presented (logged at first and every 600 frames), and a same-size copy
+# between 32-bit RGBA/BGRA formats is a plain image copy, which D3D12 does
+# natively, rather than a blit, which Dozen draws with a shader.
+lv = 'vita3k/libretro/libretro_vita3k.cpp'
+replace(lv, '''    std::array<vk::Framebuffer, 3> overlay_framebuffers;
+} s_present;''', '''    std::array<vk::Framebuffer, 3> overlay_framebuffers;
+#ifdef VITA3K_UWP
+    // nine texels of the presented surface, read back for the log
+    vkutil::Buffer probe;
+    uint64_t presents = 0;
+    vk::Format last_format = vk::Format::eUndefined;
+    uint32_t last_w = 0, last_h = 0;
+#endif
+} s_present;''')
+replace(lv, '''    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, before);
+    if (surface && surface_format == vk::Format::eR8G8B8A8Srgb) {''', '''    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, before);
+#ifdef VITA3K_UWP
+    bool probed = false;
+    if (surface && w > 2 && h > 2) {
+        if (!s_present.probe.buffer) {
+            static constexpr vma::AllocationCreateInfo readback_alloc = {
+                .flags = vma::AllocationCreateFlagBits::eHostAccessRandom | vma::AllocationCreateFlagBits::eMapped,
+                .usage = vma::MemoryUsage::eAuto,
+                .requiredFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            };
+            s_present.probe = vkutil::Buffer(9 * 16);
+            s_present.probe.init_buffer(vk::BufferUsageFlagBits::eTransferDst, readback_alloc);
+        }
+        std::array<vk::BufferImageCopy, 9> taps{};
+        for (uint32_t i = 0; i < 9; i++) {
+            taps[i] = vk::BufferImageCopy{
+                .bufferOffset = i * 16,
+                .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+                .imageOffset = { static_cast<int32_t>(ox + w * (1 + i % 3) / 4), static_cast<int32_t>(oy + h * (1 + i / 3) / 4), 0 },
+                .imageExtent = { 1, 1, 1 },
+            };
+        }
+        cmd.copyImageToBuffer(surface, vk::ImageLayout::eGeneral, s_present.probe.buffer, taps);
+        probed = true;
+    }
+    const bool same_size_32bit = surface_format == vk::Format::eR8G8B8A8Unorm || surface_format == vk::Format::eB8G8R8A8Unorm
+        || surface_format == vk::Format::eB8G8R8A8Srgb;
+    if (surface && same_size_32bit) {
+        vk::ImageCopy region{
+            .srcSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+            .srcOffset = { static_cast<int32_t>(ox), static_cast<int32_t>(oy), 0 },
+            .dstSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+            .dstOffset = { 0, 0, 0 },
+            .extent = { w, h, 1 },
+        };
+        cmd.copyImage(surface, vk::ImageLayout::eGeneral, image.image, vk::ImageLayout::eGeneral, region);
+    } else
+#endif
+    if (surface && surface_format == vk::Format::eR8G8B8A8Srgb) {''')
+replace(lv, '''    (void)vk_state.device.waitForFences(s_present.fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+    vk_state.device.resetFences(s_present.fence);
+''', '''    (void)vk_state.device.waitForFences(s_present.fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+    vk_state.device.resetFences(s_present.fence);
+#ifdef VITA3K_UWP
+    s_present.presents++;
+    const bool changed = surface_format != s_present.last_format || w != s_present.last_w || h != s_present.last_h;
+    if (changed || s_present.presents == 1 || s_present.presents % 600 == 0) {
+        s_present.last_format = surface_format;
+        s_present.last_w = w;
+        s_present.last_h = h;
+        if (probed && s_present.probe.mapped_data) {
+            const auto *t = static_cast<const uint32_t *>(s_present.probe.mapped_data);
+            lr_log(RETRO_LOG_INFO, "Present %llu: surface format %d, %ux%u at %u,%u; texels %08x %08x %08x %08x %08x %08x %08x %08x %08x\\n",
+                static_cast<unsigned long long>(s_present.presents), static_cast<int>(surface_format), w, h, ox, oy,
+                t[0], t[4], t[8], t[12], t[16], t[20], t[24], t[28], t[32]);
+        } else {
+            lr_log(RETRO_LOG_INFO, "Present %llu: %s, %ux%u\\n", static_cast<unsigned long long>(s_present.presents),
+                surface ? "surface (not probed)" : (pixels ? "frame from memory" : "no frame yet"), w, h);
+        }
+    }
+#endif
+''')
+print('Presentation: surface probe in the log, plain copies for 32-bit surfaces.')
