@@ -141,11 +141,13 @@
   </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
   <ItemGroup><Image Include="Assets\*.png" /></ItemGroup>
+  <!-- Menu music. C++ UWP projects package audio as Media items (as Visual
+       Studio adds them); Content items with DeploymentContent were left out. -->
   <ItemGroup>
-    <Content Include="Assets\Music\afterglow.wav"><DeploymentContent>true</DeploymentContent></Content>
-    <Content Include="Assets\Music\neon-arcade.wav"><DeploymentContent>true</DeploymentContent></Content>
-    <Content Include="Assets\Music\stardust.wav"><DeploymentContent>true</DeploymentContent></Content>
-    <Content Include="Assets\Music\tidal.wav"><DeploymentContent>true</DeploymentContent></Content>
+    <Media Include="Assets\Music\afterglow.wav"><DeploymentContent>true</DeploymentContent></Media>
+    <Media Include="Assets\Music\neon-arcade.wav"><DeploymentContent>true</DeploymentContent></Media>
+    <Media Include="Assets\Music\stardust.wav"><DeploymentContent>true</DeploymentContent></Media>
+    <Media Include="Assets\Music\tidal.wav"><DeploymentContent>true</DeploymentContent></Media>
   </ItemGroup>
   <ItemGroup>
     <Content Include="*.dll" Exclude="vulkan_dzn.dll;dxil.dll;vita3k_libretro.dll;vita_guest_cpu_probe.dll">
