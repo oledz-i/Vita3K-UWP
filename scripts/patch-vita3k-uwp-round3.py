@@ -620,3 +620,18 @@ replace(inst, '''    // An encrypted one twice over for a while: decrypting writ
     // game when it starts, as one from a PKG or VPK/ZIP (sco8487), never merged into it.
     if (!decrypt_from_source && fs::is_directory(install_path / "sce_pfs")) {''')
 print('Encrypted game folders are decrypted from where they are.')
+
+# ── Free space queries a game makes must not throw ──────────────────────────
+# Games ask for a device's free space (sceIoDevctl, sceAppMgrGetDevInfo); the
+# throwing fs::space() would end the app if the query is refused. Report a
+# generous size instead.
+for relative in ['vita3k/modules/SceLibKernel/SceLibKernel.cpp', 'vita3k/modules/SceDriverUser/SceAppMgrUser.cpp']:
+    replace(relative, '    fs::space_info space = fs::space(path);',
+            '''    std::error_code space_ec;
+    fs::space_info space = fs::space(path, space_ec);
+    if (space_ec)
+        space = fs::space_info{ 16ULL << 30, 8ULL << 30, 8ULL << 30 };''')
+    text = read(relative)
+    if '#include <system_error>' not in text:
+        write(relative, '#include <system_error>\n' + text)
+print('Free space queries no longer throw.')
