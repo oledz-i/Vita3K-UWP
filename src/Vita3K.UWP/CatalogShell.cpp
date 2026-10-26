@@ -1597,8 +1597,8 @@ void CatalogShell::RestorePaths() {
     }
     RefreshFirmwareStatus();
     if (dataLabel_ != nullptr) {
-        dataLabel_->Text = Pref(L"storage.dataRoot", L"")->IsEmpty()
-            ? L"Internal storage" : ref new Platform::String(DataRoot().c_str());
+        auto chosen = Pref(L"storage.dataRoot", L"");
+        dataLabel_->Text = chosen->IsEmpty() ? ref new Platform::String(L"Internal storage") : chosen;
     }
     if (future->ContainsItem(L"vita-games")) {
         create_task(future->GetFolderAsync(L"vita-games")).then(
