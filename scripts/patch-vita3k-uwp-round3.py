@@ -466,10 +466,11 @@ static int run_pfs_decryption(std::string &zrif, std::string &src, std::string &
     PfsProgressCallback progress = [&last_decile](std::uint64_t processed, std::uint64_t total, const std::string &) {
         if (!total)
             return;
-        const int decile = static_cast<int>(std::min<std::uint64_t>(processed * 10 / total, 10));
-        if (decile != last_decile) {
-            last_decile = decile;
-            lr_log(RETRO_LOG_INFO, "PFS decryption: %d%%\\n", decile * 10);
+        // Every 2%: the frontend's loading screen shows it.
+        const int step = static_cast<int>(std::min<std::uint64_t>(processed * 50 / total, 50));
+        if (step != last_decile) {
+            last_decile = step;
+            lr_log(RETRO_LOG_INFO, "PFS decryption: %d%%\\n", step * 2);
         }
     };
     int result = -1;
@@ -635,3 +636,63 @@ for relative in ['vita3k/modules/SceLibKernel/SceLibKernel.cpp', 'vita3k/modules
     if '#include <system_error>' not in text:
         write(relative, '#include <system_error>\n' + text)
 print('Free space queries no longer throw.')
+
+# ── FAT images from memory ──────────────────────────────────────────────────
+# libfat16 walks a file's cluster chain from its start for every 64 KB chunk,
+# with a seek and a two-byte read per step: thousands of small disk reads per
+# file. The partition images are at most a few hundred MB, so they are read
+# into memory once and the read and seek hooks work on that.
+replace(sce, '''    LOG_INFO("FAT: extracting {} to {}", partition, fs_utils::path_to_utf8(vita_fs_path / partition.substr(0, 3)));
+    Fat16::Image img(
+        f,
+        // Read hook
+        [](void *userdata, void *buffer, std::uint32_t size) -> std::uint32_t {
+            return static_cast<std::uint32_t>(fread(buffer, 1, size, (FILE *)userdata));
+        },
+        // Seek hook
+        [](void *userdata, std::uint32_t offset, int mode) -> std::uint32_t {
+            fseek((FILE *)userdata, offset, (mode == Fat16::IMAGE_SEEK_MODE_BEG ? SEEK_SET : (mode == Fat16::IMAGE_SEEK_MODE_CUR ? SEEK_CUR : SEEK_END)));
+
+            return ftell((FILE *)userdata);
+        });''', '''    LOG_INFO("FAT: extracting {} to {}", partition, fs_utils::path_to_utf8(vita_fs_path / partition.substr(0, 3)));
+    struct MemoryImage {
+        std::vector<std::uint8_t> data;
+        std::size_t position = 0;
+    } memory;
+    fseek(f, 0, SEEK_END);
+    const long image_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (image_size > 0) {
+        memory.data.resize(static_cast<std::size_t>(image_size));
+        if (fread(memory.data.data(), 1, memory.data.size(), f) != memory.data.size()) {
+            LOG_ERROR("FAT: could not read {}", partition);
+            fclose(f);
+            return;
+        }
+    }
+    Fat16::Image img(
+        &memory,
+        // Read hook
+        [](void *userdata, void *buffer, std::uint32_t size) -> std::uint32_t {
+            auto *m = static_cast<MemoryImage *>(userdata);
+            const std::size_t left = m->position < m->data.size() ? m->data.size() - m->position : 0;
+            const std::size_t take = std::min<std::size_t>(size, left);
+            if (take)
+                std::memcpy(buffer, m->data.data() + m->position, take);
+            m->position += take;
+            return static_cast<std::uint32_t>(take);
+        },
+        // Seek hook
+        [](void *userdata, std::uint32_t offset, int mode) -> std::uint32_t {
+            auto *m = static_cast<MemoryImage *>(userdata);
+            const std::size_t base = mode == Fat16::IMAGE_SEEK_MODE_BEG ? 0
+                : mode == Fat16::IMAGE_SEEK_MODE_CUR ? m->position : m->data.size();
+            m->position = std::min<std::size_t>(base + offset, m->data.size());
+            return static_cast<std::uint32_t>(m->position);
+        });''')
+text = read(sce)
+for header in ['#include <algorithm>', '#include <cstring>']:
+    if header not in text:
+        text = header + '\n' + text
+write(sce, text)
+print('FAT images are unpacked from memory.')

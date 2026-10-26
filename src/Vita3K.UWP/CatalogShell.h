@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <atomic>
 
 namespace Vita3KUWP {
 struct LibraryGame {
@@ -28,6 +29,22 @@ public:
 private:
     std::vector<LibraryGame> games_;
     bool booting_ = false;
+    // The game screen: a full-window layer over the menus while a game runs.
+    Windows::UI::Xaml::Controls::Grid^ gameLayer_ = nullptr;
+    Windows::UI::Xaml::Controls::Grid^ loadingLayer_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ loadingStage_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ loadingHint_ = nullptr;
+    Windows::UI::Xaml::Controls::ProgressBar^ loadingBar_ = nullptr;
+    Windows::UI::Xaml::Controls::ScrollViewer^ contentScroll_ = nullptr;
+    Windows::UI::Xaml::Controls::Border^ statusBar_ = nullptr;
+    Windows::UI::Xaml::DispatcherTimer^ gameTimer_ = nullptr;
+    bool inGame_ = false;
+    bool gameStarted_ = false;
+    bool loadFailed_ = false;
+    bool loadingHidden_ = false;
+    unsigned long long gameRunningSince_ = 0;
+    std::atomic<bool> pictureSeen_{false};
+    std::atomic<unsigned long long> framesShown_{0};
     Windows::UI::Xaml::Controls::Grid^ root_;
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
@@ -111,6 +128,10 @@ private:
     void InspectLaunch(size_t index);
     void AttemptBoot(size_t index);
     void StartCore(Platform::String^ contentPath);
+    void EnterGameView(Platform::String^ title);
+    void ShowLoadFailure(Platform::String^ detail);
+    void ExitGameView();
+    void GameTick();
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
     void ChooseFirmwareFolder();

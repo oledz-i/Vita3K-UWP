@@ -159,8 +159,15 @@ bool InAppStorage(LPCWSTR path) {
     const bool absolute = value.size() >= 2 && (value[1] == L':' || (value[0] == L'\\' && value[1] == L'\\'));
     if (!absolute) return true;
     for (const auto& root : g_appRoots) {
+        // Inside the app's storage.
         if (value.compare(0, root.size(), root) == 0) return true;
-        if (value.size() + 1 == root.size() && root.compare(0, value.size(), value) == 0) return true;
+        // A folder above it (Q:\Users, Q:\Users\UserMgr0, ...): std::filesystem
+        // checks every parent when it creates directories. Through FromApp each
+        // of those checks took the broker's slow path, which made unpacking the
+        // firmware cost about a second per directory.
+        std::wstring folder = value;
+        if (!folder.empty() && folder.back() != L'\\') folder.push_back(L'\\');
+        if (root.compare(0, folder.size(), folder) == 0) return true;
     }
     return false;
 }

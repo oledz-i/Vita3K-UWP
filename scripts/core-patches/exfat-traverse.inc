@@ -13,6 +13,9 @@ constexpr uint64_t kMaxDirBytes = 64ULL * 1024 * 1024;
 
 struct ExfatReader {
     std::ifstream &img;
+    // The whole image, when it was read into memory (the usual case): reads
+    // are then copies instead of a seek and a read on the file each.
+    const std::vector<char> *memory = nullptr;
     uint64_t img_size = 0;
     uint64_t sector_size = 0;
     uint64_t cluster_size = 0;
@@ -38,6 +41,10 @@ struct ExfatReader {
     bool read_at(uint64_t offset, char *out, uint64_t size) {
         if (offset > img_size || size > img_size - offset)
             return false;
+        if (memory) {
+            std::memcpy(out, memory->data() + offset, static_cast<size_t>(size));
+            return true;
+        }
         img.clear();
         img.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
         img.read(out, static_cast<std::streamsize>(size));
@@ -292,6 +299,17 @@ void extract_exfat(const fs::path &partition_path, const std::string &partition,
 
     ExfatReader reader{ img };
     reader.img_size = img_size;
+    std::vector<char> whole;
+    if (img_size <= (1ULL << 30)) {
+        whole.resize(static_cast<size_t>(img_size));
+        img.clear();
+        img.seekg(0, std::ios::beg);
+        img.read(whole.data(), static_cast<std::streamsize>(img_size));
+        if (static_cast<uint64_t>(img.gcount()) == img_size)
+            reader.memory = &whole;
+        else
+            whole.clear();
+    }
     reader.sector_size = 1ULL << super_block.sector_bits;
     reader.cluster_size = reader.sector_size << super_block.spc_bits;
     reader.heap_offset = static_cast<uint64_t>(super_block.cluster_sector_start) * reader.sector_size;

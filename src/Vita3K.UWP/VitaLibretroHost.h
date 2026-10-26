@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <functional>
+#include <cstdio>
 #include <Xinput.h>
 #include "CoreAudio.h"
 #include "VitaVulkanBridge.h"
@@ -49,6 +50,15 @@ public:
     // Where vita3k-runtime.log goes; kept in the app's own folder even when
     // the Vita3K data folder is on an external drive.
     void SetLogPath(const std::wstring& path) { runtimeLogPath_ = path; }
+    // Called with a short description of what the core is doing while a game
+    // loads, and a percentage when one is known (-1 otherwise). From any thread.
+    void SetProgressSink(std::function<void(const std::string&, int)> sink) {
+        std::lock_guard<std::mutex> guard(logsMutex_);
+        progressSink_ = std::move(sink);
+    }
+    unsigned long long FramesExecuted() const { return framesExecuted_; }
+    // Writes one line to vita3k-runtime.log.
+    void LogLine(const std::string& line);
     const std::wstring& LogPath() const { return runtimeLogPath_; }
     // What a .PUP holds: bit 0 os0, 1 vs0 (system firmware), 2 pd0
     // (preinstalled package), 3 sa0 (fonts); and its firmware version.
@@ -129,6 +139,11 @@ private:
     bool unsupportedVideo_ = false;
     std::wstring coreVersion_;
     std::string redirectReport_;
+    FILE* logFile_ = nullptr;
+    std::wstring logFilePath_;
+    // Loading progress worked out from the core's log, for the loading screen.
+    std::function<void(const std::string&, int)> progressSink_;
+    void ObserveLog(const char* message);
     std::mutex optionsMutex_;
     std::map<std::string, const char*> options_;
     std::set<std::string> optionStrings_; // stable storage for returned values

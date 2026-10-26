@@ -71,6 +71,35 @@ T Entry(HMODULE module, const char* name) {
 
 VitaLibretroHost::~VitaLibretroHost() {
     Shutdown();
+    if (logFile_) std::fclose(logFile_);
+}
+
+void VitaLibretroHost::LogLine(const std::string& line) {
+    Log(1, "%s\n", line.c_str());
+}
+
+// The loading screen's stages, recognised in what the core logs while it
+// installs and starts a game. Runs with logsMutex_ held.
+void VitaLibretroHost::ObserveLog(const char* message) {
+    if (!progressSink_ || !message) return;
+    const std::string text = message;
+    auto has = [&text](const char* needle) { return text.find(needle) != std::string::npos; };
+    if (has("=== Checking game installation")) progressSink_("Checking the game", -1);
+    else if (has("Encrypted game folder: decrypting") || has("Detected NoNpDrm encrypted content"))
+        progressSink_("Installing the game: decrypting", 0);
+    else if (has("PFS decryption: ")) {
+        const auto at = text.find("PFS decryption: ") + 16;
+        int percent = -1;
+        try { percent = std::stoi(text.substr(at)); } catch (...) {}
+        progressSink_("Installing the game: decrypting", percent);
+    }
+    else if (has("PFS decryption succeeded")) progressSink_("Installing the game: finishing", 100);
+    else if (has("Installing '")) progressSink_("Installing the game", -1);
+    else if (has("Not enough free space")) progressSink_("Not enough free space to install this game", -1);
+    else if (has("retro_load_game.install")) progressSink_("Loading the game", -1);
+    else if (has("context_reset_vulkan.enter")) progressSink_("Preparing graphics", -1);
+    else if (has("context_reset_finalize.before_libretro_run_app")) progressSink_("Starting the game", -1);
+    else if (has("First core video frame presented")) progressSink_("Waiting for the game's first picture", -1);
 }
 
 void VitaLibretroHost::Shutdown() {
@@ -379,12 +408,20 @@ void __cdecl VitaLibretroHost::Log(unsigned, const char* format, ...) {
     va_end(arguments);
     std::lock_guard<std::mutex> guard(host->logsMutex_);
     if (!host->runtimeLogPath_.empty()) {
-        FILE* file = nullptr;
-        if (_wfopen_s(&file, host->runtimeLogPath_.c_str(), L"ab") == 0 && file) {
-            std::fwrite(message, 1, std::strlen(message), file);
-            std::fclose(file);
+        // Kept open: a game install logs thousands of lines, and opening the
+        // file for each one cost more than the work being logged.
+        if (!host->logFile_ || host->logFilePath_ != host->runtimeLogPath_) {
+            if (host->logFile_) std::fclose(host->logFile_);
+            host->logFile_ = nullptr;
+            _wfopen_s(&host->logFile_, host->runtimeLogPath_.c_str(), L"ab");
+            host->logFilePath_ = host->runtimeLogPath_;
+        }
+        if (host->logFile_) {
+            std::fwrite(message, 1, std::strlen(message), host->logFile_);
+            std::fflush(host->logFile_);
         }
     }
+    host->ObserveLog(message);
     host->latestCoreLogs_.append(message);
     if (host->latestCoreLogs_.size() > 12000) {
         host->latestCoreLogs_.erase(0, host->latestCoreLogs_.size() - 12000);

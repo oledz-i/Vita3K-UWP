@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <mutex>
 #include <wrl/client.h>
 #include <string>
 #include <cstdint>
@@ -27,6 +28,14 @@ public:
     bool PresentScaledBgraFrame(const std::uint8_t* pixels, unsigned width,
         unsigned height, unsigned strideBytes, bool sourceRgba,
         std::wstring& result);
+    // A game frame: the swap chain follows its size and format (RGBA or
+    // BGRA), so higher internal resolutions keep their detail and no pixel
+    // conversion happens on the CPU. Safe to call from the game thread.
+    bool PresentFrame(const std::uint8_t* pixels, unsigned width, unsigned height,
+                      unsigned strideBytes, bool sourceRgba, std::wstring& result);
+    // The panel's size in DIPs: the frame is scaled to fit it (keeping its
+    // shape, or filling it when stretch is set) by the compositor, on the GPU.
+    void SetViewport(float width, float height, bool stretch);
     void Shutdown();
     bool Ready() const { return swapChain_ != nullptr; }
 
@@ -47,6 +56,13 @@ private:
     UINT64 fenceValue_ = 0;
     UINT rtvIncrement_ = 0;
 
+    DXGI_FORMAT format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
+    UINT64 uploadBytes_ = 0;
+    float viewWidth_ = 0, viewHeight_ = 0;
+    bool stretch_ = false;
+    std::recursive_mutex mutex_;
+    bool Resize(unsigned width, unsigned height, DXGI_FORMAT format, std::wstring& result);
+    void ApplyTransform();
     bool Fail(const wchar_t* stage, HRESULT code, std::wstring& result);
     bool WaitForGpu(std::wstring& result);
 };

@@ -395,6 +395,7 @@ CatalogShell::CatalogShell() {
     root_->Children->Append(navigation_);
 
     auto scroll = ref new ScrollViewer();
+    contentScroll_ = scroll;
     scroll->VerticalScrollBarVisibility = ScrollBarVisibility::Hidden;
     scroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Disabled;
     content_ = Vertical();
@@ -405,6 +406,7 @@ CatalogShell::CatalogShell() {
     root_->Children->Append(scroll);
 
     auto statusBar = ref new Border();
+    statusBar_ = statusBar;
     statusBar->Background = Solid(Bg());
     statusBar->Padding = Thickness(32, 3, 48, 2);
     status_ = Text(L"VITA3K  /  XBOX PREVIEW", 10, false, true);
@@ -485,6 +487,13 @@ CatalogShell::CatalogShell() {
     Window::Current->CoreWindow->KeyDown +=
         ref new TypedEventHandler<Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^>(
             [this](Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^ e) {
+                if (inGame_) {
+                    // The controller belongs to the game. View + Menu (read by
+                    // the host) quits; Escape does on a keyboard.
+                    if (e->VirtualKey == Windows::System::VirtualKey::Escape) libretro_.StopRunning();
+                    e->Handled = true;
+                    return;
+                }
                 if (libretro_.Running()) {
                     // B belongs to the game, not frontend navigation. Escape
                     // is an explicit desktop stop action while testing a core.
@@ -2172,6 +2181,61 @@ void CatalogShell::ChangeDataRoot(const std::wstring& chosen) {
 
 void CatalogShell::EmulationSettings() {
     Section(L"Emulation", L"Vita3K's own options. They take effect when a game starts.");
+    {
+        // What draws the game, and how it fills the screen.
+        auto display = Vertical();
+        display->Children->Append(Text(L"Display and renderer", 16, true));
+        auto rendererRow = ref new Grid();
+        rendererRow->Margin = Thickness(0, 14, 0, 0);
+        auto left = ref new ColumnDefinition();
+        left->Width = GridLength(1, GridUnitType::Star);
+        auto right = ref new ColumnDefinition();
+        right->Width = GridLength(1, GridUnitType::Auto);
+        rendererRow->ColumnDefinitions->Append(left);
+        rendererRow->ColumnDefinitions->Append(right);
+        auto rendererCopy = Vertical();
+        rendererCopy->Children->Append(Text(L"Renderer", 14, true));
+        auto rendererInfo = Text(L"Vita3K's Vulkan renderer, running on the Xbox's Direct3D 12 through Mesa Dozen. "
+            L"It is the only renderer that works on Xbox; Vita3K's OpenGL one has no driver here.", 12, false, true);
+        rendererInfo->Margin = Thickness(0, 3, 24, 0);
+        rendererCopy->Children->Append(rendererInfo);
+        rendererRow->Children->Append(rendererCopy);
+        auto rendererName = Text(L"Vulkan (Direct3D 12)", 13, true);
+        rendererName->Foreground = Solid(Accent());
+        rendererName->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        Grid::SetColumn(rendererName, 1);
+        rendererRow->Children->Append(rendererName);
+        display->Children->Append(rendererRow);
+
+        auto screenRow = ref new Grid();
+        screenRow->Margin = Thickness(0, 14, 0, 0);
+        auto l2 = ref new ColumnDefinition();
+        l2->Width = GridLength(1, GridUnitType::Star);
+        auto r2 = ref new ColumnDefinition();
+        r2->Width = GridLength(1, GridUnitType::Auto);
+        screenRow->ColumnDefinitions->Append(l2);
+        screenRow->ColumnDefinitions->Append(r2);
+        auto screenCopy = Vertical();
+        screenCopy->Children->Append(Text(L"Screen", 14, true));
+        auto screenInfo = Text(L"Fit keeps the Vita's shape with thin bars; Stretch fills the whole TV.", 12, false, true);
+        screenInfo->Margin = Thickness(0, 3, 24, 0);
+        screenCopy->Children->Append(screenInfo);
+        screenRow->Children->Append(screenCopy);
+        auto screen = ref new ComboBox();
+        screen->Width = 240;
+        screen->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        screen->Items->Append(L"Fit (keep shape)");
+        screen->Items->Append(L"Stretch to fill");
+        screen->SelectedIndex = Pref(L"display.stretch", L"0")->Equals(L"1") ? 1 : 0;
+        screen->SelectionChanged += ref new SelectionChangedEventHandler([this](Platform::Object^ sender, SelectionChangedEventArgs^) {
+            PutPref(L"display.stretch", safe_cast<ComboBox^>(sender)->SelectedIndex == 1 ? L"1" : L"0");
+            PlayCue(1);
+        });
+        Grid::SetColumn(screen, 1);
+        screenRow->Children->Append(screen);
+        display->Children->Append(screenRow);
+        content_->Children->Append(Panel(display));
+    }
     std::wstring current;
     StackPanel^ group = nullptr;
     for (std::size_t i = 0; i < vita3k_uwp::kCoreOptionCount; ++i) {
@@ -2595,46 +2659,257 @@ void CatalogShell::AttemptBoot(size_t index) {
     }, task_continuation_context::use_current());
 }
 
+void CatalogShell::EnterGameView(Platform::String^ title) {
+    inGame_ = true;
+    gameStarted_ = false;
+    loadFailed_ = false;
+    loadingHidden_ = false;
+    gameRunningSince_ = 0;
+    pictureSeen_ = false;
+    framesShown_ = 0;
+    // The game owns the whole screen: the menus go away (and can't take
+    // focus or controller input), the menu music stops.
+    navigation_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    if (statusBar_) statusBar_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    musicPlayer_->Pause();
+
+    gameLayer_ = ref new Grid();
+    gameLayer_->Background = Solid(Colors::Black);
+    Grid::SetColumnSpan(gameLayer_, 2);
+    Grid::SetRowSpan(gameLayer_, 2);
+    renderSurface_ = ref new SwapChainPanel();
+    renderSurface_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+    renderSurface_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Stretch;
+    renderSurface_->SizeChanged += ref new SizeChangedEventHandler([this](Platform::Object^, SizeChangedEventArgs^ e) {
+        renderer_.SetViewport(static_cast<float>(e->NewSize.Width), static_cast<float>(e->NewSize.Height),
+            Pref(L"display.stretch", L"0")->Equals(L"1"));
+    });
+    gameLayer_->Children->Append(renderSurface_);
+
+    // Loading screen, over the game until it shows its first picture.
+    loadingLayer_ = ref new Grid();
+    loadingLayer_->Background = Gradient(Bg(), Glow());
+    auto column = Vertical();
+    column->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    column->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+    column->MaxWidth = 560;
+    auto kicker = Text(L"NOW LOADING", 10, true);
+    kicker->CharacterSpacing = 300;
+    kicker->Foreground = Solid(Accent());
+    kicker->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    column->Children->Append(kicker);
+    auto name = Text(title, 30, false);
+    name->FontWeight = FontWeights::Light;
+    name->TextAlignment = TextAlignment::Center;
+    name->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    name->Margin = Thickness(0, 10, 0, 22);
+    column->Children->Append(name);
+    loadingBar_ = ref new ProgressBar();
+    loadingBar_->Width = 420;
+    loadingBar_->Height = 4;
+    loadingBar_->Minimum = 0;
+    loadingBar_->Maximum = 100;
+    loadingBar_->IsIndeterminate = true;
+    loadingBar_->Foreground = Solid(Accent());
+    loadingBar_->Background = Solid(Alpha(40, 255, 255, 255));
+    column->Children->Append(loadingBar_);
+    loadingStage_ = Text(L"Getting ready", 14, false, true);
+    loadingStage_->TextAlignment = TextAlignment::Center;
+    loadingStage_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    loadingStage_->Margin = Thickness(0, 14, 0, 0);
+    column->Children->Append(loadingStage_);
+    loadingHint_ = Text(L"Press View + Menu together to quit the game.", 11, false, true);
+    loadingHint_->Opacity = 0.7;
+    loadingHint_->TextAlignment = TextAlignment::Center;
+    loadingHint_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    loadingHint_->Margin = Thickness(0, 40, 0, 0);
+    column->Children->Append(loadingHint_);
+    loadingLayer_->Children->Append(column);
+    gameLayer_->Children->Append(loadingLayer_);
+    root_->Children->Append(gameLayer_);
+
+    if (!gameTimer_) {
+        gameTimer_ = ref new DispatcherTimer();
+        TimeSpan interval;
+        interval.Duration = 2000000; // 200 ms
+        gameTimer_->Interval = interval;
+        gameTimer_->Tick += ref new EventHandler<Platform::Object^>([this](Platform::Object^, Platform::Object^) { GameTick(); });
+    }
+    gameTimer_->Start();
+}
+
+void CatalogShell::GameTick() {
+    if (!inGame_ || loadFailed_) return;
+    if (gameStarted_ && !libretro_.Running()) {
+        // View + Menu, or the core stopped on its own.
+        ExitGameView();
+        return;
+    }
+    if (!gameStarted_ || loadingHidden_) return;
+    const auto now = GetTickCount64();
+    if (!gameRunningSince_) gameRunningSince_ = now;
+    if (pictureSeen_.load() || now - gameRunningSince_ > 45000) {
+        // The game is drawing: fade the loading screen out.
+        loadingHidden_ = true;
+        auto fade = ref new DoubleAnimation();
+        fade->From = 1.0;
+        fade->To = 0.0;
+        Duration span;
+        TimeSpan length;
+        length.Duration = 3500000; // 350 ms
+        span.TimeSpan = length;
+        span.Type = DurationType::TimeSpan;
+        fade->Duration = span;
+        auto story = ref new Storyboard();
+        Storyboard::SetTarget(fade, loadingLayer_);
+        Storyboard::SetTargetProperty(fade, L"Opacity");
+        story->Children->Append(fade);
+        story->Completed += ref new EventHandler<Platform::Object^>([this](Platform::Object^, Platform::Object^) {
+            if (loadingLayer_) loadingLayer_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+        });
+        story->Begin();
+        return;
+    }
+    if (now - gameRunningSince_ > 8000 && loadingStage_) {
+        loadingStage_->Text = L"The game is running and getting its first picture ready. Some games stay dark for a while at start.";
+    }
+}
+
+void CatalogShell::ShowLoadFailure(Platform::String^ detail) {
+    loadFailed_ = true;
+    if (gameTimer_) gameTimer_->Stop();
+    if (!loadingLayer_) return;
+    loadingLayer_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+    loadingLayer_->Opacity = 1.0;
+    loadingBar_->IsIndeterminate = false;
+    loadingBar_->Value = 0;
+    loadingBar_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    loadingStage_->Text = L"This game couldn't start.";
+    std::wstring text = detail ? detail->Data() : L"";
+    if (text.size() > 400) text = text.substr(0, 400) + L"...";
+    loadingHint_->Text = ref new Platform::String((text + L"\nvita3k-runtime.log has the details.").c_str());
+    loadingHint_->Opacity = 0.85;
+    auto back = Button(L"Back to the library", true);
+    back->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    back->Margin = Thickness(0, 24, 0, 0);
+    back->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ExitGameView(); });
+    auto column = safe_cast<StackPanel^>(loadingLayer_->Children->GetAt(0));
+    column->Children->Append(back);
+    inGame_ = false; // the controller drives this button now
+    back->Focus(Windows::UI::Xaml::FocusState::Programmatic);
+}
+
+void CatalogShell::ExitGameView() {
+    if (gameTimer_) gameTimer_->Stop();
+    inGame_ = false;
+    libretro_.SetProgressSink(nullptr);
+    SetStatus(L"Closing the game...");
+    // Unloading joins the core's threads; keep it off the UI thread.
+    create_task([this]() {
+        libretro_.StopRunning();
+        libretro_.UnloadGame();
+    }).then([this](task<void> done) {
+        try { done.get(); } catch (...) {}
+        renderer_.Shutdown();
+        if (gameLayer_) {
+            unsigned index = 0;
+            if (root_->Children->IndexOf(gameLayer_, &index)) root_->Children->RemoveAt(index);
+        }
+        gameLayer_ = nullptr;
+        loadingLayer_ = nullptr;
+        loadingStage_ = nullptr;
+        loadingHint_ = nullptr;
+        loadingBar_ = nullptr;
+        renderSurface_ = nullptr;
+        booting_ = false;
+        navigation_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        if (statusBar_) statusBar_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        if (track_ > 0) musicPlayer_->Play();
+        SetStatus(L"Back in the library.");
+        ShowPage(1);
+    }, task_continuation_context::use_current());
+}
+
 void CatalogShell::StartCore(Platform::String^ contentPath) {
     const std::string system = NarrowUtf8(DataRoot());
     const std::string content = Utf8Of(contentPath);
+    Platform::String^ title = L"Starting your game";
+    for (const auto& game : games_) {
+        const std::wstring path = contentPath->Data();
+        if ((game.directory && path == game.directory->Path->Data()) || (game.file && path == game.file->Path->Data())) {
+            title = game.name;
+            break;
+        }
+    }
     libretro_.StopRunning();
     renderer_.Shutdown();
-    content_->Children->Clear();
-    renderSurface_ = ref new SwapChainPanel();
-    renderSurface_->Height = 544;
-    renderSurface_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
-    content_->Children->Append(renderSurface_);
-    auto stop = Button(L"Stop game");
-    stop->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
-        libretro_.StopRunning(); libretro_.UnloadGame(); booting_ = false; ShowPage(1);
-    });
-    content_->Children->Append(stop);
+    EnterGameView(title);
     std::wstring displayError;
     if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
         booting_ = false;
-        SetStatus(StringOf(displayError));
+        ShowLoadFailure(StringOf(displayError));
         return;
     }
     libretro_.SetFrameSink([this](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
         std::wstring error;
-        if (!renderer_.PresentScaledBgraFrame(pixels, width, height, width * 4, rgba, error))
-            throw std::runtime_error("D3D12 frame presentation failed");
+        renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
+        const auto shown = ++framesShown_;
+        if (!pictureSeen_.load() || shown == 60 || shown == 600 || shown % 3600 == 0) {
+            // Sample a grid of the frame: is anything visible yet, and how bright is it?
+            unsigned lit = 0, total = 0;
+            unsigned long long sum = 0;
+            for (unsigned gy = 1; gy < 16; ++gy) {
+                const unsigned y = height * gy / 16;
+                for (unsigned gx = 1; gx < 16; ++gx) {
+                    const unsigned x = width * gx / 16;
+                    const uint8_t* p = pixels + (static_cast<size_t>(y) * width + x) * 4;
+                    const unsigned value = (static_cast<unsigned>(p[0]) + p[1] + p[2]) / 3;
+                    sum += value;
+                    ++total;
+                    if (value > 20) ++lit;
+                }
+            }
+            if (lit > 0) pictureSeen_ = true;
+            if (shown == 1 || shown == 60 || shown == 600 || shown % 3600 == 0) {
+                char line[160];
+                std::snprintf(line, sizeof(line), "Display: frame %llu, %ux%u, %u of %u samples lit, average level %llu",
+                    shown, width, height, lit, total, total ? sum / total : 0ull);
+                libretro_.LogLine(line);
+            }
+        }
+        if (!error.empty() && (shown <= 3 || shown % 600 == 0))
+            libretro_.LogLine("Display: " + NarrowUtf8(error));
     });
-    SetStatus(L"Starting Vita3K. The first start installs the firmware, which can take a few minutes.");
+    auto dispatcher = Dispatcher;
+    libretro_.SetProgressSink([this,dispatcher](const std::string& stage, int percent) {
+        const std::wstring text = WidenUtf8(stage);
+        dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
+            ref new Windows::UI::Core::DispatchedHandler([this,text,percent]() {
+                if (!loadingStage_ || loadFailed_) return;
+                loadingStage_->Text = ref new Platform::String(text.c_str());
+                loadingBar_->IsIndeterminate = percent < 0;
+                if (percent >= 0) loadingBar_->Value = percent;
+            }));
+    });
     ApplyCoreOptions();
     create_task([this,system,content]() {
         std::wstring detail;
-        if (!libretro_.Initialize(system, detail)) return detail;
-        if (!libretro_.LoadGame(content, detail)) return detail;
-        if (!libretro_.StartRunning(detail)) return detail;
-        return detail;
-    }).then([this](task<std::wstring> result) {
+        if (!libretro_.Initialize(system, detail)) return std::make_pair(false, detail);
+        if (!libretro_.LoadGame(content, detail)) return std::make_pair(false, detail);
+        if (!libretro_.StartRunning(detail)) return std::make_pair(false, detail);
+        return std::make_pair(true, detail);
+    }).then([this](task<std::pair<bool, std::wstring>> result) {
         booting_ = false;
-        try { SetStatus(StringOf(result.get())); }
-        catch (...) {
-            SetStatus(L"Vita3K stopped while loading. vita3k-runtime.log in the app's LocalState folder says where.");
+        std::pair<bool, std::wstring> outcome{ false, L"Vita3K stopped while loading." };
+        try { outcome = result.get(); } catch (...) {}
+        if (!outcome.first) {
+            ShowLoadFailure(ref new Platform::String(outcome.second.c_str()));
+            return;
         }
+        gameStarted_ = true;
+        if (loadingStage_ && !pictureSeen_.load()) loadingStage_->Text = L"Starting the game";
     }, task_continuation_context::use_current());
 }
 

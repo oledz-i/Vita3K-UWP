@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "D3D12Host.h"
 #include <windows.ui.xaml.media.dxinterop.h>
+#include <dxgi1_3.h>
 #include <vector>
 #include <cstring>
 #include <algorithm>
@@ -17,6 +18,9 @@ bool D3D12Host::Fail(const wchar_t* stage, HRESULT code, std::wstring& result) {
 }
 
 void D3D12Host::Shutdown() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    uploadBytes_ = 0;
+    format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
     if (fenceEvent_ != nullptr) {
         CloseHandle(fenceEvent_);
         fenceEvent_ = nullptr;
@@ -332,4 +336,133 @@ bool D3D12Host::DrawUploadTestFrame(std::wstring& result) {
         }
     }
     return PresentBgraFrame(pixels.data(), width_, height_, width_ * 4u, result);
+}
+
+void D3D12Host::ApplyTransform() {
+    if (!swapChain_ || viewWidth_ <= 0 || viewHeight_ <= 0 || !width_ || !height_) return;
+    ComPtr<IDXGISwapChain2> chain;
+    if (FAILED(swapChain_.As(&chain))) return;
+    // One swap-chain pixel is one DIP of the panel; scale and centre it.
+    float sx = viewWidth_ / static_cast<float>(width_);
+    float sy = viewHeight_ / static_cast<float>(height_);
+    if (!stretch_) sx = sy = std::min(sx, sy);
+    DXGI_MATRIX_3X2_F matrix = {};
+    matrix._11 = sx;
+    matrix._22 = sy;
+    matrix._31 = (viewWidth_ - static_cast<float>(width_) * sx) / 2.0f;
+    matrix._32 = (viewHeight_ - static_cast<float>(height_) * sy) / 2.0f;
+    chain->SetMatrixTransform(&matrix);
+}
+
+void D3D12Host::SetViewport(float width, float height, bool stretch) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    viewWidth_ = width;
+    viewHeight_ = height;
+    stretch_ = stretch;
+    ApplyTransform();
+}
+
+bool D3D12Host::Resize(unsigned width, unsigned height, DXGI_FORMAT format, std::wstring& result) {
+    if (!WaitForGpu(result)) return false;
+    for (auto& buffer : buffers_) buffer.Reset();
+    HRESULT hr = swapChain_->ResizeBuffers(kBufferCount, width, height, format, 0);
+    if (FAILED(hr)) return Fail(L"ResizeBuffers", hr, result);
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
+    for (unsigned i = 0; i < kBufferCount; ++i) {
+        hr = swapChain_->GetBuffer(i, IID_PPV_ARGS(buffers_[i].GetAddressOf()));
+        if (FAILED(hr)) return Fail(L"GetBuffer after resize", hr, result);
+        device_->CreateRenderTargetView(buffers_[i].Get(), nullptr, handle);
+        handle.ptr += rtvIncrement_;
+    }
+    width_ = width;
+    height_ = height;
+    format_ = format;
+    ApplyTransform();
+    return true;
+}
+
+bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigned height,
+                             unsigned strideBytes, bool sourceRgba, std::wstring& result) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!Ready() || !pixels || width == 0 || height == 0 || width > 8192u || height > 8192u ||
+        strideBytes < width * 4u) {
+        result = L"Invalid game frame";
+        return false;
+    }
+    const DXGI_FORMAT format = sourceRgba ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (width != width_ || height != height_ || format != format_) {
+        if (!Resize(width, height, format, result)) return false;
+    }
+    const unsigned rowPitch = (width * 4u + 255u) & ~255u;
+    const UINT64 bytes = static_cast<UINT64>(rowPitch) * height;
+    if (!frameUpload_ || bytes > uploadBytes_) {
+        frameUpload_.Reset();
+        D3D12_HEAP_PROPERTIES heap = {};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = bytes;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        const HRESULT created = device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(frameUpload_.GetAddressOf()));
+        if (FAILED(created)) return Fail(L"Create frame upload buffer", created, result);
+        uploadBytes_ = bytes;
+    }
+    D3D12_RANGE none = { 0, 0 };
+    void* destination = nullptr;
+    HRESULT hr = frameUpload_->Map(0, &none, &destination);
+    if (FAILED(hr)) return Fail(L"Map frame upload", hr, result);
+    auto* out = static_cast<std::uint8_t*>(destination);
+    if (strideBytes == rowPitch) {
+        std::memcpy(out, pixels, static_cast<size_t>(bytes));
+    } else {
+        for (unsigned y = 0; y < height; ++y)
+            std::memcpy(out + static_cast<size_t>(y) * rowPitch, pixels + static_cast<size_t>(y) * strideBytes, width * 4u);
+    }
+    // The core's alpha is meaningless for display; the swap chain ignores it.
+    D3D12_RANGE written = { 0, static_cast<SIZE_T>(bytes) };
+    frameUpload_->Unmap(0, &written);
+
+    hr = allocator_->Reset();
+    if (FAILED(hr)) return Fail(L"Frame allocator reset", hr, result);
+    hr = commands_->Reset(allocator_.Get(), nullptr);
+    if (FAILED(hr)) return Fail(L"Frame command list reset", hr, result);
+    const UINT frame = swapChain_->GetCurrentBackBufferIndex();
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = buffers_[frame].Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    commands_->ResourceBarrier(1, &barrier);
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = frameUpload_.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Footprint.Format = format;
+    src.PlacedFootprint.Footprint.Width = width;
+    src.PlacedFootprint.Footprint.Height = height;
+    src.PlacedFootprint.Footprint.Depth = 1;
+    src.PlacedFootprint.Footprint.RowPitch = rowPitch;
+    D3D12_TEXTURE_COPY_LOCATION dst = {};
+    dst.pResource = buffers_[frame].Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    commands_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    commands_->ResourceBarrier(1, &barrier);
+    hr = commands_->Close();
+    if (FAILED(hr)) return Fail(L"Frame command list close", hr, result);
+    ID3D12CommandList* lists[] = { commands_.Get() };
+    queue_->ExecuteCommandLists(1, lists);
+    // The emulation loop paces itself; do not wait for a vertical blank here as well.
+    hr = swapChain_->Present(0, 0);
+    if (FAILED(hr)) return Fail(L"Frame Present", hr, result);
+    return WaitForGpu(result);
 }
