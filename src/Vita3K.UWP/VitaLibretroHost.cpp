@@ -21,6 +21,48 @@ std::wstring FromUtf8(const char* input) {
     output.pop_back();
     return output;
 }
+// A hardware fault inside the core (an access violation, say) would end the
+// app with nothing in the log. These run a core call under SEH and report
+// the exception code and where in which module it happened. C++ exceptions
+// are left to their own handlers. The __try sits in functions without C++
+// objects, as MSVC requires.
+struct CoreFault {
+    DWORD code = 0;
+    const void* address = nullptr;
+};
+int CoreFaultFilter(EXCEPTION_POINTERS* info, CoreFault* fault) {
+    if (info->ExceptionRecord->ExceptionCode == 0xE06D7363u) return EXCEPTION_CONTINUE_SEARCH;
+    fault->code = info->ExceptionRecord->ExceptionCode;
+    fault->address = info->ExceptionRecord->ExceptionAddress;
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+bool GuardedLoad(bool(__cdecl* load)(const void*), const void* game, bool* loaded, CoreFault* fault) {
+    __try {
+        *loaded = load(game);
+        return true;
+    } __except (CoreFaultFilter(GetExceptionInformation(), fault)) {
+        return false;
+    }
+}
+bool GuardedRun(void(__cdecl* run)(), CoreFault* fault) {
+    __try {
+        run();
+        return true;
+    } __except (CoreFaultFilter(GetExceptionInformation(), fault)) {
+        return false;
+    }
+}
+std::string DescribeFault(const char* where, const CoreFault& fault, HMODULE core) {
+    MEMORY_BASIC_INFORMATION info{};
+    const void* base = nullptr;
+    if (fault.address && VirtualQuery(fault.address, &info, sizeof(info))) base = info.AllocationBase;
+    const auto offset = static_cast<unsigned long long>(
+        reinterpret_cast<const char*>(fault.address) - reinterpret_cast<const char*>(base));
+    char text[256] = {};
+    std::snprintf(text, sizeof(text), "%s crashed: exception 0x%08lX at %p (%s+0x%llX)\n", where, fault.code, fault.address,
+        base == core ? "vita3k_libretro.dll" : base ? "another module" : "unmapped code", offset);
+    return text;
+}
 template<typename T>
 T Entry(HMODULE module, const char* name) {
     return reinterpret_cast<T>(GetProcAddress(module, name));
@@ -227,7 +269,17 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     game.size = 0;
     game.meta = nullptr;
     Log(1, "Loading staged content: %s\n", game.path);
-    gameLoaded_ = loadGame_(&game);
+    {
+        CoreFault fault;
+        bool loaded = false;
+        if (!GuardedLoad(reinterpret_cast<bool(__cdecl*)(const void*)>(loadGame_), &game, &loaded, &fault)) {
+            Log(3, "%s", DescribeFault("retro_load_game", fault, module_).c_str());
+            gameLoaded_ = false;
+            detail = L"Vita3K crashed while loading the game. vita3k-runtime.log says where.";
+            return false;
+        }
+        gameLoaded_ = loaded;
+    }
     Log(1, "retro_load_game returned %s\n", gameLoaded_ ? "true" : "false");
     if (!gameLoaded_) {
         detail = L"Vita3K rejected this game file. ";
@@ -285,7 +337,13 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
             try {
                 while (running_.load()) {
                     const auto start = std::chrono::steady_clock::now();
-                    runFrame_();
+                    CoreFault fault;
+                    if (!GuardedRun(runFrame_, &fault)) {
+                        Log(3, "%s", DescribeFault("retro_run", fault, module_).c_str());
+                        Log(3, "Emulation stopped after %llu frames.\n", framesExecuted_);
+                        running_.store(false);
+                        break;
+                    }
                     ++framesExecuted_;
                     std::this_thread::sleep_until(start + period);
                 }
