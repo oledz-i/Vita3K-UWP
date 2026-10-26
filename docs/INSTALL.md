@@ -13,41 +13,53 @@ Unzip it. Inside are the `.appx`, any x64 dependencies under `Dependencies/`, `D
 1. Put the Xbox in Developer Mode ([Microsoft's guide](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/devkit-activation)).
 2. Open the Xbox Device Portal from a PC on the same network: `https://<xbox-ip>:11443`.
 3. **Add** the `.appx`, plus the x64 dependencies if the portal asks. Skip ARM and x86 ones.
-4. Launch it from Dev Home. Each CI run signs with a new test certificate, so a newer build may need the old one uninstalled first. **Uninstalling deletes the app's data, firmware and copied games included.**
+4. Builds from different CI runs carry different test certificates, so a newer build may need the old one uninstalled first. **Uninstalling deletes the app's data**, including whatever Vita3K data you kept in internal storage. Data kept on a USB drive stays.
 
-## 3. Firmware
+## 3. Set Vita3K to run as a Game
 
-Vita3K needs Sony's PS Vita firmware. This project ships none of it. Download on a PC:
+In **Dev Home**, highlight Vita3K, press **Menu**, choose **View details**, and set **App type** to **Game**. As an *App* the Xbox gives it a small amount of memory and closes it without warning; as a *Game* it gets several GB.
 
-| Part | Status | Where | Download name | Rename to (suggested) |
-| --- | --- | --- | --- | --- |
-| System firmware | Required | Sony's PS Vita system software page | `PSP2UPDAT.PUP` (older copies: `PSVUPDAT.PUP`) | keep the name |
-| Preinstalled package | Required | Sony's update servers; Vita3K's Discord gives the link (`-firmware` command) | `PSP2UPDAT.PUP` | `PREINST.PUP` |
-| Font package | Optional, but some games show no text without it | Sony's update servers; same as above | `PSP2UPDAT.PUP` | `FONT.PUP` |
+## 4. Put your files on a USB drive
 
-All three downloads share one name, so rename the second and third before copying them to a USB drive or network share. In the app, open **Settings → Firmware** and choose each file in its own slot. The app checks that each one is a PlayStation update package and refuses a file whose name says it is another part.
+Any USB drive the Xbox can read (exFAT or NTFS). For example:
 
-The firmware installs the first time a game starts, which takes a few minutes. Each slot then shows **Installed**. If an install went wrong, **Reinstall firmware on next start** removes the installed parts but keeps the chosen files.
+```
+E:\Vita\Games\PCSE01116\      a game folder (eboot.bin and sce_sys inside)
+E:\Vita\Games\Minecraft.vpk   a .vpk
+E:\Vita\Firmware\             the .PUP files
+E:\Vita3K\                    Vita3K's data, if you choose to keep it on the drive
+```
 
-## 4. Games
+Games are read from the drive where they are; nothing is copied to internal storage.
 
-Supported: `.vpk`, `.zip`, `.pkg` with its license (`work.bin`, `.rif` or `.zrif`), or an extracted game folder (the folder that holds `eboot.bin` and `sce_sys`).
+## 5. Firmware
 
-- **Choose a folder** can be a folder of games or a single game's folder.
-- On first start the app copies the game into its own storage, because Vita3K can only read files there. A large game takes a while. Later starts reuse the copy.
-- An `eboot.bin` picked on its own cannot start. Add its whole folder instead.
+Vita3K needs Sony's PS Vita firmware. This project ships none of it. Download it on a PC:
 
-## 5. Emulator settings
+| Part | Needed | Where |
+| --- | --- | --- |
+| System firmware | Required | Sony's PS Vita system software page. It downloads as `PSP2UPDAT.PUP`; older copies are named `PSVUPDAT.PUP`. **They are the same file**, the system update. |
+| Preinstalled package | Recommended | A separate, smaller Sony download, linked by the Vita3K libretro core: <https://bit.ly/4hlePsX> |
+| Fonts | Recommended (some text is missing without it) | A separate Sony download: <https://bit.ly/48ouDaa> |
 
-**Settings → Emulation** lists Vita3K's options for graphics, CPU, content, system, audio and network. They are saved on the console and take effect when a game starts. **Restore default emulation options** puts them back.
+The preinstalled package and fonts download under the same `PSP2UPDAT.PUP` name too, so keep them in separate folders or rename them. The names don't matter to the app.
 
-## 6. When something goes wrong: the log
+In the app: **Settings → Firmware → Install firmware files**, and select all the `.PUP` files at once (or **Install from a folder**). The app looks inside each package, works out which part it is, and installs it **immediately** with a progress bar. The three tiles then show what is installed and its version. If you pick the same update twice, the summary says so.
 
-The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → oledz.Vita3KUWP.Dev_… → LocalState** and download `vita3k-runtime.log`. Send that with:
+## 6. Where Vita3K keeps its data
 
-- the commit from `build-info.json`
-- the console (Series S or X)
-- the game and its format
-- what was on screen when it stopped
+**Settings → Storage → Vita3K data** holds the firmware, installed games, saves and caches. Vita3K *installs* a game into this folder the first time it runs it (and decrypts it there). With little internal space, choose **Use a folder on a drive**: the app creates a `Vita3K` folder there and offers to move what is already installed.
+
+## 7. Play
+
+**Settings → Storage → Choose games folder**: a folder of games, or one game's own folder. Folders need `eboot.bin` and `sce_sys` directly inside. Then pick the game in the Library and start it. The first start of a game takes longer while Vita3K installs and decrypts it.
+
+## 8. Emulator settings
+
+**Settings → Emulation** lists Vita3K's options for graphics, CPU, content, system, audio and network. They are saved on the console and take effect when a game starts.
+
+## 9. When something goes wrong: the log
+
+The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → oledz.Vita3KUWP.Dev_… → LocalState** and download `vita3k-runtime.log`. Send that with the commit from `build-info.json`, the console, the game and its format, and what was on screen when it stopped.
 
 Do not report this port's problems to upstream Vita3K.

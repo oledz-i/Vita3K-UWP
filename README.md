@@ -31,10 +31,10 @@
 | Vita3K core | Compiles and packages for UWP (WizzardSK/vita3k-libretro, pinned) |
 | Graphics | Vulkan through Mesa Dozen to D3D12, from the OnyxEMU work |
 | CPU | Dynarmic with a UWP W^X patch |
-| Firmware install | Crashes on first console test; under investigation |
-| Game loading | Single files only; whole-folder games (for example extracted dumps) are next |
+| Firmware | Installs on Xbox (system firmware 3.74 confirmed); packages recognised by content, installed on the spot |
+| Game loading | Folders, VPK and PKG read in place, including from USB drives; first boot attempt stopped in NoNpDrm decryption, now logged |
 | Frontend | Home, Library, Settings, five themes, original music and interface sounds, artwork |
-| Settings | Appearance and storage only; emulator options are being added |
+| Settings | Firmware, storage (data folder on a drive), 23 Vita3K emulation options, appearance |
 | Xbox hardware | Primary target; Series S used for testing |
 
 ## Try a development build
@@ -51,11 +51,8 @@ If the app crashes, the Xbox Device Portal (File Explorer → LocalAppData → t
 
 This project ships no games, firmware or keys.
 
-- **Firmware (two files, one optional).** Sony distributes all three under the same name, `PSP2UPDAT.PUP`, so rename the preinstalled package and font package before picking them.
-  - Main system firmware, required.
-  - Preinstalled package (name contains `PREINST`), required.
-  - Font package (name contains `FONT`), optional.
-- **Games.** `.vpk`, `.zip`, `.pkg` with its license, or an extracted game folder.
+- **Firmware.** The system firmware (Sony's `PSP2UPDAT.PUP`, also seen as `PSVUPDAT.PUP`, same file) is required; the preinstalled package and fonts are separate Sony downloads, recommended. Pick them all at once under any names: the app tells them apart by content and installs them immediately. See the [install guide](docs/INSTALL.md#5-firmware).
+- **Games.** `.vpk`, `.zip`, `.pkg` with its license, or an extracted game folder, on internal storage or a USB drive.
 
 ## Project notes
 
