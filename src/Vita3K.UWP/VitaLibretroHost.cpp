@@ -503,7 +503,7 @@ void __cdecl VitaLibretroHost::Video(
     std::string error;
     if (active_->vulkan_.Present(width, height, error)) {
         if (!active_->framePresented_.exchange(true))
-            Log(1, "First core video frame presented: %u x %u.\n", width, height);
+            Log(1, "First core video frame presented: %u x %u (%s).\n", width, height, active_->vulkan_.ReadbackInfo().c_str());
     } else if (!error.empty()) {
         // Once a frame fails the next ones usually fail the same way; keep the log readable.
         static std::atomic<unsigned> failures{0};

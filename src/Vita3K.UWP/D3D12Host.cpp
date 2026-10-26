@@ -389,7 +389,11 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
         result = L"Invalid game frame";
         return false;
     }
-    const DXGI_FORMAT format = sourceRgba ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+    // The swap chain stays BGRA, the format every composition swap chain
+    // takes; RGBA frames are swizzled while they are copied below. Switching
+    // the swap chain to RGBA meant a ResizeBuffers on the first game frame,
+    // and one failure there shut the presenter down for the whole session.
+    const DXGI_FORMAT format = DXGI_FORMAT_B8G8R8A8_UNORM;
     if (width != width_ || height != height_ || format != format_) {
         if (!Resize(width, height, format, result)) return false;
     }
@@ -420,11 +424,21 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
     HRESULT hr = frameUpload_->Map(0, &none, &destination);
     if (FAILED(hr)) return Fail(L"Map frame upload", hr, result);
     auto* out = static_cast<std::uint8_t*>(destination);
-    if (strideBytes == rowPitch) {
+    if (!sourceRgba && strideBytes == rowPitch) {
         std::memcpy(out, pixels, static_cast<size_t>(bytes));
-    } else {
+    } else if (!sourceRgba) {
         for (unsigned y = 0; y < height; ++y)
             std::memcpy(out + static_cast<size_t>(y) * rowPitch, pixels + static_cast<size_t>(y) * strideBytes, width * 4u);
+    } else {
+        // RGBA to BGRA, one 32-bit word at a time; alpha forced opaque.
+        for (unsigned y = 0; y < height; ++y) {
+            const auto* in = reinterpret_cast<const std::uint32_t*>(pixels + static_cast<size_t>(y) * strideBytes);
+            auto* row = reinterpret_cast<std::uint32_t*>(out + static_cast<size_t>(y) * rowPitch);
+            for (unsigned x = 0; x < width; ++x) {
+                const std::uint32_t v = in[x];
+                row[x] = 0xFF000000u | ((v & 0xFFu) << 16) | (v & 0xFF00u) | ((v >> 16) & 0xFFu);
+            }
+        }
     }
     // The core's alpha is meaningless for display; the swap chain ignores it.
     D3D12_RANGE written = { 0, static_cast<SIZE_T>(bytes) };

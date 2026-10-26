@@ -1911,6 +1911,12 @@ void CatalogShell::SaveLogToDrive() {
             try {
                 copied.get();
                 SetStatus(L"Log saved to " + target->Path + L"\\vita3k-runtime.log");
+                // The frame the game saved for diagnosis, when there is one.
+                create_task(ApplicationData::Current->LocalFolder->TryGetItemAsync(L"frame-300.bmp"))
+                .then([target](IStorageItem^ item) {
+                    auto frame = dynamic_cast<StorageFile^>(item);
+                    if (frame) frame->CopyAsync(target, L"frame-300.bmp", NameCollisionOption::ReplaceExisting);
+                });
             } catch (Platform::Exception^ e) {
                 SetStatus(L"Couldn't save the log: " + e->Message);
             }
@@ -3096,6 +3102,39 @@ void CatalogShell::ExitGameView() {
     }, task_continuation_context::use_current());
 }
 
+// A 32-bit BMP, top-down; the pixels' alpha is dropped.
+static bool WriteBmp(const std::wstring& path, const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
+    if (!pixels || !width || !height) return false;
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"wb") != 0 || !file) return false;
+    const uint32_t imageBytes = width * height * 4;
+    uint8_t header[54] = {};
+    auto put32 = [&header](size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) header[at + i] = static_cast<uint8_t>(v >> (8 * i)); };
+    header[0] = 'B'; header[1] = 'M';
+    put32(2, 54 + imageBytes);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, width);
+    put32(22, static_cast<uint32_t>(-static_cast<int32_t>(height))); // negative: top-down rows
+    header[26] = 1;
+    header[28] = 32;
+    put32(34, imageBytes);
+    bool ok = fwrite(header, 1, sizeof(header), file) == sizeof(header);
+    std::vector<uint8_t> row(static_cast<size_t>(width) * 4);
+    for (unsigned y = 0; ok && y < height; ++y) {
+        const uint8_t* in = pixels + static_cast<size_t>(y) * width * 4;
+        for (unsigned x = 0; x < width; ++x) {
+            row[x * 4 + 0] = rgba ? in[x * 4 + 2] : in[x * 4 + 0];
+            row[x * 4 + 1] = in[x * 4 + 1];
+            row[x * 4 + 2] = rgba ? in[x * 4 + 0] : in[x * 4 + 2];
+            row[x * 4 + 3] = 255;
+        }
+        ok = fwrite(row.data(), 1, row.size(), file) == row.size();
+    }
+    fclose(file);
+    return ok;
+}
+
 void CatalogShell::StartCore(Platform::String^ contentPath) {
     const std::string system = NarrowUtf8(DataRoot());
     const std::string content = Utf8Of(contentPath);
@@ -3118,10 +3157,17 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         return;
     }
     libretro_.LogLine("Display: presenter ready (" + NarrowUtf8(displayError) + ")");
-    libretro_.SetFrameSink([this](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
+    const std::wstring snapshotPath = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\frame-300.bmp";
+    libretro_.SetFrameSink([this,snapshotPath](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
         std::wstring error;
         const bool presented = renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
         const auto shown = ++framesShown_;
+        if (shown == 300) {
+            // Exactly what the core handed over, next to the log: settles
+            // whether a dark screen is in the frames or in the display.
+            if (WriteBmp(snapshotPath, pixels, width, height, rgba))
+                libretro_.LogLine("Display: frame 300 saved as frame-300.bmp next to this log");
+        }
         if (!presented) {
             std::lock_guard<std::mutex> guard(presentErrorMutex_);
             presentError_ = error.empty() ? L"presenter not ready" : error;

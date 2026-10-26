@@ -18,6 +18,8 @@ public:
     bool Initialize(std::string& error);
     void Shutdown();
     bool Present(unsigned width, unsigned height, std::string& error);
+    // What the readback uses (memory type, image format), for the log.
+    const std::string& ReadbackInfo() const { return readbackInfo_; }
     const retro_hw_render_interface_vulkan* Interface() const { return device_ ? &interface_ : nullptr; }
     FrameSink sink;
 private:
@@ -46,6 +48,8 @@ private:
     VkBuffer readback_ = VK_NULL_HANDLE;
     VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
     VkDeviceSize readbackSize_ = 0;
+    bool readbackCoherent_ = true;
+    std::string readbackInfo_;
     void* readbackMapped_ = nullptr;
     VkFence fence_ = VK_NULL_HANDLE;
     bool gpuStalled_ = false;

@@ -119,11 +119,27 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
             VkMemoryRequirements requirements{}; FN(vkGetBufferMemoryRequirements)(device_, readback_, &requirements);
             VkPhysicalDeviceMemoryProperties properties{};
             InstanceProc<PFN_vkGetPhysicalDeviceMemoryProperties>("vkGetPhysicalDeviceMemoryProperties")(gpu_, &properties);
+            // GPU-to-CPU copies belong in cached host memory (D3D12's readback
+            // heap). The first host-visible type Dozen lists is write-combined
+            // upload memory, which the GPU is not meant to copy into and the
+            // CPU reads very slowly: frames read from it can come back black.
             uint32_t type = properties.memoryTypeCount;
-            const VkMemoryPropertyFlags wanted = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-            for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
-                if ((requirements.memoryTypeBits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & wanted) == wanted) { type = i; break; }
-            if (type == properties.memoryTypeCount) throw std::runtime_error("No coherent host readback memory");
+            const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            const VkMemoryPropertyFlags cached = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+            const VkMemoryPropertyFlags coherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            const VkMemoryPropertyFlags preferences[] = { visible | cached | coherent, visible | cached, visible | coherent, visible };
+            for (const auto wanted : preferences) {
+                for (uint32_t i = 0; i < properties.memoryTypeCount && type == properties.memoryTypeCount; ++i)
+                    if ((requirements.memoryTypeBits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & wanted) == wanted) type = i;
+                if (type != properties.memoryTypeCount) break;
+            }
+            if (type == properties.memoryTypeCount) throw std::runtime_error("No host-visible readback memory");
+            readbackCoherent_ = (properties.memoryTypes[type].propertyFlags & coherent) != 0;
+            const auto flags = properties.memoryTypes[type].propertyFlags;
+            readbackInfo_ = "readback memory type " + std::to_string(type) + " of " + std::to_string(properties.memoryTypeCount) +
+                ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? ", device-local" : "") + ((flags & cached) ? ", cached" : ", uncached") +
+                ((flags & coherent) ? ", coherent" : ", not coherent") + "; image format " + std::to_string(format) +
+                ", layout " + std::to_string(image_.image_layout);
             VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize = requirements.size; allocate.memoryTypeIndex = type;
             Check(FN(vkAllocateMemory)(device_, &allocate, nullptr, &readbackMemory_), "Allocate readback memory");
             Check(FN(vkBindBufferMemory)(device_, readback_, readbackMemory_, 0), "Bind readback buffer");
@@ -168,6 +184,10 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
             return false;
         }
         Check(waited, "Wait for readback");
+        if (!readbackCoherent_) {
+            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory = readbackMemory_; range.size = VK_WHOLE_SIZE;
+            Check(FN(vkInvalidateMappedMemoryRanges)(device_, 1, &range), "Invalidate readback");
+        }
         sink(static_cast<const uint8_t*>(readbackMapped_), width, height, rgba);
         FN(vkFreeCommandBuffers)(device_, pool_, 1, &command);
         waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
