@@ -12,6 +12,7 @@ No game-performance or release-date guarantees. The `core-integration` branch re
 | 5 — First homebrew boot | Load a decrypted Vita homebrew ELF/SELF, resolve imports, run CPU/kernel and produce a displayed frame | **Not achieved:** requires complete core, loader, service stubs and GXM shader execution |
 | 6 — Commercial-game capability | Legitimate license handling, install/launch flow, compatibility reporting | **Not achieved:** file/PKG header checks and stored license-file permissions only; no decryption/installation or boot |
 | Parallel — Vulkan/OpenGL | Documented Xbox viable graphics paths | Research only; neither supported natively by Xbox UWP |
+| Release feature — Screenshots | A controller shortcut saves the current game frame as a PNG to a `Screenshots` folder on the user's data drive (the console's own capture is unusable here). Needs a game that shows a picture first. Video recording is a separate, later idea | **Planned for the official release** |
 | Release readiness | Persistent signing, tested upgrades, saves, hardware compatibility; Tools page hidden in public builds ([how](RELEASING.md)) | Pending |
 
 ## Next technical gates
