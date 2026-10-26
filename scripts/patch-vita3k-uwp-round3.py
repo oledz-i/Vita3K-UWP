@@ -233,3 +233,289 @@ replace(inst, '''        (install_pup_file(pref_path, pup, label) ? installed : 
             lr_log(RETRO_LOG_ERROR, "Removed the partial %s after the failed install so it is retried\\n", partition);
         }''')
 print('Hardened firmware installation: exFAT walker, FAT checks, per-partition logging, fault guard.')
+
+# ── Firmware for the frontend: what a PUP holds, and installing one now ─────
+# The Xbox frontend installs firmware the moment the user picks it, and tells
+# the parts apart by what is inside the package (not by its file name, which
+# Sony's downloads all share). These are plain C exports it finds with
+# GetProcAddress; nothing here runs unless the frontend calls it.
+replace(pup, '''std::string install_pup(const fs::path &vita_fs_path, const fs::path &pup_path, const std::function<void(uint32_t)> &progress_callback) {''',
+'''bool read_pup_contents(const fs::path &pup, uint32_t &firmware_version, uint32_t &partitions) {
+    firmware_version = 0;
+    partitions = 0;
+    std::ifstream in(pup, std::ios::binary);
+    if (!in)
+        return false;
+    char header[0x80];
+    in.read(header, sizeof(header));
+    if (in.gcount() != static_cast<std::streamsize>(sizeof(header)) || strncmp(header, "SCEUF", 5) != 0)
+        return false;
+    uint32_t count = 0;
+    memcpy(&count, &header[0x18], 4);
+    memcpy(&firmware_version, &header[0x10], 4);
+    if (count > 4096)
+        return false;
+    std::vector<unsigned char> hdr(HEADER_LENGTH);
+    for (uint32_t x = 0; x < count; x++) {
+        char rec[0x20];
+        in.clear();
+        in.seekg(0x80 + static_cast<std::streamoff>(x) * 0x20, std::ios::beg);
+        in.read(rec, sizeof(rec));
+        if (in.gcount() != static_cast<std::streamsize>(sizeof(rec)))
+            return false;
+        uint64_t filetype = 0, offset = 0;
+        memcpy(&filetype, &rec[0], 8);
+        memcpy(&offset, &rec[8], 8);
+        if (PUP_TYPES.contains(filetype))
+            continue;
+        in.clear();
+        in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        in.read(reinterpret_cast<char *>(hdr.data()), HEADER_LENGTH);
+        if (in.gcount() != HEADER_LENGTH)
+            continue;
+        uint32_t magic = 0, version = 0, flags = 0;
+        uint64_t metaoffs = 0;
+        memcpy(&magic, &hdr[0], 4);
+        memcpy(&version, &hdr[4], 4);
+        memcpy(&flags, &hdr[8], 4);
+        memcpy(&metaoffs, &hdr[16], 8);
+        // The same test make_filename uses to name the package
+        if (magic != SCE_MAGIC || version != 3 || flags != 0x30040 || metaoffs + 4 >= HEADER_LENGTH)
+            continue;
+        switch (hdr[metaoffs + 4]) {
+        case 0x01: partitions |= 1; break; // os0
+        case 0x0A: partitions |= 2; break; // vs0
+        case 0x18: partitions |= 4; break; // pd0
+        case 0x17: partitions |= 8; break; // sa0
+        default: break;
+        }
+    }
+    return true;
+}
+
+std::string install_pup(const fs::path &vita_fs_path, const fs::path &pup_path, const std::function<void(uint32_t)> &progress_callback) {''')
+replace('vita3k/packages/include/packages/functions.h',
+        'std::string install_pup(const fs::path &vita_fs_path, const fs::path &pup_path, const std::function<void(uint32_t)> &progress_callback = nullptr);',
+        '''std::string install_pup(const fs::path &vita_fs_path, const fs::path &pup_path, const std::function<void(uint32_t)> &progress_callback = nullptr);
+// Which partitions a PUP carries (bit 0 os0, 1 vs0, 2 pd0, 3 sa0) and its firmware version, read from its headers only.
+bool read_pup_contents(const fs::path &pup, uint32_t &firmware_version, uint32_t &partitions);''')
+
+replace(inst, '#endif\n\nenum class PupKind', '''#endif
+
+// Progress of the install in flight, for a frontend that shows it; and the
+// version the last successful install reported.
+static std::function<void(uint32_t)> g_install_progress;
+static std::string g_last_fw_version;
+
+enum class PupKind''') if read(inst).count('#endif\n\nenum class PupKind') == 1 else None
+text = read(inst)
+if 'static std::function<void(uint32_t)> g_install_progress;' not in text:
+    # Place it after the fault-guard block added above.
+    marker = '#endif\n'
+    first_guard_end = text.index(marker, text.index('static bool run_fault_guarded')) + len(marker)
+    text = text[:first_guard_end] + '''
+// Progress of the install in flight, for a frontend that shows it; and the
+// version the last successful install reported.
+static std::function<void(uint32_t)> g_install_progress;
+static std::string g_last_fw_version;
+''' + text[first_guard_end:]
+    write(inst, text)
+replace(inst, '''                    lr_log(RETRO_LOG_INFO, "%s install progress: %u%%\\n", job_label, progress);
+                });''', '''                    lr_log(RETRO_LOG_INFO, "%s install progress: %u%%\\n", job_label, progress);
+                    if (g_install_progress)
+                        g_install_progress(progress);
+                });''')
+replace(inst, '''        fw_version = install_pup(pref_path, pup_path, [label](uint32_t progress) {
+            lr_log(RETRO_LOG_INFO, "%s install progress: %u%%\\n", label, progress);
+        });''', '''        fw_version = install_pup(pref_path, pup_path, [label](uint32_t progress) {
+            lr_log(RETRO_LOG_INFO, "%s install progress: %u%%\\n", label, progress);
+            if (g_install_progress)
+                g_install_progress(progress);
+        });''')
+replace(inst, '''        lr_log(RETRO_LOG_INFO, "%s version %s installed successfully!\\n", label, fw_version.c_str());
+    }
+
+    return true;
+}''', '''        lr_log(RETRO_LOG_INFO, "%s version %s installed successfully!\\n", label, fw_version.c_str());
+    }
+    g_last_fw_version = fw_version;
+
+    return true;
+}
+
+#if defined(VITA3K_UWP)
+extern "C" __declspec(dllexport) int vita3k_uwp_pup_info(const char *pup_utf8, uint32_t *firmware_version, uint32_t *partitions) {
+    uint32_t version = 0, mask = 0;
+    bool ok = false;
+    try {
+        ok = pup_utf8 && read_pup_contents(fs_utils::utf8_to_path(pup_utf8), version, mask);
+    } catch (...) {
+        ok = false;
+    }
+    if (firmware_version)
+        *firmware_version = version;
+    if (partitions)
+        *partitions = mask;
+    return ok ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int vita3k_uwp_install_pup(const char *pref_utf8, const char *pup_utf8,
+    void (*progress)(uint32_t, void *), void *user, char *version, uint32_t version_size) {
+    if (!pref_utf8 || !pup_utf8)
+        return 0;
+    const fs::path pref_path = fs_utils::utf8_to_path(pref_utf8);
+    const fs::path pup_path = fs_utils::utf8_to_path(pup_utf8);
+    std::error_code ec;
+    fs::create_directories(pref_path, ec);
+    uint32_t fw = 0, parts = 0;
+    try {
+        read_pup_contents(pup_path, fw, parts);
+    } catch (...) {
+    }
+    g_last_fw_version.clear();
+    if (progress)
+        g_install_progress = [progress, user](uint32_t value) { progress(value, user); };
+    const bool ok = install_pup_file(pref_path, pup_path, "Firmware package");
+    g_install_progress = nullptr;
+    if (!ok) {
+        // A half-written partition would read as installed.
+        const char *names[] = { "os0", "vs0", "pd0", "sa0" };
+        for (int bit = 0; bit < 4; ++bit)
+            if (parts & (1u << bit))
+                fs::remove_all(pref_path / names[bit], ec);
+    }
+    if (version && version_size)
+        snprintf(version, version_size, "%s", g_last_fw_version.c_str());
+    check_firmware_status(pref_path);
+    return ok ? 1 : 0;
+}
+#endif''')
+
+# ── NoNpDrm decryption: guarded, logged, with progress ─────────────────────
+# The second console run stopped inside psvpfstools' execute() with nothing
+# in the log: it reports only on std::cout, and nothing caught a failure.
+replace(inst, 'static bool install_pup_file(', '''// psvpfstools reports on std::cout, which an app without a console never
+// shows: each line goes to the libretro log instead.
+class LineLogBuf : public std::streambuf {
+public:
+    ~LineLogBuf() override { flush_line(); }
+
+protected:
+    int overflow(int c) override {
+        if (c == traits_type::eof())
+            return 0;
+        if (c == '\\n')
+            flush_line();
+        else if (line_.size() < 2000)
+            line_.push_back(static_cast<char>(c));
+        return c;
+    }
+    int sync() override {
+        flush_line();
+        return 0;
+    }
+
+private:
+    void flush_line() {
+        if (!line_.empty())
+            lr_log(RETRO_LOG_INFO, "PFS: %s\\n", line_.c_str());
+        line_.clear();
+    }
+    std::string line_;
+};
+
+// The algorithms psvpfstools fetches from OpenSSL; a missing one would make it
+// use a null context.
+static bool pfs_crypto_available() {
+    bool ok = true;
+    for (const char *name : { "AES-128-CBC", "AES-128-CTR", "AES-128-ECB" }) {
+        EVP_CIPHER *cipher = EVP_CIPHER_fetch(nullptr, name, nullptr);
+        if (!cipher) {
+            lr_log(RETRO_LOG_ERROR, "OpenSSL has no %s\\n", name);
+            ok = false;
+        }
+        EVP_CIPHER_free(cipher);
+    }
+    for (const char *name : { "SHA1", "SHA256" }) {
+        EVP_MD *md = EVP_MD_fetch(nullptr, name, nullptr);
+        if (!md) {
+            lr_log(RETRO_LOG_ERROR, "OpenSSL has no %s\\n", name);
+            ok = false;
+        }
+        EVP_MD_free(md);
+    }
+    for (const char *name : { "CMAC", "HMAC" }) {
+        EVP_MAC *mac = EVP_MAC_fetch(nullptr, name, nullptr);
+        if (!mac) {
+            lr_log(RETRO_LOG_ERROR, "OpenSSL has no %s\\n", name);
+            ok = false;
+        }
+        EVP_MAC_free(mac);
+    }
+    return ok;
+}
+
+static int run_pfs_decryption(std::string &zrif, std::string &src, std::string &dst) {
+    if (!pfs_crypto_available()) {
+        lr_log(RETRO_LOG_ERROR, "PFS decryption needs the OpenSSL algorithms above; not started\\n");
+        return -1;
+    }
+    LineLogBuf log_buf;
+    std::streambuf *previous = std::cout.rdbuf(&log_buf);
+    int last_decile = -1;
+    PfsProgressCallback progress = [&last_decile](std::uint64_t processed, std::uint64_t total, const std::string &) {
+        if (!total)
+            return;
+        const int decile = static_cast<int>(std::min<std::uint64_t>(processed * 10 / total, 10));
+        if (decile != last_decile) {
+            last_decile = decile;
+            lr_log(RETRO_LOG_INFO, "PFS decryption: %d%%\\n", decile * 10);
+        }
+    };
+    int result = -1;
+    std::string error;
+    F00DEncryptorTypes type = F00DEncryptorTypes::native;
+    std::string f00d_arg;
+#if defined(_WIN32)
+    struct Job {
+        std::string *zrif, *src, *dst, *f00d_arg, *error;
+        F00DEncryptorTypes type;
+        PfsProgressCallback *progress;
+        int *result;
+    } job{ &zrif, &src, &dst, &f00d_arg, &error, type, &progress, &result };
+    const bool completed = run_fault_guarded([](void *raw) {
+        auto *j = static_cast<Job *>(raw);
+        try {
+            *j->result = execute(*j->zrif, *j->src, *j->dst, j->type, *j->f00d_arg, *j->progress);
+        } catch (const std::exception &e) {
+            *j->error = e.what();
+            *j->result = -1;
+        } catch (...) {
+            *j->error = "unknown exception";
+            *j->result = -1;
+        }
+    }, &job);
+    if (!completed) {
+        error = fmt::format("crashed (Windows exception 0x{:08X})", g_install_fault);
+        result = -1;
+    }
+#else
+    try {
+        result = execute(zrif, src, dst, type, f00d_arg, progress);
+    } catch (const std::exception &e) {
+        error = e.what();
+        result = -1;
+    }
+#endif
+    std::cout.flush();
+    std::cout.rdbuf(previous);
+    if (!error.empty())
+        lr_log(RETRO_LOG_ERROR, "PFS decryption %s\\n", error.c_str());
+    return result;
+}
+
+static bool install_pup_file(''', 1)
+replace(inst, '    int dec_result = execute(app_zRIF, src_str, dst_str, f00d_enc_type, f00d_arg);',
+        '    (void)f00d_enc_type;\n    int dec_result = run_pfs_decryption(app_zRIF, src_str, dst_str);')
+replace(inst, '#if defined(_WIN32)\n#include <excpt.h>', '#include <iostream>\n#include <streambuf>\n#include <openssl/evp.h>\n\n#if defined(_WIN32)\n#include <excpt.h>', 1)
+print('Added firmware exports for the frontend and guarded, logged NoNpDrm decryption.')

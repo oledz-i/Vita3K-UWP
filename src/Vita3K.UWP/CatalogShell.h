@@ -44,6 +44,11 @@ private:
     Windows::UI::Xaml::Controls::TextBlock^ status_;
     Windows::UI::Xaml::Controls::TextBlock^ folderLabel_;
     Windows::UI::Xaml::Controls::TextBlock^ firmwareStatus_[3] = {};
+    Windows::UI::Xaml::Controls::Border^ firmwareDot_[3] = {};
+    Windows::UI::Xaml::Controls::ProgressBar^ firmwareProgress_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ firmwareMessage_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ dataLabel_ = nullptr;
+    bool firmwareBusy_ = false;
     Windows::UI::Xaml::Controls::TextBlock^ rendererResult_;
     Windows::UI::Xaml::Controls::TextBlock^ coreResult_;
     Windows::UI::Xaml::Controls::TextBlock^ libretroResult_;
@@ -108,8 +113,14 @@ private:
     void StartCore(Platform::String^ contentPath);
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
-    void ChoosePreinstalledFirmware();
-    void ChooseFirmwareSlot(int slot);
+    void ChooseFirmwareFolder();
+    void InstallFirmwareFiles(std::vector<Windows::Storage::StorageFile^> files);
+    void ShowFirmwareProgress(double value, Platform::String^ message);
+    void StorageSettings();
+    void ChooseDataFolder();
+    void ChangeDataRoot(const std::wstring& chosen);
+    void CleanUpOldCopies();
+    bool SystemFirmwareInstalled();
     void RefreshFirmwareStatus();
     void ResetInstalledFirmware();
     void FirmwareSettings();

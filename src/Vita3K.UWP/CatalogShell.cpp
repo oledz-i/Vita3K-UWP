@@ -7,6 +7,8 @@
 #include "VulkanDznProbe.h"
 #include "VitaGuestCpuUwpProbe.h"
 #include "CoreOptions.h"
+#include "UwpFileRedirect.h"
+#include <fileapifromapp.h>
 #include "UwpJitProbe.h"
 #include <mem/allocator.h>
 #include <windows.h>
@@ -352,6 +354,11 @@ CatalogShell::CatalogShell() {
     try { uiSoundVolume_ = std::stod(Pref(L"ui.sound.volume", L"0.40")->Data()); }
     catch (...) { uiSoundVolume_ = 0.40; }
     uiSoundVolume_ = std::max(0.0, std::min(1.0, uiSoundVolume_));
+
+    // The app's own file calls (std::filesystem in Settings) reach USB drives too.
+    vita3k_uwp::RedirectCoreFileAccess(vita3k_uwp::ModuleFromAddress(reinterpret_cast<const void*>(&Pref)));
+    libretro_.SetLogPath(std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-runtime.log");
+    CleanUpOldCopies();
 
     // Cinematic television layout: permanently dark canvas, narrow icon rail,
     // full-bleed content area, and an understated 30px status line.
@@ -848,6 +855,39 @@ void CatalogShell::Home() {
     hero->Child = heroLayout;
     content_->Children->Append(hero);
 
+    if (!SystemFirmwareInstalled()) {
+        // First run: what is still needed before a game can start.
+        auto setup = Vertical();
+        auto kick = Text(L"FINISH SETTING UP", 10, true);
+        kick->CharacterSpacing = 240;
+        kick->Foreground = Solid(Accent());
+        setup->Children->Append(kick);
+        setup->Children->Append(Text(L"Install the PS Vita firmware", 20, true));
+        auto why = Text(L"Vita3K needs Sony's system firmware before any game can start. Pick the .PUP files "
+            L"you downloaded; they install right away. Games can stay on your USB drive.", 13, false, true);
+        why->Margin = Thickness(0, 4, 0, 12);
+        why->MaxWidth = 620;
+        why->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+        setup->Children->Append(why);
+        auto row = ref new StackPanel();
+        row->Orientation = Orientation::Horizontal;
+        auto install = Button(L"Install firmware", true);
+        install->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(2); ChooseFirmware(); });
+        row->Children->Append(install);
+        auto settings = Button(L"Open Settings");
+        settings->Margin = Thickness(10, 0, 0, 0);
+        settings->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(2); });
+        row->Children->Append(settings);
+        setup->Children->Append(row);
+        auto tip = Text(L"Tip: in Dev Home, set this app's type to Game. As an App the Xbox gives it too little memory "
+            L"and closes it without warning.", 11, false, true);
+        tip->Margin = Thickness(0, 12, 0, 0);
+        setup->Children->Append(tip);
+        auto card = Panel(setup);
+        card->Margin = Thickness(0, 0, 0, 20);
+        content_->Children->Append(card);
+    }
+
     if (hasGames) {
         std::vector<size_t> all, folders, packages;
         for (size_t i = 0; i < games_.size(); ++i) {
@@ -1133,8 +1173,11 @@ void CatalogShell::Render() {
 }
 
 void CatalogShell::Settings() {
-    Banner(L"PERSONALIZE YOUR EXPERIENCE", L"Your Vita. Your atmosphere.",
-        L"Change the entire interface, choose a menu soundtrack, manage folders and artwork.");
+    Banner(L"SETTINGS", L"Set up once. Play anywhere.",
+        L"Firmware, where your games and Vita3K data live, emulation options, and the look and sound of the app.");
+    FirmwareSettings();
+    StorageSettings();
+    EmulationSettings();
     Section(L"Appearance", L"Five moods. One beautifully simple library.");
     const wchar_t* styles[] = {
         L"Onyx", L"Aurora", L"Ember", L"Glacier", L"Orbit"
@@ -1249,19 +1292,6 @@ void CatalogShell::Settings() {
     content_->Children->Append(Text(L"INTERFACE VOLUME", 12, true, true));
     content_->Children->Append(cueVolume);
 
-    Section(L"Storage and paths", L"Choose internal or external storage as Xbox UWP permits.");
-    auto storage = Vertical();
-    folderLabel_ = Text(L"Game library: not selected", 14, false, true);
-    storage->Children->Append(folderLabel_);
-    auto choose = Button(L"Choose game folder", true);
-    choose->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
-        ChooseGameFolder();
-    });
-    storage->Children->Append(choose);
-    storage->Children->Append(Text(
-        L"Application data: " + ApplicationData::Current->LocalFolder->Path, 12, false, true));
-    content_->Children->Append(Panel(storage));
-    FirmwareSettings();
     Section(L"Game artwork", L"Use original cover images or bring in your own.");
     auto art = Vertical();
     art->Children->Append(Text(
@@ -1296,7 +1326,6 @@ void CatalogShell::Settings() {
         12, false, true));
     content_->Children->Append(Panel(art));
 
-    EmulationSettings();
     Section(L"Diagnostics", L"Where to look when something goes wrong.");
     auto advanced = Vertical();
     advanced->Children->Append(Text(
@@ -1567,6 +1596,10 @@ void CatalogShell::RestorePaths() {
             ? L"Game folder access saved." : L"No game folder chosen yet.";
     }
     RefreshFirmwareStatus();
+    if (dataLabel_ != nullptr) {
+        dataLabel_->Text = Pref(L"storage.dataRoot", L"")->IsEmpty()
+            ? L"Internal storage" : ref new Platform::String(DataRoot().c_str());
+    }
     if (future->ContainsItem(L"vita-games")) {
         create_task(future->GetFolderAsync(L"vita-games")).then(
             [this](task<StorageFolder^> work) {
@@ -1601,116 +1634,293 @@ void CatalogShell::ChooseGameFolder() {
         }, task_continuation_context::use_current());
 }
 namespace {
-// The three firmware parts Vita3K installs, in the order shown.
-struct FirmwareSlot {
+// The three firmware parts, as the core installs them.
+struct FirmwarePart {
     const wchar_t* title;
+    const wchar_t* partition;
     bool required;
-    const wchar_t* stagedName;   // name in Vita3KSystem\vita3k; the core sorts by it
-    const wchar_t* partition;    // where the installed part lives
-    const wchar_t* token;
+    const wchar_t* versionKey;
     const wchar_t* about;
 };
-const FirmwareSlot kFirmwareSlots[3] = {
-    { L"System firmware", true, L"PSP2UPDAT.PUP", L"vs0", L"vita-firmware",
-      L"The PS Vita system software update from Sony's PS Vita system software page. "
-      L"Sony names it PSP2UPDAT.PUP (some older copies are called PSVUPDAT.PUP)." },
-    { L"Preinstalled package", true, L"PSP2UPDAT_PREINST.PUP", L"pd0", L"vita-firmware-preinst",
-      L"Sony's preinstalled-apps package, from Sony's update servers (Vita3K's Discord gives the link "
-      L"with the -firmware command). Its download is also named PSP2UPDAT.PUP, so rename it (for example "
-      L"PREINST.PUP) to keep it apart from the system firmware." },
-    { L"Font package", false, L"PSP2UPDAT_FONT.PUP", L"sa0", L"vita-firmware-font",
-      L"The system fonts. Without them some games and dialogs show no text. From Sony's update servers, "
-      L"like the preinstalled package; also downloaded as PSP2UPDAT.PUP, so rename it (for example FONT.PUP)." },
+const FirmwarePart kFirmwareParts[3] = {
+    { L"System firmware", L"vs0", true, L"firmware.version.vs0",
+      L"Sony's PS Vita system update. It downloads as PSP2UPDAT.PUP; older copies are named PSVUPDAT.PUP. They are the same thing." },
+    { L"Preinstalled package", L"pd0", false, L"firmware.version.pd0",
+      L"A separate, smaller Sony download with the Vita's built-in apps. Some games want it." },
+    { L"Fonts", L"sa0", false, L"firmware.version.sa0",
+      L"A separate Sony download with the system fonts. Without it some text is missing." },
 };
 
+std::wstring InternalDataRoot() {
+    return std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\Vita3KSystem";
+}
+// Where Vita3K keeps firmware, installed games and saves: the app's own
+// storage, or a folder the user chose (usually on a USB drive).
+std::wstring DataRoot() {
+    auto chosen = Pref(L"storage.dataRoot", L"");
+    return chosen->IsEmpty() ? InternalDataRoot() : std::wstring(chosen->Data());
+}
 std::wstring FirmwareRoot() {
-    return std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\Vita3KSystem\\vita3k";
+    return DataRoot() + L"\\vita3k";
 }
 bool HasFiles(const std::wstring& directory) {
     std::error_code ec;
     return std::filesystem::is_directory(directory, ec) && !std::filesystem::is_empty(directory, ec);
 }
-bool IsFile(const std::wstring& path) {
-    std::error_code ec;
-    return std::filesystem::is_regular_file(path, ec);
+// True when the core will be able to read this path where it is.
+bool CanOpenFromApp(const std::wstring& path) {
+    HANDLE handle = CreateFile2FromAppW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, OPEN_EXISTING, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(handle);
+    return true;
 }
+std::string NarrowUtf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int count = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (count <= 1) return {};
+    std::string result(static_cast<size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, &result[0], count, nullptr, nullptr);
+    result.resize(static_cast<size_t>(count - 1));
+    return result;
+}
+std::wstring WidenUtf8(const std::string& text) {
+    if (text.empty()) return {};
+    const int count = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (count <= 1) return {};
+    std::wstring result(static_cast<size_t>(count), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &result[0], count);
+    result.resize(static_cast<size_t>(count - 1));
+    return result;
+}
+// 0x03740000 -> "3.74"
+std::wstring FirmwareVersionText(std::uint32_t version) {
+    if (!version) return L"";
+    wchar_t text[16] = {};
+    swprintf_s(text, L"%X.%02X", (version >> 24) & 0xFF, (version >> 16) & 0xFF);
+    return text;
+}
+const wchar_t* PupKindName(std::uint32_t partitions) {
+    if (partitions & 2) return L"System firmware";
+    if (partitions & 4) return L"Preinstalled package";
+    if (partitions & 8) return L"Font package";
+    return nullptr;
+}
+struct FirmwareResult {
+    std::wstring name;
+    std::uint32_t partitions = 0;
+    std::uint32_t headerVersion = 0;
+    bool recognised = false;
+    bool installed = false;
+    std::wstring version;
+    std::wstring detail;
+};
+}
+
+bool CatalogShell::SystemFirmwareInstalled() {
+    return HasFiles(FirmwareRoot() + L"\\vs0");
+}
+
+void CatalogShell::CleanUpOldCopies() {
+    // Earlier builds copied every game into app storage and parked firmware
+    // files in the system folder. Games now play where they are and firmware
+    // installs straight away, so those copies only take up space.
+    const std::wstring local = ApplicationData::Current->LocalFolder->Path->Data();
+    const std::wstring internalFirmware = InternalDataRoot() + L"\\vita3k";
+    create_task([local,internalFirmware]() {
+        std::error_code ec;
+        std::filesystem::remove_all(local + L"\\Vita3KContent", ec);
+        std::filesystem::remove_all(local + L"\\Vita3KTemp", ec);
+        for (const wchar_t* name : { L"PSP2UPDAT.PUP", L"PSP2UPDAT_PREINST.PUP", L"PSP2UPDAT_FONT.PUP" })
+            std::filesystem::remove(internalFirmware + L"\\" + name, ec);
+    });
+    auto values = ApplicationData::Current->LocalSettings->Values;
+    for (const wchar_t* key : { L"firmware.stage.main", L"firmware.stage.preinst" })
+        if (values->HasKey(ref new Platform::String(key))) values->Remove(ref new Platform::String(key));
 }
 
 void CatalogShell::ChooseFirmware() {
-    ChooseFirmwareSlot(0);
-}
-void CatalogShell::ChoosePreinstalledFirmware() {
-    ChooseFirmwareSlot(1);
-}
-void CatalogShell::ChooseFirmwareSlot(int slotIndex) {
-    if (slotIndex < 0 || slotIndex > 2) return;
-    const FirmwareSlot& slot = kFirmwareSlots[slotIndex];
-    // A FutureAccessList token does not grant CRT fopen() access, so the file
-    // is copied into the app's own system folder, where the core installs it
-    // on the next game start.
-    Platform::String^ token = ref new Platform::String(slot.token);
-    Platform::String^ name = ref new Platform::String(slot.stagedName);
-    Platform::String^ title = ref new Platform::String(slot.title);
-
+    // Like a BIOS folder in other emulators: pick every .PUP at once, under
+    // any names. Each one is identified by what is inside it.
     auto picker = ref new FileOpenPicker();
     picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
-    picker->FileTypeFilter->Append(L".PUP");
     picker->FileTypeFilter->Append(L".pup");
-    SetStatus(L"Select the " + title + L" (.PUP).");
-    create_task(picker->PickSingleFileAsync()).then(
-        [this,token,name,title,slotIndex](task<StorageFile^> selection) {
-            StorageFile^ file = nullptr;
-            try { file = selection.get(); }
-            catch (Platform::Exception^ e) { SetStatus(L"Firmware picker failed: " + e->Message); return; }
-            if (file == nullptr) return;
-            // The name tells the parts apart only when someone renamed them,
-            // but a name that clearly says another part is a mistake.
-            std::wstring picked = file->Name->Data();
-            for (auto& c : picked) c = static_cast<wchar_t>(towlower(c));
-            const bool looksPreinst = picked.find(L"preinst") != std::wstring::npos;
-            const bool looksFont = picked.find(L"font") != std::wstring::npos;
-            if ((slotIndex == 0 && (looksPreinst || looksFont)) ||
-                (slotIndex == 1 && looksFont) || (slotIndex == 2 && looksPreinst)) {
-                SetStatus(file->Name + L" looks like the " +
-                    ref new Platform::String(looksPreinst ? L"preinstalled package" : L"font package") +
-                    L". Choose it in its own slot.");
-                return;
+    picker->FileTypeFilter->Append(L".PUP");
+    create_task(picker->PickMultipleFilesAsync()).then(
+        [this](task<Windows::Foundation::Collections::IVectorView<StorageFile^>^> picked) {
+            try {
+                auto files = picked.get();
+                std::vector<StorageFile^> list;
+                if (files) for (auto file : files) list.push_back(file);
+                InstallFirmwareFiles(list);
+            } catch (Platform::Exception^ e) {
+                SetStatus(L"Firmware picker failed: " + e->Message);
             }
-            SetStatus(L"Checking " + file->Name + L"...");
-            create_task(file->OpenReadAsync()).then([](IRandomAccessStreamWithContentType^ stream) {
-                auto reader = ref new DataReader(stream);
-                return create_task(reader->LoadAsync(5)).then([reader](unsigned int loaded) {
-                    if (loaded < 5) return false;
-                    unsigned char magic[5] = {};
-                    for (auto& byte : magic) byte = reader->ReadByte();
-                    return std::memcmp(magic, "SCEUF", 5) == 0;
-                });
-            }).then([this,file,token,name,title](task<bool> check) {
-                bool valid = false;
-                try { valid = check.get(); } catch (Platform::Exception^) { valid = false; }
-                if (!valid) {
-                    SetStatus(file->Name + L" is not a PlayStation update package (no SCEUF header).");
+        }, task_continuation_context::use_current());
+}
+
+void CatalogShell::ChooseFirmwareFolder() {
+    auto picker = ref new FolderPicker();
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+    picker->FileTypeFilter->Append(L"*");
+    create_task(picker->PickSingleFolderAsync()).then([this](task<StorageFolder^> picked) {
+        StorageFolder^ folder = nullptr;
+        try { folder = picked.get(); } catch (Platform::Exception^ e) { SetStatus(L"Folder picker failed: " + e->Message); }
+        if (folder == nullptr) return;
+        create_task(folder->GetFilesAsync()).then(
+            [this](task<Windows::Foundation::Collections::IVectorView<StorageFile^>^> listed) {
+                std::vector<StorageFile^> list;
+                try {
+                    for (auto file : listed.get()) {
+                        std::wstring name = file->Name->Data();
+                        for (auto& c : name) c = static_cast<wchar_t>(towlower(c));
+                        if (name.size() > 4 && name.compare(name.size() - 4, 4, L".pup") == 0) list.push_back(file);
+                    }
+                } catch (Platform::Exception^ e) {
+                    SetStatus(L"Couldn't read that folder: " + e->Message);
                     return;
                 }
-                StorageApplicationPermissions::FutureAccessList->AddOrReplace(token, file);
-                SetStatus(L"Copying the " + title + L" into Vita3K's system folder...");
-                create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
-                    L"Vita3KSystem", CreationCollisionOption::OpenIfExists))
-                .then([](StorageFolder^ system) {
-                    return create_task(system->CreateFolderAsync(L"vita3k", CreationCollisionOption::OpenIfExists));
-                }).then([file,name](StorageFolder^ data) {
-                    return create_task(file->CopyAsync(data, name, NameCollisionOption::ReplaceExisting));
-                }).then([this,title](task<StorageFile^> copied) {
-                    try {
-                        copied.get();
-                        SetStatus(title + L" copied. Vita3K installs it the next time a game starts.");
-                    } catch (Platform::Exception^ e) {
-                        SetStatus(L"Couldn't copy the firmware: " + e->Message);
-                    }
-                    RefreshFirmwareStatus();
-                }, task_continuation_context::use_current());
+                if (list.empty()) {
+                    ShowFirmwareProgress(-1, L"No .PUP files in that folder.");
+                    return;
+                }
+                InstallFirmwareFiles(list);
             }, task_continuation_context::use_current());
-        }, task_continuation_context::use_current());
+    }, task_continuation_context::use_current());
+}
+
+void CatalogShell::ShowFirmwareProgress(double value, Platform::String^ message) {
+    if (firmwareProgress_ != nullptr) {
+        firmwareProgress_->Visibility = value < 0 ? Windows::UI::Xaml::Visibility::Collapsed
+                                                  : Windows::UI::Xaml::Visibility::Visible;
+        if (value >= 0) firmwareProgress_->Value = value;
+    }
+    if (message != nullptr) {
+        if (firmwareMessage_ != nullptr) firmwareMessage_->Text = message;
+        SetStatus(message);
+    }
+}
+
+void CatalogShell::InstallFirmwareFiles(std::vector<StorageFile^> files) {
+    if (files.empty()) return;
+    if (firmwareBusy_) {
+        SetStatus(L"Firmware is already being installed.");
+        return;
+    }
+    if (libretro_.GameLoaded() || booting_) {
+        SetStatus(L"Stop the game before installing firmware.");
+        return;
+    }
+    firmwareBusy_ = true;
+    ShowFirmwareProgress(0, L"Getting the firmware files ready...");
+    // Files the core can read where they are (internal storage, USB drives)
+    // install from there. Anything else is copied to a temporary folder first.
+    auto paths = std::make_shared<std::vector<std::pair<std::wstring, std::wstring>>>();
+    auto temps = std::make_shared<std::vector<std::wstring>>();
+    const std::string system = NarrowUtf8(DataRoot());
+    auto dispatcher = Dispatcher;
+    create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(L"Vita3KTemp", CreationCollisionOption::OpenIfExists))
+    .then([files,paths,temps](StorageFolder^ temp) {
+        task<void> chain = task_from_result();
+        for (auto file : files) {
+            chain = chain.then([file,temp,paths,temps]() -> task<void> {
+                if (CanOpenFromApp(file->Path->Data())) {
+                    paths->push_back({ file->Path->Data(), file->Name->Data() });
+                    return task_from_result();
+                }
+                return create_task(file->CopyAsync(temp, file->Name, NameCollisionOption::GenerateUniqueName))
+                    .then([file,paths,temps](StorageFile^ copy) {
+                        paths->push_back({ copy->Path->Data(), file->Name->Data() });
+                        temps->push_back(copy->Path->Data());
+                    });
+            });
+        }
+        return chain;
+    }).then([this,paths,system,dispatcher]() {
+        std::vector<FirmwareResult> results;
+        const size_t total = paths->size();
+        for (size_t i = 0; i < total; ++i) {
+            FirmwareResult result;
+            result.name = (*paths)[i].second;
+            const std::string pup = NarrowUtf8((*paths)[i].first);
+            result.recognised = libretro_.PupInfo(pup, result.headerVersion, result.partitions);
+            const wchar_t* kind = PupKindName(result.partitions);
+            if (!result.recognised || !kind) {
+                result.detail = L"not a PS Vita firmware package";
+                results.push_back(result);
+                continue;
+            }
+            const std::wstring heading = std::wstring(L"Installing ") + kind + L" " +
+                FirmwareVersionText(result.headerVersion) + L" (" + std::to_wstring(i + 1) + L" of " +
+                std::to_wstring(total) + L")...";
+            std::function<void(std::uint32_t)> notify = [this,dispatcher,i,total,heading](std::uint32_t percent) {
+                const double overall = (static_cast<double>(i) * 100.0 + percent) / static_cast<double>(total);
+                dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
+                    ref new Windows::UI::Core::DispatchedHandler([this,overall,heading]() {
+                        ShowFirmwareProgress(overall, ref new Platform::String(heading.c_str()));
+                    }));
+            };
+            notify(0);
+            std::string version;
+            result.installed = libretro_.InstallFirmware(system, pup, notify, version, result.detail);
+            result.version = version.empty() ? FirmwareVersionText(result.headerVersion) : WidenUtf8(version);
+            results.push_back(result);
+        }
+        return results;
+    }, task_continuation_context::use_arbitrary())
+    .then([this,temps](task<std::vector<FirmwareResult>> done) {
+        firmwareBusy_ = false;
+        for (const auto& path : *temps) {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
+        std::vector<FirmwareResult> results;
+        try {
+            results = done.get();
+        } catch (Platform::Exception^ e) {
+            ShowFirmwareProgress(-1, L"Couldn't read the firmware files: " + e->Message);
+            RefreshFirmwareStatus();
+            return;
+        } catch (...) {
+            ShowFirmwareProgress(-1, L"Couldn't install the firmware. vita3k-runtime.log has the details.");
+            RefreshFirmwareStatus();
+            return;
+        }
+        std::wstring summary;
+        int systemCount = 0;
+        for (const auto& r : results) {
+            if (!summary.empty()) summary += L"\n";
+            const wchar_t* kind = PupKindName(r.partitions);
+            if (!r.recognised || !kind) {
+                summary += r.name + L": not a PS Vita firmware package, skipped.";
+                continue;
+            }
+            if (r.partitions & 2) ++systemCount;
+            if (!r.installed) {
+                summary += r.name + L": " + kind + L", install failed. vita3k-runtime.log has the details.";
+                continue;
+            }
+            summary += r.name + L": " + kind + (r.version.empty() ? std::wstring() : L" " + r.version) + L", installed.";
+            const std::uint32_t bits[3] = { 2u, 4u, 8u };
+            for (int part = 0; part < 3; ++part)
+                if (r.partitions & bits[part])
+                    PutPref(ref new Platform::String(kFirmwareParts[part].versionKey),
+                            ref new Platform::String(r.version.c_str()));
+        }
+        if (systemCount > 1)
+            summary += L"\nMore than one file was the system firmware: PSVUPDAT.PUP and PSP2UPDAT.PUP are the same update under two names.";
+        const std::wstring root = FirmwareRoot();
+        std::wstring missing;
+        for (const auto& part : kFirmwareParts) {
+            if (HasFiles(root + L"\\" + part.partition)) continue;
+            if (!missing.empty()) missing += L", ";
+            missing += part.title;
+        }
+        summary += missing.empty() ? std::wstring(L"\nAll firmware parts are installed.")
+                                   : L"\nStill missing: " + missing + L".";
+        ShowFirmwareProgress(-1, ref new Platform::String(summary.c_str()));
+        RefreshFirmwareStatus();
+    }, task_continuation_context::use_current());
 }
 namespace {
 Platform::String^ CoreOptionPrefKey(const vita3k_uwp::CoreOptionDef& option) {
@@ -1737,60 +1947,216 @@ void CatalogShell::ApplyCoreOptions() {
 }
 
 void CatalogShell::FirmwareSettings() {
-    Section(L"Firmware", L"Vita3K needs Sony's PS Vita firmware. This app ships none of it.");
+    Section(L"Firmware", L"Vita3K runs on Sony's PS Vita firmware. This app ships none of it.");
     auto box = Vertical();
-    box->Children->Append(Text(
-        L"Download the files on a PC: the system firmware from Sony's PS Vita system software page; the "
-        L"preinstalled and font packages come from Sony's update servers, and Vita3K's Discord gives the links "
-        L"(-firmware command). All three downloads are named PSP2UPDAT.PUP. Rename the second and third "
-        L"(for example PREINST.PUP and FONT.PUP), copy them to a USB drive or network share, and choose "
-        L"each one in its own slot below. They install the first time a game starts.", 13, false, true));
+    // One status tile per part.
+    auto tiles = ref new Grid();
     for (int i = 0; i < 3; ++i) {
-        const FirmwareSlot& slot = kFirmwareSlots[i];
-        auto row = ref new Grid();
-        row->Margin = Thickness(0, 16, 0, 0);
+        auto column = ref new ColumnDefinition();
+        column->Width = GridLength(1, GridUnitType::Star);
+        tiles->ColumnDefinitions->Append(column);
+    }
+    for (int i = 0; i < 3; ++i) {
+        const FirmwarePart& part = kFirmwareParts[i];
+        auto tile = ref new Border();
+        tile->CornerRadius = Windows::UI::Xaml::CornerRadius(14);
+        tile->Background = Gradient(RgbColor(28, 29, 37), RgbColor(19, 20, 26));
+        tile->BorderBrush = Solid(Alpha(26, 255, 255, 255));
+        tile->BorderThickness = Thickness(1);
+        tile->Padding = Thickness(16, 14, 16, 14);
+        tile->Margin = Thickness(i == 0 ? 0 : 6, 0, i == 2 ? 0 : 6, 0);
+        auto inner = Vertical();
+        auto head = ref new StackPanel();
+        head->Orientation = Orientation::Horizontal;
+        firmwareDot_[i] = ref new Border();
+        firmwareDot_[i]->Width = 10;
+        firmwareDot_[i]->Height = 10;
+        firmwareDot_[i]->CornerRadius = Windows::UI::Xaml::CornerRadius(5);
+        firmwareDot_[i]->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        firmwareDot_[i]->Margin = Thickness(0, 0, 8, 0);
+        head->Children->Append(firmwareDot_[i]);
+        auto need = Text(part.required ? L"REQUIRED" : L"RECOMMENDED", 10, true, !part.required);
+        need->CharacterSpacing = 160;
+        if (part.required) need->Foreground = Solid(Accent());
+        head->Children->Append(need);
+        inner->Children->Append(head);
+        auto title = Text(ref new Platform::String(part.title), 17, true);
+        title->Margin = Thickness(0, 8, 0, 2);
+        inner->Children->Append(title);
+        firmwareStatus_[i] = Text(L"", 13, false, true);
+        inner->Children->Append(firmwareStatus_[i]);
+        auto about = Text(ref new Platform::String(part.about), 11, false, true);
+        about->Margin = Thickness(0, 8, 0, 0);
+        about->Opacity = 0.8;
+        inner->Children->Append(about);
+        tile->Child = inner;
+        Grid::SetColumn(tile, i);
+        tiles->Children->Append(tile);
+    }
+    box->Children->Append(tiles);
+
+    auto actions = ref new StackPanel();
+    actions->Orientation = Orientation::Horizontal;
+    actions->Margin = Thickness(0, 16, 0, 0);
+    auto install = Button(L"Install firmware files", true);
+    install->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseFirmware(); });
+    actions->Children->Append(install);
+    auto fromFolder = Button(L"Install from a folder");
+    fromFolder->Margin = Thickness(10, 0, 0, 0);
+    fromFolder->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseFirmwareFolder(); });
+    actions->Children->Append(fromFolder);
+    auto reset = Button(L"Remove installed firmware");
+    reset->Margin = Thickness(10, 0, 0, 0);
+    reset->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ResetInstalledFirmware(); });
+    actions->Children->Append(reset);
+    box->Children->Append(actions);
+
+    firmwareProgress_ = ref new ProgressBar();
+    firmwareProgress_->Minimum = 0;
+    firmwareProgress_->Maximum = 100;
+    firmwareProgress_->Height = 6;
+    firmwareProgress_->Margin = Thickness(0, 14, 0, 0);
+    firmwareProgress_->Foreground = Solid(Accent());
+    firmwareProgress_->Visibility = firmwareBusy_ ? Windows::UI::Xaml::Visibility::Visible
+                                                  : Windows::UI::Xaml::Visibility::Collapsed;
+    box->Children->Append(firmwareProgress_);
+    firmwareMessage_ = Text(
+        L"Pick the .PUP files you downloaded, all at once, under any names. Vita3K looks inside each one, "
+        L"tells the system firmware, preinstalled package and fonts apart, and installs them right away.",
+        12, false, true);
+    firmwareMessage_->Margin = Thickness(0, 10, 0, 0);
+    box->Children->Append(firmwareMessage_);
+    auto where = Text(
+        L"Where to get them (on a PC, then copy them to a USB drive): the system firmware from Sony's PS Vita "
+        L"system software page. The preinstalled package and fonts are separate Sony downloads, linked by the "
+        L"Vita3K libretro core: bit.ly/4hlePsX (preinstalled) and bit.ly/48ouDaa (fonts).",
+        11, false, true);
+    where->Margin = Thickness(0, 8, 0, 0);
+    where->Opacity = 0.8;
+    box->Children->Append(where);
+    content_->Children->Append(Panel(box));
+    RefreshFirmwareStatus();
+}
+
+void CatalogShell::StorageSettings() {
+    Section(L"Storage", L"Games play from where they are. Vita3K's own data can live on your drive too.");
+    auto box = Vertical();
+    auto addRow = [this,box](Platform::String^ title, Platform::String^ detail, TextBlock^ label,
+                             Windows::UI::Xaml::Controls::Button^ first, Windows::UI::Xaml::Controls::Button^ second) {
+        auto grid = ref new Grid();
+        grid->Margin = Thickness(0, 6, 0, 10);
         auto left = ref new ColumnDefinition();
         left->Width = GridLength(1, GridUnitType::Star);
         auto right = ref new ColumnDefinition();
         right->Width = GridLength(1, GridUnitType::Auto);
-        row->ColumnDefinitions->Append(left);
-        row->ColumnDefinitions->Append(right);
+        grid->ColumnDefinitions->Append(left);
+        grid->ColumnDefinitions->Append(right);
         auto copy = Vertical();
-        auto heading = ref new StackPanel();
-        heading->Orientation = Orientation::Horizontal;
-        heading->Children->Append(Text(ref new Platform::String(slot.title), 15, true));
-        auto tag = Text(slot.required ? L"  REQUIRED" : L"  OPTIONAL", 11, true, !slot.required);
-        if (slot.required) tag->Foreground = Solid(Accent());
-        tag->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-        heading->Children->Append(tag);
-        copy->Children->Append(heading);
-        auto about = Text(ref new Platform::String(slot.about), 12, false, true);
-        about->Margin = Thickness(0, 4, 24, 0);
+        copy->Children->Append(Text(title, 15, true));
+        label->Foreground = Solid(Accent());
+        label->Margin = Thickness(0, 3, 0, 3);
+        copy->Children->Append(label);
+        auto about = Text(detail, 11, false, true);
+        about->Margin = Thickness(0, 0, 24, 0);
         copy->Children->Append(about);
-        firmwareStatus_[i] = Text(L"", 12, true, true);
-        firmwareStatus_[i]->Margin = Thickness(0, 6, 0, 0);
-        copy->Children->Append(firmwareStatus_[i]);
-        row->Children->Append(copy);
-        auto choose = Button(L"Choose file", slot.required);
-        choose->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-        choose->Click += ref new RoutedEventHandler([this,i](Platform::Object^, RoutedEventArgs^) {
-            ChooseFirmwareSlot(i);
-        });
-        Grid::SetColumn(choose, 1);
-        row->Children->Append(choose);
-        box->Children->Append(row);
-    }
-    auto reset = Button(L"Reinstall firmware on next start");
-    reset->Margin = Thickness(0, 18, 0, 0);
-    reset->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
-        ResetInstalledFirmware();
-    });
-    box->Children->Append(reset);
-    box->Children->Append(Text(
-        L"Removes the installed firmware but keeps the chosen files, so a broken install is redone.",
-        12, false, true));
+        grid->Children->Append(copy);
+        auto actions = ref new StackPanel();
+        actions->Orientation = Orientation::Horizontal;
+        actions->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        actions->Children->Append(first);
+        if (second != nullptr) {
+            second->Margin = Thickness(10, 0, 0, 0);
+            actions->Children->Append(second);
+        }
+        Grid::SetColumn(actions, 1);
+        grid->Children->Append(actions);
+        box->Children->Append(grid);
+    };
+    folderLabel_ = Text(L"", 13);
+    auto chooseGames = Button(L"Choose games folder", true);
+    chooseGames->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseGameFolder(); });
+    addRow(L"Games", L"A folder of games (game folders, .vpk or .pkg files), or one game's own folder. "
+        L"A USB drive works: games are read where they are, nothing is copied.", folderLabel_, chooseGames, nullptr);
+    dataLabel_ = Text(L"", 13);
+    auto onDrive = Button(L"Use a folder on a drive");
+    onDrive->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseDataFolder(); });
+    auto internal = Button(L"Use internal storage");
+    internal->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChangeDataRoot(L""); });
+    addRow(L"Vita3K data", L"Firmware, installed games, saves and caches. Vita3K installs a game here the first "
+        L"time it runs it, so if internal space is short, put this on your USB drive.", dataLabel_, onDrive, internal);
     content_->Children->Append(Panel(box));
-    RefreshFirmwareStatus();
+    RestorePaths();
+}
+
+void CatalogShell::ChooseDataFolder() {
+    auto picker = ref new FolderPicker();
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+    picker->FileTypeFilter->Append(L"*");
+    create_task(picker->PickSingleFolderAsync()).then([this](task<StorageFolder^> picked) {
+        StorageFolder^ folder = nullptr;
+        try { folder = picked.get(); } catch (Platform::Exception^ e) { SetStatus(L"Folder picker failed: " + e->Message); }
+        if (folder == nullptr) return;
+        StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-data", folder);
+        ChangeDataRoot(std::wstring(folder->Path->Data()) + L"\\Vita3K");
+    }, task_continuation_context::use_current());
+}
+
+void CatalogShell::ChangeDataRoot(const std::wstring& chosen) {
+    if (libretro_.GameLoaded() || booting_ || firmwareBusy_) {
+        SetStatus(L"Wait until the game or the firmware install has finished, then change the data folder.");
+        return;
+    }
+    const std::wstring from = DataRoot();
+    const std::wstring to = chosen.empty() ? InternalDataRoot() : chosen;
+    if (_wcsicmp(from.c_str(), to.c_str()) == 0) {
+        SetStatus(L"Vita3K data is already there.");
+        return;
+    }
+    if (!chosen.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(to, ec);
+        if (!std::filesystem::is_directory(to, ec)) {
+            SetStatus(ref new Platform::String((L"Can't create " + to + L". Check that the drive is connected and writable.").c_str()));
+            return;
+        }
+    }
+    auto apply = [this,chosen,to]() {
+        PutPref(L"storage.dataRoot", ref new Platform::String(chosen.c_str()));
+        SetStatus(ref new Platform::String((L"Vita3K data now lives in " + to + L".").c_str()));
+        Render();
+    };
+    if (!HasFiles(from + L"\\vita3k")) {
+        apply();
+        return;
+    }
+    auto dialog = ref new ContentDialog();
+    dialog->Title = L"Move your Vita3K data?";
+    dialog->Content = ref new Platform::String((L"Firmware, installed games and saves are in " + from +
+        L". Move them to " + to + L"? Large games take a while.").c_str());
+    dialog->PrimaryButtonText = L"Move";
+    dialog->SecondaryButtonText = L"Start fresh there";
+    dialog->CloseButtonText = L"Cancel";
+    create_task(dialog->ShowAsync()).then([this,from,to,apply](ContentDialogResult answer) {
+        if (answer == ContentDialogResult::Secondary) { apply(); return; }
+        if (answer != ContentDialogResult::Primary) return;
+        booting_ = true; // keeps games from starting while files move
+        SetStatus(L"Moving Vita3K data. Leave the app open until it finishes...");
+        create_task([from,to]() -> std::wstring {
+            std::error_code ec;
+            std::filesystem::create_directories(to + L"\\vita3k", ec);
+            std::filesystem::copy(from + L"\\vita3k", to + L"\\vita3k",
+                std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) return L"Moving failed: " + WidenUtf8(ec.message()) + L". Nothing was removed from the old place.";
+            std::filesystem::remove_all(from + L"\\vita3k", ec);
+            return std::wstring();
+        }).then([this,apply](task<std::wstring> moved) {
+            booting_ = false;
+            std::wstring error;
+            try { error = moved.get(); } catch (...) { error = L"Moving failed."; }
+            if (!error.empty()) { SetStatus(ref new Platform::String(error.c_str())); return; }
+            apply();
+        }, task_continuation_context::use_current());
+    }, task_continuation_context::use_current());
 }
 
 void CatalogShell::EmulationSettings() {
@@ -1864,18 +2230,23 @@ void CatalogShell::RefreshFirmwareStatus() {
     const std::wstring root = FirmwareRoot();
     for (int i = 0; i < 3; ++i) {
         if (firmwareStatus_[i] == nullptr) continue;
-        const FirmwareSlot& slot = kFirmwareSlots[i];
-        const bool installed = HasFiles(root + L"\\" + slot.partition);
-        const bool staged = IsFile(root + L"\\" + slot.stagedName);
-        firmwareStatus_[i]->Text = installed ? L"Installed"
-            : staged ? L"Ready, installs when a game starts"
-            : slot.required ? L"Not chosen yet" : L"Not chosen (optional)";
-        firmwareStatus_[i]->Foreground = Solid(installed ? RgbColor(111, 227, 154)
-            : staged ? RgbColor(240, 199, 94) : RgbColor(153, 157, 169));
+        const FirmwarePart& part = kFirmwareParts[i];
+        const bool installed = HasFiles(root + L"\\" + part.partition);
+        auto version = Pref(ref new Platform::String(part.versionKey), L"");
+        firmwareStatus_[i]->Text = installed
+            ? (version->IsEmpty() ? ref new Platform::String(L"Installed") : L"Installed  ·  " + version)
+            : ref new Platform::String(L"Not installed");
+        const Color color = installed ? RgbColor(111, 227, 154)
+            : part.required ? Accent() : RgbColor(240, 199, 94);
+        if (firmwareDot_[i] != nullptr) firmwareDot_[i]->Background = Solid(color);
     }
 }
 void CatalogShell::ResetInstalledFirmware() {
-    SetStatus(L"Removing installed firmware...");
+    if (firmwareBusy_ || libretro_.GameLoaded() || booting_) {
+        SetStatus(L"Wait until the game or the firmware install has finished.");
+        return;
+    }
+    ShowFirmwareProgress(-1, L"Removing installed firmware...");
     const std::wstring root = FirmwareRoot();
     create_task([root]() {
         for (const wchar_t* part : { L"os0", L"vs0", L"pd0", L"sa0", L"PUP_DEC" }) {
@@ -1884,7 +2255,12 @@ void CatalogShell::ResetInstalledFirmware() {
         }
     }).then([this](task<void> done) {
         try { done.get(); } catch (...) {}
-        SetStatus(L"Installed firmware removed. The chosen packages install again on the next game start.");
+        auto values = ApplicationData::Current->LocalSettings->Values;
+        for (const auto& part : kFirmwareParts) {
+            auto key = ref new Platform::String(part.versionKey);
+            if (values->HasKey(key)) values->Remove(key);
+        }
+        ShowFirmwareProgress(-1, L"Installed firmware removed. Install it again with Install firmware files.");
         RefreshFirmwareStatus();
     }, task_continuation_context::use_current());
 }
@@ -2138,6 +2514,22 @@ void CatalogShell::AttemptBoot(size_t index) {
         SetStatus(StringOf(probe));
         return;
     }
+    if (!HasFiles(FirmwareRoot() + L"\\vs0")) {
+        SetStatus(L"Install the system firmware first: Settings, Firmware, Install firmware files.");
+        ShowPage(2);
+        return;
+    }
+    // Games are read where they are (internal storage or a USB drive): the
+    // core reaches them through the FromApp file redirect. Only a place it
+    // still cannot read falls back to copying the game into app storage.
+    const std::wstring direct = folder != nullptr ? folder->Path->Data() : file->Path->Data();
+    const std::wstring check = folder != nullptr ? direct + L"\\sce_sys\\param.sfo" : direct;
+    if (CanOpenFromApp(check)) {
+        booting_ = true;
+        SetStatus(ref new Platform::String((L"Starting " + std::wstring(games_[index].name->Data()) + L"...").c_str()));
+        StartCore(ref new Platform::String(direct.c_str()));
+        return;
+    }
     booting_ = true;
     // Vita3K reads games with ordinary file APIs, which UWP only allows inside
     // the app's own storage, so the game is copied there first. The copy keeps
@@ -2157,9 +2549,7 @@ void CatalogShell::AttemptBoot(size_t index) {
                     StringOf(std::to_wstring(progress->skipped.load())) + L" already there...");
             }));
     };
-    SetStatus(folder != nullptr
-        ? L"Copying the game folder into Vita3K storage. The first start of a large game takes a while."
-        : L"Copying the game into Vita3K storage...");
+    SetStatus(L"Vita3K can't read this game where it is, so it is being copied into app storage first...");
     create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
         L"Vita3KContent", CreationCollisionOption::OpenIfExists))
     .then([file,folder,progress,report](StorageFolder^ content) -> task<Platform::String^> {
@@ -2195,7 +2585,7 @@ void CatalogShell::AttemptBoot(size_t index) {
 }
 
 void CatalogShell::StartCore(Platform::String^ contentPath) {
-    const std::string system = Utf8Of(ApplicationData::Current->LocalFolder->Path + L"\\Vita3KSystem");
+    const std::string system = NarrowUtf8(DataRoot());
     const std::string content = Utf8Of(contentPath);
     libretro_.StopRunning();
     renderer_.Shutdown();

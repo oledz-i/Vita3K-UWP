@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" IgnorableNamespaces="uap mp">
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap mp rescap">
   <Identity Name="oledz.Vita3KUWP.Dev" Publisher="CN=Vita3K-UWP-Development" Version="0.1.0.0" ProcessorArchitecture="x64" />
   <mp:PhoneIdentity PhoneProductId="19b18280-8d0b-4566-86f9-640822a81a36" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
   <Properties><DisplayName>Vita3K</DisplayName><PublisherDisplayName>Vita3K-UWP contributors</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo><Description>PS Vita emulator for Xbox</Description></Properties>
@@ -10,5 +10,5 @@
       <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#0C121E" />
     </uap:VisualElements>
   </Application></Applications>
-  <Capabilities><Capability Name="internetClient" /><Capability Name="codeGeneration" /></Capabilities>
+  <Capabilities><Capability Name="internetClient" /><Capability Name="codeGeneration" /><uap:Capability Name="removableStorage" /><rescap:Capability Name="broadFileSystemAccess" /><rescap:Capability Name="expandedResources" /></Capabilities>
 </Package>

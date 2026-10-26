@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "VitaLibretroHost.h"
+#include "UwpFileRedirect.h"
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -64,6 +65,9 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
             L". A desktop Windows core DLL is not a tested substitute.";
         return false;
     }
+    // Before the core touches a file: let it reach USB drives and other
+    // storage the user granted, not only the app's own folders.
+    redirectReport_ = vita3k_uwp::RedirectCoreFileAccess(module_);
 
     const auto api = Entry<ApiVersion>(module_, "retro_api_version");
     const auto info = Entry<GetSystemInfo>(module_, "retro_get_system_info");
@@ -115,23 +119,28 @@ bool VitaLibretroHost::Probe(std::wstring& detail) {
 
 bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring& detail) {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
-    if (initialized_) {
+    if (initialized_ && systemFolder == systemDir_) {
         detail = L"Vita3K core is already initialized.";
         return true;
     }
+    if (initialized_) {
+        // The Vita3K data folder moved: start the core again on the new one.
+        Shutdown();
+    }
     systemDir_ = systemFolder.c_str();
-    // Keep frontend diagnostics outside the core's firmware directory so they
-    // survive load failures. The caller passes LocalFolder/Vita3KSystem.
-    const auto parent = systemDir_.find_last_of("/\\");
-    if (parent != std::string::npos)
-        runtimeLogPath_ = FromUtf8((systemDir_.substr(0, parent + 1) + "vita3k-runtime.log").c_str());
+    if (runtimeLogPath_.empty()) {
+        const auto parent = systemDir_.find_last_of("/\\");
+        if (parent != std::string::npos)
+            runtimeLogPath_ = FromUtf8((systemDir_.substr(0, parent + 1) + "vita3k-runtime.log").c_str());
+    }
     if (!Probe(detail)) return false;
     unsupportedVideo_ = false;
     if (!init_) return false;
     if (!audio_.Start()) {
         Log(2, "Xbox audio output is unavailable; continuing without audio.\n");
     }
-    Log(1, "Initializing packaged Vita3K core.\n");
+    Log(1, "Initializing packaged Vita3K core. Vita3K data: %s\n", systemDir_.c_str());
+    Log(1, "External storage access (redirected file imports): %s\n", redirectReport_.c_str());
     init_();
     initialized_ = true;
     detail = L"Vita3K core initialized (" + coreVersion_ +
@@ -143,6 +152,42 @@ bool VitaLibretroHost::Initialize(const std::string& systemFolder, std::wstring&
 }
 
 
+bool VitaLibretroHost::PupInfo(const std::string& pupUtf8, std::uint32_t& version, std::uint32_t& partitions) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
+    version = 0;
+    partitions = 0;
+    std::wstring ignored;
+    if (!Probe(ignored)) return false;
+    using InfoFn = int(__cdecl*)(const char*, std::uint32_t*, std::uint32_t*);
+    const auto info = Entry<InfoFn>(module_, "vita3k_uwp_pup_info");
+    return info && info(pupUtf8.c_str(), &version, &partitions) != 0;
+}
+bool VitaLibretroHost::InstallFirmware(const std::string& systemFolder, const std::string& pupUtf8,
+                                       std::function<void(std::uint32_t)> progress, std::string& version,
+                                       std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
+    if (gameLoaded_) {
+        detail = L"Stop the game before installing firmware.";
+        return false;
+    }
+    if (!Initialize(systemFolder, detail)) return false;
+    using InstallFn = int(__cdecl*)(const char*, const char*, void(__cdecl*)(std::uint32_t, void*), void*, char*, std::uint32_t);
+    const auto install = Entry<InstallFn>(module_, "vita3k_uwp_install_pup");
+    if (!install) {
+        detail = L"This Vita3K core cannot install firmware on request.";
+        return false;
+    }
+    const std::string pref = systemFolder + "\\vita3k";
+    char reported[64] = {};
+    auto relay = [](std::uint32_t value, void* user) {
+        auto* callback = static_cast<std::function<void(std::uint32_t)>*>(user);
+        if (callback && *callback) (*callback)(value);
+    };
+    const bool ok = install(pref.c_str(), pupUtf8.c_str(), relay, &progress, reported, sizeof(reported)) != 0;
+    version = reported;
+    detail = ok ? L"Installed." : L"The firmware package could not be installed. " + RecentLog();
+    return ok;
+}
 std::wstring VitaLibretroHost::RecentLog() const {
     std::lock_guard<std::mutex> guard(logsMutex_);
     return FromUtf8(latestCoreLogs_.c_str());

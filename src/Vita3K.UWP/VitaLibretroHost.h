@@ -12,6 +12,7 @@
 #include <thread>
 #include <map>
 #include <set>
+#include <functional>
 #include <Xinput.h>
 #include "CoreAudio.h"
 #include "VitaVulkanBridge.h"
@@ -45,6 +46,16 @@ public:
     // what the core reads at start; later changes reach it through
     // GET_VARIABLE_UPDATE.
     void SetOption(const std::string& key, const std::string& value);
+    // Where vita3k-runtime.log goes; kept in the app's own folder even when
+    // the Vita3K data folder is on an external drive.
+    void SetLogPath(const std::wstring& path) { runtimeLogPath_ = path; }
+    const std::wstring& LogPath() const { return runtimeLogPath_; }
+    // What a .PUP holds: bit 0 os0, 1 vs0 (system firmware), 2 pd0
+    // (preinstalled package), 3 sa0 (fonts); and its firmware version.
+    bool PupInfo(const std::string& pupUtf8, std::uint32_t& version, std::uint32_t& partitions);
+    // Installs one .PUP into <systemFolder>/vita3k now, reporting 0-100.
+    bool InstallFirmware(const std::string& systemFolder, const std::string& pupUtf8,
+                         std::function<void(std::uint32_t)> progress, std::string& version, std::wstring& detail);
     std::wstring RecentLog() const;
     void Shutdown();
 
@@ -117,6 +128,7 @@ private:
     std::string latestCoreLogs_;
     bool unsupportedVideo_ = false;
     std::wstring coreVersion_;
+    std::string redirectReport_;
     std::mutex optionsMutex_;
     std::map<std::string, const char*> options_;
     std::set<std::string> optionStrings_; // stable storage for returned values
