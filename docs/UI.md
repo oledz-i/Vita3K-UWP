@@ -28,7 +28,7 @@ Colors are saved locally and applied immediately. The UI uses the Windows **Sego
 
 ## Music
 
-**Settings → Home menu soundtrack** offers four original, programmatically generated ambient loops: **Ambient Drift**, **Neon Pulse**, **Stardust**, and **Tidal Blue**. They contain no copyrighted console themes or external soundtrack files. You can also select **Off** or supply your own supported MP3/WAV/M4A file using the Xbox picker. Set a separate menu music volume. The custom file uses UWP's FutureAccessList to retain permission where supported.
+**Settings → Home menu soundtrack** offers four original loops, each its own style: **Afterglow** (warm lo-fi), **Neon Arcade** (synthwave), **Stardust** (dreamy ambience) and **Tidal** (breezy bossa). They are composed for this project by `scripts/music/compose.py`; no third-party audio. You can also select **Off** or supply your own supported MP3/WAV/M4A file using the Xbox picker. Set a separate menu music volume. The custom file uses UWP's FutureAccessList to retain permission where supported.
 
 ## Navigation audio and Xbox B button
 

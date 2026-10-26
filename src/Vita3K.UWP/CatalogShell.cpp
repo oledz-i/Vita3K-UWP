@@ -1254,7 +1254,7 @@ void CatalogShell::Settings() {
 
     Section(L"Home menu soundtrack", L"Original loopable music, your own audio, or silence.");
     const wchar_t* names[] = {
-        L"Off", L"Ambient Drift", L"Neon Pulse", L"Stardust", L"Tidal Blue", L"Custom track"
+        L"Off", L"Afterglow", L"Neon Arcade", L"Stardust", L"Tidal", L"Your own track"
     };
     auto music = ActionRow(142);
     for (int i = 0; i < 6; ++i) {
@@ -1526,43 +1526,14 @@ void CatalogShell::SetMusic(int track) {
 }
 void CatalogShell::PlayBundledMusic(int track) {
     if (track < 1 || track > 4) return;
-    playbackStatus_ = L"Preparing original soundtrack...";
+    // Original tracks shipped in the package (scripts/music/compose.py).
+    static const wchar_t* files[4] = { L"afterglow", L"neon-arcade", L"stardust", L"tidal" };
+    musicPlayer_->IsLooping = true;
+    musicPlayer_->Source = ref new Uri(ref new Platform::String(
+        (std::wstring(L"ms-appx:///Assets/Music/") + files[track - 1] + L".wav").c_str()));
+    playbackStatus_ = L"Playing";
     if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
-    // Use a *real file* under LocalFolder, not a temporary RAM stream.
-    // Xbox's Media Foundation decoder can then seek and loop reliably.
-    auto bytes = vita3k_uwp::GenerateMenuWav(static_cast<unsigned>(track - 1));
-    auto data = ref new Platform::Array<unsigned char>(
-        static_cast<unsigned>(bytes.size()));
-    std::memcpy(data->Data, bytes.data(), bytes.size());
-    create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
-        L"MenuAudio", CreationCollisionOption::OpenIfExists))
-    .then([this,track,data](StorageFolder^ folder) {
-        const auto filename = L"ambient" + StringOf(std::to_wstring(track)) + L".wav";
-        return create_task(folder->CreateFileAsync(
-            filename, CreationCollisionOption::ReplaceExisting))
-        .then([fileData = data](StorageFile^ file) {
-            return create_task(FileIO::WriteBytesAsync(file, fileData))
-                .then([file]() { return file; });
-        });
-    }).then([this,track](task<StorageFile^> work) {
-        try {
-            auto file = work.get();
-            if (track_ != track) return;  // Music changed during file write.
-            musicPlayer_->IsLooping = true;
-            musicPlayer_->Source = ref new Uri(
-                L"ms-appdata:///local/MenuAudio/" + file->Name);
-            playbackStatus_ = L"Loading " + file->Name + L"...";
-            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
-            musicPlayer_->Play(); // MediaOpened also triggers Play once ready.
-        } catch (Platform::Exception^ error) {
-            playbackStatus_ = L"Couldn't prepare soundtrack: " + error->Message;
-            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
-            SetStatus(playbackStatus_);
-        } catch (...) {
-            playbackStatus_ = L"Couldn't create the local soundtrack file.";
-            if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
-        }
-    }, task_continuation_context::use_current());
+    musicPlayer_->Play(); // MediaOpened also starts it once ready.
 }
 void CatalogShell::PlayCustomMusic() {
     auto access = StorageApplicationPermissions::FutureAccessList;
