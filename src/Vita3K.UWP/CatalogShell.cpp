@@ -62,6 +62,9 @@ Platform::String^ Pref(Platform::String^ key, Platform::String^ fallback = L"") 
 void PutPref(Platform::String^ key, Platform::String^ value) {
     ApplicationData::Current->LocalSettings->Values->Insert(key, value);
 }
+// Defined with the firmware helpers further down.
+std::wstring FirmwareRoot();
+bool HasFiles(const std::wstring& directory);
 TimeSpan Millis(double ms) {
     TimeSpan span;
     span.Duration = static_cast<long long>(ms * 10000.0);
@@ -1086,58 +1089,69 @@ void CatalogShell::GameDetails() {
     title->MaxWidth = 560;
     title->MaxLines = 2;
     right->Children->Append(title);
-    auto note = Text(L"Added to your personal collection. This build can display metadata and artwork while the emulator core is being ported.", 13, false, true);
+    // Whether Vita3K has installed this game already (its title ID folder in ux0/app).
+    std::wstring titleId;
+    if (games_[index].directory) titleId = games_[index].directory->Name->Data();
+    const bool installed = titleId.size() == 9 && HasFiles(FirmwareRoot() + L"\\ux0\\app\\" + titleId);
+    auto note = Text(installed
+        ? L"Ready to play."
+        : L"The first start installs the game into Vita3K's data folder, then it starts straight away next time.",
+        13, false, true);
     note->MaxWidth = 520;
     right->Children->Append(note);
 
-    auto actions = ActionRow(168);
-    actions->Margin = Thickness(0, 18, 0, 8);
-    auto inspect = Button(L"Inspect game", true);
-    inspect->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
-        InspectLaunch(index);
+    auto actions = ref new StackPanel();
+    actions->Orientation = Orientation::Horizontal;
+    actions->Margin = Thickness(0, 22, 0, 8);
+    auto play = Button(L"▶  Play", true);
+    play->MinWidth = 168;
+    play->Height = 52;
+    play->FontSize = 18;
+    play->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+        AttemptBoot(index);
     });
-    actions->Children->Append(inspect);
-    // Show Launch only when a UWP-built, signed Vita3K core is present.
-    // No inactive button or simulated launch screen in frontend-only builds.
-    std::wstring coreStatus;
-    if (libretro_.Probe(coreStatus) && games_[index].file != nullptr) {
-        auto launch = Button(L"Launch Vita game", true);
-        launch->Click += ref new RoutedEventHandler(
-            [this,index](Platform::Object^, RoutedEventArgs^) {
-                AttemptBoot(index);
-            });
-        actions->Children->Append(launch);
-    }
-    auto image = Button(L"Change cover art");
+    actions->Children->Append(play);
+    auto image = Button(L"Change cover");
+    image->Margin = Thickness(12, 0, 0, 0);
     image->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         ChooseCustomArtwork(index);
     });
     actions->Children->Append(image);
-    auto find = Button(L"Find artwork online");
+    auto find = Button(L"Find cover online");
+    find->Margin = Thickness(12, 0, 0, 0);
     find->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         FetchArtwork(index);
     });
     actions->Children->Append(find);
     right->Children->Append(actions);
-
-    auto validation = Text(L"SOURCE CHECK:  " + games_[index].validation, 12, false, true);
-    validation->MaxWidth = 560;
-    validation->Margin = Thickness(0, 8, 0, 4);
-    right->Children->Append(validation);
     if (games_[index].format == vita3k_uwp::GameFormat::Pkg) {
-        auto license = Button(L"Select owned PKG license");
+        auto license = Button(L"Choose the game's license file");
         license->Margin = Thickness(0, 10, 0, 0);
         license->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
             ChooseLicenseForGame(index);
         });
         right->Children->Append(license);
     }
+#if !defined(VITA3K_RELEASE_BUILD)
+    auto inspect = Button(L"Inspect game (developer)");
+    inspect->Margin = Thickness(0, 10, 0, 0);
+    inspect->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
+        InspectLaunch(index);
+    });
+    right->Children->Append(inspect);
+    auto validation = Text(L"Source check: " + games_[index].validation, 11, false, true);
+    validation->MaxWidth = 560;
+    validation->Margin = Thickness(0, 8, 0, 4);
+    validation->Opacity = 0.7;
+    right->Children->Append(validation);
+#endif
     layout->Children->Append(right);
     feature->Child = layout;
     content_->Children->Append(feature);
-    auto status = Text(L"EARLY ACCESS  /  Vita3K CPU, kernel, package installation and game rendering are still in development.", 10, false, true);
-    status->Margin = Thickness(2, 14, 0, 0);
-    content_->Children->Append(status);
+    // The controller lands on Play.
+    play->Loaded += ref new RoutedEventHandler([play](Platform::Object^, RoutedEventArgs^) {
+        play->Focus(Windows::UI::Xaml::FocusState::Programmatic);
+    });
 }
 void CatalogShell::Render() {
     content_->Children->Clear();
