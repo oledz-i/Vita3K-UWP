@@ -875,38 +875,7 @@ void CatalogShell::Home() {
     hero->Child = heroLayout;
     content_->Children->Append(hero);
 
-    if (!SystemFirmwareInstalled()) {
-        // First run: what is still needed before a game can start.
-        auto setup = Vertical();
-        auto kick = Text(L"FINISH SETTING UP", 10, true);
-        kick->CharacterSpacing = 240;
-        kick->Foreground = Solid(Accent());
-        setup->Children->Append(kick);
-        setup->Children->Append(Text(L"Install the PS Vita firmware", 20, true));
-        auto why = Text(L"Vita3K needs Sony's system firmware before any game can start. Pick the .PUP files "
-            L"you downloaded; they install right away. Games can stay on your USB drive.", 13, false, true);
-        why->Margin = Thickness(0, 4, 0, 12);
-        why->MaxWidth = 620;
-        why->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
-        setup->Children->Append(why);
-        auto row = ref new StackPanel();
-        row->Orientation = Orientation::Horizontal;
-        auto install = Button(L"Install firmware", true);
-        install->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(2); ChooseFirmware(); });
-        row->Children->Append(install);
-        auto settings = Button(L"Open Settings");
-        settings->Margin = Thickness(10, 0, 0, 0);
-        settings->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(2); });
-        row->Children->Append(settings);
-        setup->Children->Append(row);
-        auto tip = Text(L"Tip: in Dev Home, set this app's type to Game. As an App the Xbox gives it too little memory "
-            L"and closes it without warning.", 11, false, true);
-        tip->Margin = Thickness(0, 12, 0, 0);
-        setup->Children->Append(tip);
-        auto card = Panel(setup);
-        card->Margin = Thickness(0, 0, 0, 20);
-        content_->Children->Append(card);
-    }
+    SetupCard();
 
     if (hasGames) {
         std::vector<size_t> all, folders, packages;
@@ -1710,6 +1679,133 @@ struct FirmwareResult {
 
 bool CatalogShell::SystemFirmwareInstalled() {
     return HasFiles(FirmwareRoot() + L"\\vs0");
+}
+
+void CatalogShell::SetupCard() {
+    const bool storageDone = !Pref(L"storage.dataRoot", L"")->IsEmpty() || Pref(L"storage.internal", L"0")->Equals(L"1");
+    const bool firmwareDone = SystemFirmwareInstalled();
+    const bool gamesDone = StorageApplicationPermissions::FutureAccessList->ContainsItem(L"vita-games") || !games_.empty();
+    if (storageDone && firmwareDone && gamesDone) return;
+
+    auto setup = Vertical();
+    auto kick = Text(L"GET STARTED", 10, true);
+    kick->CharacterSpacing = 300;
+    kick->Foreground = Solid(Accent());
+    setup->Children->Append(kick);
+    auto heading = Text(L"Three steps and you're playing", 22, false);
+    heading->FontWeight = FontWeights::Light;
+    heading->Margin = Thickness(0, 6, 0, 14);
+    setup->Children->Append(heading);
+
+    auto step = [this,setup](int number, bool done, bool current, Platform::String^ title, Platform::String^ detail) {
+        auto row = ref new Grid();
+        row->Margin = Thickness(0, 0, 0, 14);
+        auto c0 = ref new ColumnDefinition();
+        c0->Width = GridLength(44);
+        auto c1 = ref new ColumnDefinition();
+        c1->Width = GridLength(1, GridUnitType::Star);
+        row->ColumnDefinitions->Append(c0);
+        row->ColumnDefinitions->Append(c1);
+        auto badge = ref new Border();
+        badge->Width = 30;
+        badge->Height = 30;
+        badge->CornerRadius = Windows::UI::Xaml::CornerRadius(15);
+        badge->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
+        badge->Background = Solid(done ? RgbColor(52, 168, 104) : current ? Accent() : Alpha(40, 255, 255, 255));
+        auto mark = Text(done ? L"✓" : ref new Platform::String(std::to_wstring(number).c_str()), 14, true);
+        mark->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+        mark->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        if (current && !done) mark->Foreground = Solid(Colors::Black);
+        badge->Child = mark;
+        row->Children->Append(badge);
+        auto copy = Vertical();
+        auto name = Text(title, 15, true);
+        if (done) name->Opacity = 0.6;
+        copy->Children->Append(name);
+        auto about = Text(detail, 12, false, true);
+        about->Margin = Thickness(0, 2, 0, 0);
+        copy->Children->Append(about);
+        Grid::SetColumn(copy, 1);
+        row->Children->Append(copy);
+        setup->Children->Append(row);
+        return copy;
+    };
+
+    // 1. Storage: USB drives first.
+    auto storage = step(1, storageDone, !storageDone, L"Choose where Vita3K keeps its data",
+        storageDone ? ref new Platform::String(Pref(L"storage.dataRoot", L"")->IsEmpty() ? L"Internal storage" : Pref(L"storage.dataRoot", L"")->Data())
+                    : ref new Platform::String(L"Firmware, installed games and saves. A USB drive is best: installed games can be large."));
+    if (!storageDone) {
+        auto drives = ref new StackPanel();
+        drives->Orientation = Orientation::Horizontal;
+        drives->Margin = Thickness(0, 10, 0, 0);
+        storage->Children->Append(drives);
+        auto finding = Text(L"Looking for USB drives...", 12, false, true);
+        drives->Children->Append(finding);
+        create_task(KnownFolders::RemovableDevices->GetFoldersAsync()).then(
+            [this,drives,finding](task<Windows::Foundation::Collections::IVectorView<StorageFolder^>^> found) {
+                unsigned index = 0;
+                if (drives->Children->IndexOf(finding, &index)) drives->Children->RemoveAt(index);
+                unsigned count = 0;
+                try {
+                    for (auto drive : found.get()) {
+                        auto path = drive->Path;
+                        auto use = Button(L"Use " + drive->DisplayName, count == 0);
+                        use->Margin = Thickness(0, 0, 10, 0);
+                        use->Click += ref new RoutedEventHandler([this,path](Platform::Object^, RoutedEventArgs^) {
+                            std::wstring root = path->Data();
+                            if (!root.empty() && root.back() != L'\\') root.push_back(L'\\');
+                            ChangeDataRoot(root + L"Vita3K");
+                        });
+                        drives->Children->Append(use);
+                        ++count;
+                    }
+                } catch (Platform::Exception^) {}
+                if (count == 0) {
+                    auto pick = Button(L"Choose a folder on a drive", true);
+                    pick->Margin = Thickness(0, 0, 10, 0);
+                    pick->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseDataFolder(); });
+                    drives->Children->Append(pick);
+                }
+                auto internal = Button(L"Use internal storage");
+                internal->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+                    PutPref(L"storage.internal", L"1");
+                    ChangeDataRoot(L"");
+                    Render();
+                });
+                drives->Children->Append(internal);
+            }, task_continuation_context::use_current());
+    }
+
+    // 2. Firmware.
+    auto firmware = step(2, firmwareDone, storageDone && !firmwareDone, L"Install the PS Vita firmware",
+        firmwareDone ? L"Installed" : L"Pick the .PUP files you downloaded, all at once. They install right away.");
+    if (!firmwareDone) {
+        auto install = Button(L"Install firmware", storageDone);
+        install->Margin = Thickness(0, 10, 0, 0);
+        install->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+        install->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ShowPage(2); ChooseFirmware(); });
+        firmware->Children->Append(install);
+    }
+
+    // 3. Games.
+    auto games = step(3, gamesDone, storageDone && firmwareDone && !gamesDone, L"Choose your games folder",
+        gamesDone ? L"Done" : L"Your Vita games stay where they are, on the drive. Nothing is copied.");
+    if (!gamesDone) {
+        auto choose = Button(L"Choose games folder", storageDone && firmwareDone);
+        choose->Margin = Thickness(0, 10, 0, 0);
+        choose->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+        choose->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseGameFolder(); });
+        games->Children->Append(choose);
+    }
+
+    auto tip = Text(L"Tip: in Dev Home, set this app's type to Game, so the Xbox gives it the memory games need.", 11, false, true);
+    tip->Opacity = 0.75;
+    setup->Children->Append(tip);
+    auto card = Panel(setup, 24);
+    card->Margin = Thickness(0, 0, 0, 20);
+    card->Background = Gradient(Card(), Alpha(255, 30, 24, 38));
+    content_->Children->Append(card);
 }
 
 void CatalogShell::CleanUpOldCopies() {

@@ -142,6 +142,7 @@ private:
     void ChangeDataRoot(const std::wstring& chosen);
     void CleanUpOldCopies();
     bool SystemFirmwareInstalled();
+    void SetupCard();
     void RefreshFirmwareStatus();
     void ResetInstalledFirmware();
     void FirmwareSettings();
