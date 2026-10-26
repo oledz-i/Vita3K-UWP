@@ -12,7 +12,7 @@ The signed package is included when packaging succeeds. A failed build still
 uploads this report; a failed core build skips packaging. Runner loss or forced
 cancellation may prevent artifact upload.
 
-Give Claude ERROR-LOG.txt first, then the full matching logs if needed. The
+Read ERROR-LOG.txt first, then the full matching logs if needed. The
 runtime dependency reports flag unresolved or potentially unsupported imports;
 a successful compile/package does not establish Xbox loadability or gameplay.
 

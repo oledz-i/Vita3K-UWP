@@ -995,3 +995,32 @@ replace(lv, '''                    }
     
     lr_trace("context_reset_finalize.complete", "finished");''')
 print('Render thread errors are logged instead of ending the app.')
+
+# ── Depth format the Xbox accepts ───────────────────────────────────────────
+# With Dozen's log in, every game pipeline was refused by D3D12 with
+# E_INVALIDARG although both its shaders passed DXIL validation; the dump
+# showed the depth format, D32_FLOAT_S8X24_UINT, and the overlay pipeline,
+# which has no depth buffer, was the only one that built. Azahar draws through
+# the same Dozen with D24S8. On Xbox D24S8 comes first.
+replace('vita3k/renderer/src/vulkan/renderer.cpp', '''    if (depth_attachment(vk::Format::eD32SfloatS8Uint))
+        s.deep_stencil_use = vk::Format::eD32SfloatS8Uint;
+    else if (depth_attachment(vk::Format::eD24UnormS8Uint))
+        s.deep_stencil_use = vk::Format::eD24UnormS8Uint;
+    else
+        s.deep_stencil_use = vk::Format::eD16Unorm;''', '''#ifdef VITA3K_UWP
+    if (depth_attachment(vk::Format::eD24UnormS8Uint))
+        s.deep_stencil_use = vk::Format::eD24UnormS8Uint;
+    else if (depth_attachment(vk::Format::eD32SfloatS8Uint))
+        s.deep_stencil_use = vk::Format::eD32SfloatS8Uint;
+    else
+        s.deep_stencil_use = vk::Format::eD16Unorm;
+    LOG_INFO("Xbox: depth/stencil format {}", vk::to_string(s.deep_stencil_use));
+#else
+    if (depth_attachment(vk::Format::eD32SfloatS8Uint))
+        s.deep_stencil_use = vk::Format::eD32SfloatS8Uint;
+    else if (depth_attachment(vk::Format::eD24UnormS8Uint))
+        s.deep_stencil_use = vk::Format::eD24UnormS8Uint;
+    else
+        s.deep_stencil_use = vk::Format::eD16Unorm;
+#endif''')
+print('Xbox: D24S8 depth first.')

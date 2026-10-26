@@ -6,7 +6,7 @@ blocked dependent Vita3K libraries. No working emulator DLL was produced.
 
 ## Applied changes
 
-- Claude's gameplay-fix-2.zip: generated SDL projects use C++17, four build
+- gameplay-fix-2.zip: generated SDL projects use C++17, four build
   workers, and the build driver invokes the SDL compatibility pass.
 - Also scope C++17 around SDL's source CMake directory. A regeneration keeps
   the fix; the Vita3K core retains C++23.
