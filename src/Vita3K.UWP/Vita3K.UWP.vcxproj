@@ -141,7 +141,12 @@
   </ItemGroup>
   <ItemGroup><AppxManifest Include="Package.appxmanifest" /></ItemGroup>
   <ItemGroup><Image Include="Assets\*.png" /></ItemGroup>
-  <ItemGroup><Content Include="Assets\Music\*.wav"><DeploymentContent>true</DeploymentContent></Content></ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\Music\afterglow.wav"><DeploymentContent>true</DeploymentContent></Content>
+    <Content Include="Assets\Music\neon-arcade.wav"><DeploymentContent>true</DeploymentContent></Content>
+    <Content Include="Assets\Music\stardust.wav"><DeploymentContent>true</DeploymentContent></Content>
+    <Content Include="Assets\Music\tidal.wav"><DeploymentContent>true</DeploymentContent></Content>
+  </ItemGroup>
   <ItemGroup>
     <Content Include="*.dll" Exclude="vulkan_dzn.dll;dxil.dll;vita3k_libretro.dll;vita_guest_cpu_probe.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

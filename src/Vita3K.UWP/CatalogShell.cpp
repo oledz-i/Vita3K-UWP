@@ -67,6 +67,7 @@ void PutPref(Platform::String^ key, Platform::String^ value) {
 // Defined with the firmware helpers further down.
 std::wstring FirmwareRoot();
 bool HasFiles(const std::wstring& directory);
+std::string NarrowUtf8(const std::wstring& text);
 TimeSpan Millis(double ms) {
     TimeSpan span;
     span.Duration = static_cast<long long>(ms * 10000.0);
@@ -441,6 +442,7 @@ CatalogShell::CatalogShell() {
             if (track_ == 0) return;
             musicPlayer_->Volume = musicVolume_;
             musicPlayer_->Play();
+            libretro_.LogLine("Menu music opened: " + NarrowUtf8(musicPlayer_->Source ? musicPlayer_->Source->AbsoluteUri->Data() : L"custom track"));
             playbackStatus_ = L"Track opened. Starting playback...";
             if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
         });
@@ -456,6 +458,8 @@ CatalogShell::CatalogShell() {
             playbackStatus_ = L"Audio playback failed: " + e->ErrorMessage;
             if (musicStatus_ != nullptr) musicStatus_->Text = playbackStatus_;
             SetStatus(playbackStatus_);
+            libretro_.LogLine("Menu music failed: " + NarrowUtf8(e->ErrorMessage ? e->ErrorMessage->Data() : L"") +
+                " (" + NarrowUtf8(musicPlayer_->Source ? musicPlayer_->Source->AbsoluteUri->Data() : L"no source") + ")");
         });
     for (unsigned cue = 0; cue < vita3k_uwp::kInterfaceCueCount; ++cue) {
         cuePlayers_[cue] = ref new MediaElement();

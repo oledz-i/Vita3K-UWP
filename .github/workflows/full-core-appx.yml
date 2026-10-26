@@ -272,6 +272,10 @@ jobs:
               foreach ($need in (@('vulkan_dzn.dll','dxil.dll') + @(Get-ChildItem artifacts/core-runtime -Filter '*.dll' | ForEach-Object Name))) {
                 if (!($dlls | Where-Object { $_ -ieq $need })) { throw "$need not packaged" }
               }
+              # The menu music plays from ms-appx:///Assets/Music: missing, the menu is silent.
+              foreach ($track in @('afterglow','neon-arcade','stardust','tidal')) {
+                if (!(@($archive.Entries | ForEach-Object FullName) | Where-Object { $_ -ieq "Assets/Music/$track.wav" -or $_ -ieq "Assets\Music\$track.wav" })) { throw "Assets/Music/$track.wav not packaged" }
+              }
               $manifestEntry = $archive.GetEntry('AppxManifest.xml')
               if (!$manifestEntry) { throw 'Packaged manifest is missing' }
               $reader = [IO.StreamReader]::new($manifestEntry.Open())

@@ -958,3 +958,40 @@ replace(lv, '''    (void)vk_state.device.waitForFences(s_present.fence, VK_TRUE,
 #endif
 ''')
 print('Presentation: surface probe in the log, plain copies for 32-bit surfaces.')
+
+# ── The render thread does not take the app down ────────────────────────────
+# A Vulkan error on the libretro render thread (a lost D3D12 device, for one)
+# threw out of the thread, and std::terminate ended the app with nothing in
+# the log. Caught now: logged, the render thread stops, and the frontend's
+# quick menu can still quit the game.
+replace(lv, '''        libretro.render_thread = std::make_unique<std::thread>([]() {
+            EmuEnvState &emuenv = *libretro.emuenv;
+''', '''        libretro.render_thread = std::make_unique<std::thread>([]() {
+            EmuEnvState &emuenv = *libretro.emuenv;
+#ifdef VITA3K_UWP
+            try {
+#endif
+''')
+replace(lv, '''                    }
+                }
+            }
+        });
+    }
+    
+    lr_trace("context_reset_finalize.complete", "finished");''', '''                    }
+                }
+            }
+#ifdef VITA3K_UWP
+            } catch (const vk::DeviceLostError &e) {
+                lr_log(RETRO_LOG_ERROR, "Render thread stopped: the GPU device was lost (%s). The game cannot draw any more; quit it from the menu.\\n", e.what());
+            } catch (const std::exception &e) {
+                lr_log(RETRO_LOG_ERROR, "Render thread stopped by an error: %s\\n", e.what());
+            } catch (...) {
+                lr_log(RETRO_LOG_ERROR, "Render thread stopped by an unknown error\\n");
+            }
+#endif
+        });
+    }
+    
+    lr_trace("context_reset_finalize.complete", "finished");''')
+print('Render thread errors are logged instead of ending the app.')
