@@ -51,6 +51,10 @@ private:
     std::mutex presentErrorMutex_;
     std::wstring presentError_;
     Windows::UI::Xaml::Controls::TextBlock^ statsLabel_ = nullptr;
+    // The quick menu (View + Menu): the game paused under it.
+    Windows::UI::Xaml::Controls::Grid^ quickMenu_ = nullptr;
+    bool quickMenuOpen_ = false;
+    Platform::String^ gameTitle_ = nullptr;
     Windows::UI::Xaml::Controls::Grid^ root_;
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
@@ -137,6 +141,8 @@ private:
     void EnterGameView(Platform::String^ title);
     void ShowLoadFailure(Platform::String^ detail);
     void ExitGameView();
+    void ShowQuickMenu();
+    void HideQuickMenu();
     void GameTick();
     void UpdateGameStats();
     void ChooseLicenseForGame(size_t index);

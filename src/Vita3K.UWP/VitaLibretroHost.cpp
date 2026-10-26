@@ -358,6 +358,8 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
         detail = L"Cannot run: game loading and hardware context initialization must succeed first. " + RecentLog();
         return false;
     }
+    paused_.store(false);
+    lastButtons_ = 0;
     running_.store(true);
     try {
         runThread_ = std::thread([this] {
@@ -367,6 +369,11 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
             try {
                 while (running_.load()) {
                     const auto start = std::chrono::steady_clock::now();
+                    if (paused_.load()) {
+                        // No retro_run, so no vblank: the game waits where it is.
+                        std::this_thread::sleep_until(start + period);
+                        continue;
+                    }
                     CoreFault fault;
                     if (!GuardedRun(runFrame_, &fault)) {
                         Log(3, "%s", DescribeFault("retro_run", fault, module_).c_str());
@@ -387,7 +394,7 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
         detail = L"Could not create the core execution thread.";
         return false;
     }
-    detail = L"Vita3K is running. Press View + Menu together to stop.";
+    detail = L"Vita3K is running. Press View + Menu together for the quick menu.";
     return true;
 }
 void VitaLibretroHost::SetOption(const std::string& key, const std::string& value) {
@@ -531,9 +538,17 @@ void __cdecl VitaLibretroHost::PollInput() {
     active_->inputConnected_ = XInputGetState(0, &active_->inputState_) == ERROR_SUCCESS;
     if (!active_->inputConnected_) active_->inputState_ = {};
     const auto buttons = active_->inputState_.Gamepad.wButtons;
-    if ((buttons & (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START)) ==
-        (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START)) {
-        active_->running_.store(false);
+    constexpr WORD combo = XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START;
+    const bool held = (buttons & combo) == combo;
+    const bool wasHeld = (active_->lastButtons_ & combo) == combo;
+    active_->lastButtons_ = buttons;
+    if (held && !wasHeld) {
+        // Pause and open the quick menu; quitting is one of its choices, so
+        // a stray press no longer throws the game away.
+        active_->paused_.store(true);
+        std::lock_guard<std::mutex> guard(active_->menuMutex_);
+        if (active_->menuSink_) active_->menuSink_();
+        else active_->running_.store(false);
     }
 }
 std::int16_t __cdecl VitaLibretroHost::Input(

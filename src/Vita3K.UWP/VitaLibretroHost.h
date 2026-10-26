@@ -41,6 +41,11 @@ public:
     bool StartRunning(std::wstring& detail);
     void StopRunning();
     bool Running() const { return running_.load(); }
+    // View + Menu pauses the game and asks the frontend for its quick menu
+    // (called on the core thread; the sink dispatches to the UI).
+    void SetMenuSink(std::function<void()> sink) { std::lock_guard<std::mutex> guard(menuMutex_); menuSink_ = std::move(sink); }
+    void SetPaused(bool paused) { paused_.store(paused); }
+    bool Paused() const { return paused_.load(); }
     void SetFrameSink(VitaVulkanBridge::FrameSink sink) { vulkan_.sink = std::move(sink); }
     void UnloadGame();
     // Core options (retro_variable keys). Values set before Initialize are
@@ -120,6 +125,10 @@ private:
 
     std::recursive_mutex lifecycleMutex_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> paused_{false};
+    WORD lastButtons_ = 0;
+    std::mutex menuMutex_;
+    std::function<void()> menuSink_;
     std::atomic<bool> framePresented_{false};
     std::thread runThread_;
     VitaVulkanBridge vulkan_;

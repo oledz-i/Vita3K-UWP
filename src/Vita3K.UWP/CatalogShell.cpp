@@ -493,9 +493,22 @@ CatalogShell::CatalogShell() {
         ref new TypedEventHandler<Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^>(
             [this](Windows::UI::Core::CoreWindow^, Windows::UI::Core::KeyEventArgs^ e) {
                 if (inGame_) {
+                    if (quickMenuOpen_) {
+                        // The menu's buttons take the controller; B (or Escape)
+                        // goes back to the game.
+                        if (e->VirtualKey == Windows::System::VirtualKey::GamepadB ||
+                            e->VirtualKey == Windows::System::VirtualKey::Escape) {
+                            HideQuickMenu();
+                            e->Handled = true;
+                        }
+                        return;
+                    }
                     // The controller belongs to the game. View + Menu (read by
-                    // the host) quits; Escape does on a keyboard.
-                    if (e->VirtualKey == Windows::System::VirtualKey::Escape) libretro_.StopRunning();
+                    // the host) opens the quick menu; Escape does on a keyboard.
+                    if (e->VirtualKey == Windows::System::VirtualKey::Escape && gameStarted_ && !loadFailed_) {
+                        libretro_.SetPaused(true);
+                        ShowQuickMenu();
+                    }
                     e->Handled = true;
                     return;
                 }
@@ -2904,6 +2917,9 @@ void CatalogShell::AttemptBoot(size_t index) {
 
 void CatalogShell::EnterGameView(Platform::String^ title) {
     inGame_ = true;
+    gameTitle_ = title;
+    quickMenu_ = nullptr;
+    quickMenuOpen_ = false;
     gameStarted_ = false;
     loadFailed_ = false;
     loadingHidden_ = false;
@@ -2968,7 +2984,7 @@ void CatalogShell::EnterGameView(Platform::String^ title) {
     loadingStage_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
     loadingStage_->Margin = Thickness(0, 14, 0, 0);
     column->Children->Append(loadingStage_);
-    loadingHint_ = Text(L"Press View + Menu together to quit the game.", 11, false, true);
+    loadingHint_ = Text(L"Press View + Menu together for the quick menu.", 11, false, true);
     loadingHint_->Opacity = 0.7;
     loadingHint_->TextAlignment = TextAlignment::Center;
     loadingHint_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
@@ -3073,6 +3089,9 @@ void CatalogShell::ExitGameView() {
     if (gameTimer_) gameTimer_->Stop();
     inGame_ = false;
     libretro_.SetProgressSink(nullptr);
+    libretro_.SetMenuSink(nullptr);
+    quickMenuOpen_ = false;
+    quickMenu_ = nullptr;
     SetStatus(L"Closing the game...");
     // Unloading joins the core's threads; keep it off the UI thread.
     create_task([this]() {
@@ -3100,6 +3119,111 @@ void CatalogShell::ExitGameView() {
         SetStatus(L"Back in the library.");
         ShowPage(1);
     }, task_continuation_context::use_current());
+}
+
+void CatalogShell::ShowQuickMenu() {
+    if (!inGame_ || !gameLayer_ || quickMenuOpen_) return;
+    if (!gameStarted_ || loadFailed_) {
+        // Still loading, or failed: nothing to pause.
+        libretro_.SetPaused(false);
+        return;
+    }
+    libretro_.SetPaused(true);
+    quickMenuOpen_ = true;
+    PlayCue(1);
+
+    quickMenu_ = ref new Grid();
+    quickMenu_->Background = Solid(Alpha(190, 6, 6, 10));
+    quickMenu_->Opacity = 0;
+
+    auto card = ref new Border();
+    card->Width = 440;
+    card->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
+    card->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+    card->CornerRadius = Windows::UI::Xaml::CornerRadius(22);
+    card->Padding = Thickness(34, 30, 34, 26);
+    card->Background = Gradient(Card(), Glow());
+    card->BorderBrush = Solid(Alpha(34, 255, 255, 255));
+    card->BorderThickness = Thickness(1);
+
+    auto column = Vertical(0);
+    auto kicker = Text(L"PAUSED", 10, true);
+    kicker->CharacterSpacing = 300;
+    kicker->Foreground = Solid(Accent());
+    column->Children->Append(kicker);
+    auto name = Text(gameTitle_ ? gameTitle_ : ref new Platform::String(L"Your game"), 26, false);
+    name->FontWeight = FontWeights::Light;
+    name->TextWrapping = TextWrapping::Wrap;
+    name->MaxLines = 2;
+    name->Margin = Thickness(0, 2, 0, 14);
+    column->Children->Append(name);
+
+    auto add = [this,column](Platform::String^ label, bool highlighted) {
+        auto button = Button(label, highlighted);
+        button->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+        button->HorizontalContentAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+        button->Padding = Thickness(18, 0, 18, 0);
+        button->Height = 50;
+        button->Margin = Thickness(0, 0, 0, 10);
+        column->Children->Append(button);
+        return button;
+    };
+    auto resume = add(L"\u25B6   Resume", true);
+    resume->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { HideQuickMenu(); });
+
+    const bool stretch = Pref(L"display.stretch", L"0")->Equals(L"1");
+    auto screen = add(ref new Platform::String(stretch ? L"\u2B1A   Screen: Stretch" : L"\u2B1A   Screen: Fit"), false);
+    screen->Click += ref new RoutedEventHandler([this,screen](Platform::Object^, RoutedEventArgs^) {
+        const bool next = !Pref(L"display.stretch", L"0")->Equals(L"1");
+        PutPref(L"display.stretch", ref new Platform::String(next ? L"1" : L"0"));
+        screen->Content = ref new Platform::String(next ? L"\u2B1A   Screen: Stretch" : L"\u2B1A   Screen: Fit");
+        if (renderSurface_)
+            renderer_.SetViewport(static_cast<float>(renderSurface_->ActualWidth), static_cast<float>(renderSurface_->ActualHeight), next);
+    });
+
+    auto log = add(L"\u2913   Save log to your drive", false);
+    log->Click += ref new RoutedEventHandler([this,log](Platform::Object^, RoutedEventArgs^) {
+        SaveLogToDrive();
+        log->Content = ref new Platform::String(L"\u2713   Saving the log to your drive");
+    });
+
+    auto quit = add(L"\u2715   Quit game", false);
+    quit->Margin = Thickness(0, 8, 0, 4);
+    quit->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        quickMenuOpen_ = false;
+        ExitGameView();
+    });
+
+    auto hint = Text(L"B  Resume     \u00B7     A  Select", 11, false, true);
+    hint->Opacity = 0.7;
+    hint->Margin = Thickness(2, 14, 0, 0);
+    column->Children->Append(hint);
+    card->Child = column;
+    quickMenu_->Children->Append(card);
+    gameLayer_->Children->Append(quickMenu_);
+
+    auto fade = ref new DoubleAnimation();
+    fade->From = 0.0;
+    fade->To = 1.0;
+    fade->Duration = DurationHelper::FromTimeSpan(Millis(160));
+    auto story = ref new Storyboard();
+    Storyboard::SetTarget(fade, quickMenu_);
+    Storyboard::SetTargetProperty(fade, L"Opacity");
+    story->Children->Append(fade);
+    story->Begin();
+    Reveal(card, 0, 14);
+    resume->Focus(Windows::UI::Xaml::FocusState::Programmatic);
+}
+
+void CatalogShell::HideQuickMenu() {
+    if (!quickMenuOpen_) return;
+    quickMenuOpen_ = false;
+    if (gameLayer_ && quickMenu_) {
+        unsigned index = 0;
+        if (gameLayer_->Children->IndexOf(quickMenu_, &index)) gameLayer_->Children->RemoveAt(index);
+    }
+    quickMenu_ = nullptr;
+    libretro_.SetPaused(false);
 }
 
 // A 32-bit BMP, top-down; the pixels' alpha is dropped.
@@ -3191,9 +3315,16 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
             lastLevel_ = static_cast<unsigned>(total ? sum / total : 0);
             lastLit_ = lit;
             if (shown == 1 || shown == 60 || shown == 600 || shown % 3600 == 0) {
-                char line[160];
-                std::snprintf(line, sizeof(line), "Display: frame %llu, %ux%u, %u of %u samples lit, average level %llu",
-                    shown, width, height, lit, total, total ? sum / total : 0ull);
+                // Memory too: the console ends an app over its limit with no
+                // crash to log, so the climb towards it has to show here.
+                unsigned long long usedMb = 0, limitMb = 0;
+                try {
+                    usedMb = Windows::System::MemoryManager::AppMemoryUsage / (1024ull * 1024ull);
+                    limitMb = Windows::System::MemoryManager::AppMemoryUsageLimit / (1024ull * 1024ull);
+                } catch (...) {}
+                char line[220];
+                std::snprintf(line, sizeof(line), "Display: frame %llu, %ux%u, %u of %u samples lit, average level %llu; app memory %llu of %llu MB",
+                    shown, width, height, lit, total, total ? sum / total : 0ull, usedMb, limitMb);
                 libretro_.LogLine(line);
             }
         }
@@ -3201,6 +3332,10 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
             libretro_.LogLine("Display: " + NarrowUtf8(error));
     });
     auto dispatcher = Dispatcher;
+    libretro_.SetMenuSink([this,dispatcher]() {
+        dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::High,
+            ref new Windows::UI::Core::DispatchedHandler([this]() { ShowQuickMenu(); }));
+    });
     libretro_.SetProgressSink([this,dispatcher](const std::string& stage, int percent) {
         const std::wstring text = WidenUtf8(stage);
         dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
