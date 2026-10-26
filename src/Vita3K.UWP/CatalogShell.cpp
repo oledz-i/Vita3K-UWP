@@ -2755,12 +2755,7 @@ void CatalogShell::GameTick() {
         auto fade = ref new DoubleAnimation();
         fade->From = 1.0;
         fade->To = 0.0;
-        Duration span;
-        TimeSpan length;
-        length.Duration = 3500000; // 350 ms
-        span.TimeSpan = length;
-        span.Type = DurationType::TimeSpan;
-        fade->Duration = span;
+        fade->Duration = DurationHelper::FromTimeSpan(Millis(350));
         auto story = ref new Storyboard();
         Storyboard::SetTarget(fade, loadingLayer_);
         Storyboard::SetTargetProperty(fade, L"Opacity");
