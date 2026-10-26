@@ -32,7 +32,7 @@
 | Graphics | Vulkan through Mesa Dozen to D3D12, from the OnyxEMU work |
 | CPU | Dynarmic with a UWP W^X patch |
 | Firmware | Installs on Xbox (system firmware 3.74 confirmed); packages recognised by content, installed on the spot |
-| Game loading | Folders, VPK and PKG read in place, including from USB drives; first boot attempt stopped in NoNpDrm decryption, now logged |
+| Games | Undertale installs from a USB drive and runs (frames presented); full-screen view with a loading screen |
 | Frontend | Home, Library, Settings, five themes, original music and interface sounds, artwork |
 | Settings | Firmware, storage (data folder on a drive), 23 Vita3K emulation options, appearance |
 | Xbox hardware | Primary target; Series S used for testing |
