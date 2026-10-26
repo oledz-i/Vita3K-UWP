@@ -792,6 +792,15 @@ void CatalogShell::MakeShelf(Platform::String^ heading,
 }
 void CatalogShell::Home() {
     const bool hasGames = !games_.empty();
+    // The hero features the game played last, so Play is one press away.
+    size_t featured = 0;
+    bool playedBefore = false;
+    if (hasGames) {
+        const auto last = Pref(L"lastPlayed", L"");
+        for (size_t i = 0; i < games_.size(); ++i) {
+            if (!last->IsEmpty() && games_[i].name == last) { featured = i; playedBefore = true; break; }
+        }
+    }
     auto hero = ref new Border();
     hero->Height = 262;
     hero->CornerRadius = Windows::UI::Xaml::CornerRadius(18);
@@ -800,9 +809,9 @@ void CatalogShell::Home() {
     hero->BorderThickness = Thickness(1);
     auto heroLayout = ref new Grid();
     heroLayout->Background = Gradient(Card(), Glow());
-    if (hasGames && !ArtworkUri(0)->IsEmpty()) {
+    if (hasGames && !ArtworkUri(featured)->IsEmpty()) {
         auto art = ref new Image();
-        art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(0)));
+        art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(featured)));
         art->Stretch = Stretch::UniformToFill;
         art->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
         art->Width = 520;
@@ -845,33 +854,33 @@ void CatalogShell::Home() {
     copy->MaxWidth = 430;
     copy->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     copy->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-    auto kicker = Text(hasGames ? L"FEATURED" : L"WELCOME TO VITA3K", 10, true);
+    auto kicker = Text(!hasGames ? L"WELCOME TO VITA3K" : (playedBefore ? L"CONTINUE PLAYING" : L"FEATURED"), 10, true);
     kicker->CharacterSpacing = 240;
     kicker->Foreground = Solid(Accent());
     copy->Children->Append(kicker);
-    auto headline = Text(hasGames ? games_[0].name : L"Every game.\nA new world.", 36, false);
+    auto headline = Text(hasGames ? games_[featured].name : L"Every game.\nA new world.", 36, false);
     headline->FontWeight = FontWeights::Light;
     headline->MaxLines = 2;
     headline->Margin = Thickness(0, 8, 0, 10);
     copy->Children->Append(headline);
     auto detail = Text(hasGames
-        ? L"Picked from your library. Open it to see the details or change its artwork."
+        ? L"Press Play to start it, or open its page for details and cover art."
         : L"Your Vita collection, on the big screen. Add a game or a folder to begin.", 13, false, true);
     detail->MaxWidth = 360;
     detail->Margin = Thickness(0, 0, 0, 18);
     copy->Children->Append(detail);
     auto controls = ref new StackPanel();
     controls->Orientation = Orientation::Horizontal;
-    auto primary = Button(hasGames ? L"View game" : L"Add a game", true);
+    auto primary = Button(hasGames ? L"\u25B6  Play" : L"Add a game", true);
     primary->MinWidth = 132;
-    primary->Click += ref new RoutedEventHandler([this,hasGames](Platform::Object^, RoutedEventArgs^) {
+    primary->Click += ref new RoutedEventHandler([this,hasGames,featured](Platform::Object^, RoutedEventArgs^) {
         if (!hasGames) ChooseGameFile();
-        else { selectedGame_ = 0; ShowPage(4); }
+        else AttemptBoot(featured);
     });
     controls->Children->Append(primary);
-    auto secondary = Button(hasGames ? L"Browse library" : L"Choose a folder");
-    secondary->Click += ref new RoutedEventHandler([this,hasGames](Platform::Object^, RoutedEventArgs^) {
-        if (hasGames) ShowPage(1);
+    auto secondary = Button(hasGames ? L"Details" : L"Choose a folder");
+    secondary->Click += ref new RoutedEventHandler([this,hasGames,featured](Platform::Object^, RoutedEventArgs^) {
+        if (hasGames) { selectedGame_ = static_cast<int>(featured); ShowPage(4); }
         else ChooseGameFolder();
     });
     controls->Children->Append(secondary);
@@ -961,8 +970,7 @@ void CatalogShell::Home() {
         promoScroll->Content = promos;
         content_->Children->Append(promoScroll);
     }
-    auto note = Text(L"EARLY ACCESS   \u2022   Game execution is still in development. "
-        L"Library items are not playable yet.", 10, false, true);
+    auto note = Text(L"PRE-ALPHA   \u2022   Some games don't run yet. If one fails, Settings has a button to save the log.", 10, false, true);
     note->CharacterSpacing = 40;
     note->Margin = Thickness(2, 16, 0, 6);
     content_->Children->Append(note);
@@ -1026,7 +1034,7 @@ void CatalogShell::RefreshLibraryItems() {
     if (matches.empty()) {
         libraryResults_->Children->Append(Text(L"No games match that search.", 13, false, true));
     }
-    auto warning = Text(L"Game file detection doesn't mean the title can run. The Vita3K executable core is still being ported.", 10, false, true);
+    auto warning = Text(L"Pre-alpha: compatibility varies from game to game.", 10, false, true);
     warning->Margin = Thickness(2, 10, 0, 0);
     libraryResults_->Children->Append(warning);
 }
@@ -2801,6 +2809,7 @@ void CatalogShell::AttemptBoot(size_t index) {
         SetStatus(L"A game is already starting. Wait for it to finish.");
         return;
     }
+    PutPref(L"lastPlayed", games_[index].name);
     auto folder = games_[index].directory;
     // A folder game also carries its eboot.bin; the whole folder is what runs.
     auto file = folder != nullptr ? nullptr : games_[index].file;

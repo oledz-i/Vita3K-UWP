@@ -463,14 +463,18 @@ static int run_pfs_decryption(std::string &zrif, std::string &src, std::string &
     LineLogBuf log_buf;
     std::streambuf *previous = std::cout.rdbuf(&log_buf);
     int last_decile = -1;
-    PfsProgressCallback progress = [&last_decile](std::uint64_t processed, std::uint64_t total, const std::string &) {
+    const auto started_at = std::chrono::steady_clock::now();
+    PfsProgressCallback progress = [&last_decile, started_at](std::uint64_t processed, std::uint64_t total, const std::string &) {
         if (!total)
             return;
-        // Every 2%: the frontend's loading screen shows it.
+        // Every 2%: the frontend's loading screen shows it. The seconds and
+        // the speed show in the log whether the time goes to the drive or to
+        // the decryption itself.
         const int step = static_cast<int>(std::min<std::uint64_t>(processed * 50 / total, 50));
         if (step != last_decile) {
             last_decile = step;
-            lr_log(RETRO_LOG_INFO, "PFS decryption: %d%%\\n", step * 2);
+            const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_at).count();
+            lr_log(RETRO_LOG_INFO, "PFS decryption: %d%% (%.1f s, %.1f MB/s)\\n", step * 2, secs, secs > 0.01 ? processed / 1048576.0 / secs : 0.0);
         }
     };
     int result = -1;
@@ -510,6 +514,7 @@ static int run_pfs_decryption(std::string &zrif, std::string &src, std::string &
 #endif
     std::cout.flush();
     std::cout.rdbuf(previous);
+    lr_log(RETRO_LOG_INFO, "PFS decryption took %.1f s\\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - started_at).count());
     if (!error.empty())
         lr_log(RETRO_LOG_ERROR, "PFS decryption %s\\n", error.c_str());
     return result;
@@ -518,7 +523,7 @@ static int run_pfs_decryption(std::string &zrif, std::string &src, std::string &
 static bool install_pup_file(''', 1)
 replace(inst, '    int dec_result = execute(app_zRIF, src_str, dst_str, f00d_enc_type, f00d_arg);',
         '    (void)f00d_enc_type;\n    int dec_result = run_pfs_decryption(app_zRIF, src_str, dst_str);')
-replace(inst, '#if defined(_WIN32)\n#include <excpt.h>', '#include <iostream>\n#include <streambuf>\n#include <openssl/evp.h>\n\n#if defined(_WIN32)\n#include <excpt.h>', 1)
+replace(inst, '#if defined(_WIN32)\n#include <excpt.h>', '#include <chrono>\n#include <iostream>\n#include <streambuf>\n#include <openssl/evp.h>\n\n#if defined(_WIN32)\n#include <excpt.h>', 1)
 print('Added firmware exports for the frontend and guarded, logged NoNpDrm decryption.')
 
 # ── Paths without canonicalisation ──────────────────────────────────────────
@@ -717,3 +722,41 @@ print('Log level clamped to info.')
 text = read('vita3k/interface.cpp')
 if '#include <algorithm>' not in text:
     write('vita3k/interface.cpp', '#include <algorithm>\n' + text)
+
+# ── Where does app::init spend its time? ────────────────────────────────────
+# One console run took about 29 s between "VitaFS path" and "app::init
+# succeeded" with nothing logged in between. The three steps that sit there
+# now log how long they took.
+app_init = 'vita3k/app/src/app_init.cpp'
+text = read(app_init)
+if '#include <chrono>' not in text:
+    write(app_init, '#include <chrono>\n' + text)
+replace(app_init, '''    set_current_config(state, state.cfg.run_app_path.has_value() ? *state.cfg.run_app_path : "");
+
+    // Here any path''', '''    const auto init_started = std::chrono::steady_clock::now();
+    const auto init_elapsed = [&init_started]() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - init_started).count(); };
+    set_current_config(state, state.cfg.run_app_path.has_value() ? *state.cfg.run_app_path : "");
+    LOG_INFO("app::init: config read in {:.1f} s", init_elapsed());
+
+    // Here any path''')
+replace(app_init, '''        LOG_ERROR("Failed to initialize file system for the emulator!");
+        return false;
+    }
+''', '''        LOG_ERROR("Failed to initialize file system for the emulator!");
+        return false;
+    }
+    LOG_INFO("app::init: folders created at {:.1f} s", init_elapsed());
+''')
+replace(app_init, '''    state.motion.init();
+
+    return true;
+}
+
+void shutdown_app_runtime''', '''    state.motion.init();
+    LOG_INFO("app::init: motion ready at {:.1f} s", init_elapsed());
+
+    return true;
+}
+
+void shutdown_app_runtime''')
+print('app::init timing added.')
