@@ -3286,6 +3286,10 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
     std::wstring displayError;
     if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
         booting_ = false;
+        if (displayError.find(L"2289696800") != std::wstring::npos || displayError.find(L"2289696773") != std::wstring::npos)
+            // DXGI_ERROR_DRIVER_INTERNAL_ERROR / DEVICE_REMOVED: a game before
+            // this one left the console's GPU driver failed for this app.
+            displayError = L"The graphics driver stopped during an earlier game. Close Vita3K completely (Menu button on its tile, then Quit) and open it again.";
         libretro_.LogLine("Display: the presenter could not start: " + NarrowUtf8(displayError));
         ShowLoadFailure(StringOf(displayError));
         return;
@@ -3351,21 +3355,22 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
             ref new Windows::UI::Core::DispatchedHandler([this,text,percent]() {
                 if (!loadingStage_ || loadFailed_) return;
+                if (!text.empty() && text[0] == L'!') {
+                    // A stage that ends the game (the GPU stopped): say so.
+                    if (loadingLayer_) loadingLayer_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+                    ShowLoadFailure(ref new Platform::String(text.c_str() + 1));
+                    return;
+                }
                 loadingStage_->Text = ref new Platform::String(text.c_str());
                 loadingBar_->IsIndeterminate = percent < 0;
                 if (percent >= 0) loadingBar_->Value = percent;
             }));
     });
     ApplyCoreOptions();
-    {
-        // Dozen keeps this game's compiled D3D12 pipelines here, so a scene
-        // seen before draws without compiling again (as OnyxEMU does).
-        const std::wstring dir = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\pso";
-        CreateDirectoryW(dir.c_str(), nullptr);
-        wchar_t name[32] = {};
-        swprintf_s(name, L"\\%016llx.bin", static_cast<unsigned long long>(std::hash<std::wstring>{}(contentPath->Data())));
-        VitaVulkanBridge::SetPipelineCachePath(dir + name);
-    }
+    // No D3D12 pipeline library: on the Xbox, Dozen's attempt to make one
+    // (ONYX_PSO_CACHE) came back with the GPU device removed, at the game's
+    // first pipeline, and every later game then failed to start.
+    VitaVulkanBridge::SetPipelineCachePath(L"");
     create_task([this,system,content]() {
         std::wstring detail;
         if (!libretro_.Initialize(system, detail)) return std::make_pair(false, detail);

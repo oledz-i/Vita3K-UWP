@@ -905,13 +905,13 @@ replace(lv, '''    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, 
                 .usage = vma::MemoryUsage::eAuto,
                 .requiredFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
             };
-            s_present.probe = vkutil::Buffer(9 * 16);
+            s_present.probe = vkutil::Buffer(9 * 512);
             s_present.probe.init_buffer(vk::BufferUsageFlagBits::eTransferDst, readback_alloc);
         }
         std::array<vk::BufferImageCopy, 9> taps{};
         for (uint32_t i = 0; i < 9; i++) {
             taps[i] = vk::BufferImageCopy{
-                .bufferOffset = i * 16,
+                .bufferOffset = i * 512, // D3D12 copies need 512-byte placement
                 .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
                 .imageOffset = { static_cast<int32_t>(ox + w * (1 + i % 3) / 4), static_cast<int32_t>(oy + h * (1 + i / 3) / 4), 0 },
                 .imageExtent = { 1, 1, 1 },
@@ -949,7 +949,7 @@ replace(lv, '''    (void)vk_state.device.waitForFences(s_present.fence, VK_TRUE,
             const auto *t = static_cast<const uint32_t *>(s_present.probe.mapped_data);
             lr_log(RETRO_LOG_INFO, "Present %llu: surface format %d, %ux%u at %u,%u; texels %08x %08x %08x %08x %08x %08x %08x %08x %08x\\n",
                 static_cast<unsigned long long>(s_present.presents), static_cast<int>(surface_format), w, h, ox, oy,
-                t[0], t[4], t[8], t[12], t[16], t[20], t[24], t[28], t[32]);
+                t[0], t[128], t[256], t[384], t[512], t[640], t[768], t[896], t[1024]);
         } else {
             lr_log(RETRO_LOG_INFO, "Present %llu: %s, %ux%u\\n", static_cast<unsigned long long>(s_present.presents),
                 surface ? "surface (not probed)" : (pixels ? "frame from memory" : "no frame yet"), w, h);

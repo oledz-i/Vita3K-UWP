@@ -101,6 +101,8 @@ void VitaLibretroHost::ObserveLog(const char* message) {
     else if (has("context_reset_vulkan.enter")) progressSink_("Preparing graphics", -1);
     else if (has("context_reset_finalize.before_libretro_run_app")) progressSink_("Starting the game", -1);
     else if (has("First core video frame presented")) progressSink_("Waiting for the game's first picture", -1);
+    else if (has("Render thread stopped"))
+        progressSink_("!The console's graphics driver stopped, so this game can't draw. Close Vita3K completely and open it again, then save the log from Settings.", -1);
 }
 
 void VitaLibretroHost::Shutdown() {
