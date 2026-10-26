@@ -9,6 +9,8 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
+#include <cwctype>
 
 namespace {
 // Originals of the CRT functions, taken from the first import slot redirected.
@@ -136,44 +138,108 @@ errno_t __cdecl Hook_fopen_s(FILE** out, const char* path, const char* mode) {
     return *out ? 0 : errno;
 }
 
-// Win32: the FromApp variants behave like the originals for the app's own
-// folders and also reach granted storage, so they are called directly.
+// Win32. The FromApp variants reach storage the user granted (USB drives),
+// but every call goes through a broker and is far slower: unpacking the
+// firmware took minutes through them against seconds without. Paths in the
+// app's own storage therefore keep the original functions; only paths
+// elsewhere go through FromApp.
+std::vector<std::wstring> g_appRoots; // normalised: backslashes, lower case, trailing backslash
+
+std::wstring NormalisedPath(LPCWSTR path) {
+    std::wstring value = path ? path : L"";
+    if (value.rfind(L"\\\\?\\", 0) == 0) value.erase(0, 4);
+    for (auto& c : value) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
+    return value;
+}
+// True for paths the plain Win32 functions can reach: the app's own folders,
+// and relative paths (which resolve inside them).
+bool InAppStorage(LPCWSTR path) {
+    if (!path || !*path) return true;
+    const std::wstring value = NormalisedPath(path);
+    const bool absolute = value.size() >= 2 && (value[1] == L':' || (value[0] == L'\\' && value[1] == L'\\'));
+    if (!absolute) return true;
+    for (const auto& root : g_appRoots) {
+        if (value.compare(0, root.size(), root) == 0) return true;
+        if (value.size() + 1 == root.size() && root.compare(0, value.size(), value) == 0) return true;
+    }
+    return false;
+}
+
+using CreateFileWFn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
+using FindFirstFileExWFn = HANDLE(WINAPI*)(LPCWSTR, FINDEX_INFO_LEVELS, LPVOID, FINDEX_SEARCH_OPS, LPVOID, DWORD);
+using FindFirstFileWFn = HANDLE(WINAPI*)(LPCWSTR, LPWIN32_FIND_DATAW);
+using GetFileAttributesExWFn = BOOL(WINAPI*)(LPCWSTR, GET_FILEEX_INFO_LEVELS, LPVOID);
+using GetFileAttributesWFn = DWORD(WINAPI*)(LPCWSTR);
+using SetFileAttributesWFn = BOOL(WINAPI*)(LPCWSTR, DWORD);
+using CreateDirectoryWFn = BOOL(WINAPI*)(LPCWSTR, LPSECURITY_ATTRIBUTES);
+using PathFn = BOOL(WINAPI*)(LPCWSTR);
+using MoveFileExWFn = BOOL(WINAPI*)(LPCWSTR, LPCWSTR, DWORD);
+using MoveFileWFn = BOOL(WINAPI*)(LPCWSTR, LPCWSTR);
+using CopyFileWFn = BOOL(WINAPI*)(LPCWSTR, LPCWSTR, BOOL);
+using CopyFile2Fn = HRESULT(WINAPI*)(PCWSTR, PCWSTR, COPYFILE2_EXTENDED_PARAMETERS*);
+CreateFileWFn o_CreateFileW = nullptr;
+CreateFile2Fn o_CreateFile2 = nullptr;
+FindFirstFileExWFn o_FindFirstFileExW = nullptr;
+FindFirstFileWFn o_FindFirstFileW = nullptr;
+GetFileAttributesExWFn o_GetFileAttributesExW = nullptr;
+GetFileAttributesWFn o_GetFileAttributesW = nullptr;
+SetFileAttributesWFn o_SetFileAttributesW = nullptr;
+CreateDirectoryWFn o_CreateDirectoryW = nullptr;
+PathFn o_RemoveDirectoryW = nullptr;
+PathFn o_DeleteFileW = nullptr;
+MoveFileExWFn o_MoveFileExW = nullptr;
+MoveFileWFn o_MoveFileW = nullptr;
+CopyFileWFn o_CopyFileW = nullptr;
+CopyFile2Fn o_CopyFile2 = nullptr;
+
 HANDLE WINAPI Hook_CreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
                                DWORD disposition, DWORD flags, HANDLE templ) {
+    if (o_CreateFileW && InAppStorage(name)) return o_CreateFileW(name, access, share, security, disposition, flags, templ);
     return CreateFileFromAppW(name, access, share, security, disposition, flags, templ);
 }
 HANDLE WINAPI Hook_CreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition,
                                LPCREATEFILE2_EXTENDED_PARAMETERS params) {
+    if (o_CreateFile2 && InAppStorage(name)) return o_CreateFile2(name, access, share, disposition, params);
     return CreateFile2FromAppW(name, access, share, disposition, params);
 }
 HANDLE WINAPI Hook_FindFirstFileExW(LPCWSTR name, FINDEX_INFO_LEVELS level, LPVOID data,
                                     FINDEX_SEARCH_OPS op, LPVOID filter, DWORD flags) {
+    if (o_FindFirstFileExW && InAppStorage(name)) return o_FindFirstFileExW(name, level, data, op, filter, flags);
     return FindFirstFileExFromAppW(name, level, data, op, filter, flags);
 }
 HANDLE WINAPI Hook_FindFirstFileW(LPCWSTR name, LPWIN32_FIND_DATAW data) {
+    if (o_FindFirstFileW && InAppStorage(name)) return o_FindFirstFileW(name, data);
     return FindFirstFileExFromAppW(name, FindExInfoStandard, data, FindExSearchNameMatch, nullptr, 0);
 }
 BOOL WINAPI Hook_GetFileAttributesExW(LPCWSTR name, GET_FILEEX_INFO_LEVELS level, LPVOID info) {
+    if (o_GetFileAttributesExW && InAppStorage(name)) return o_GetFileAttributesExW(name, level, info);
     return GetFileAttributesExFromAppW(name, level, info);
 }
 DWORD WINAPI Hook_GetFileAttributesW(LPCWSTR name) {
+    if (o_GetFileAttributesW && InAppStorage(name)) return o_GetFileAttributesW(name);
     WIN32_FILE_ATTRIBUTE_DATA data{};
     if (!GetFileAttributesExFromAppW(name, GetFileExInfoStandard, &data)) return INVALID_FILE_ATTRIBUTES;
     return data.dwFileAttributes;
 }
 BOOL WINAPI Hook_SetFileAttributesW(LPCWSTR name, DWORD attributes) {
+    if (o_SetFileAttributesW && InAppStorage(name)) return o_SetFileAttributesW(name, attributes);
     return SetFileAttributesFromAppW(name, attributes);
 }
 BOOL WINAPI Hook_CreateDirectoryW(LPCWSTR name, LPSECURITY_ATTRIBUTES security) {
+    if (o_CreateDirectoryW && InAppStorage(name)) return o_CreateDirectoryW(name, security);
     return CreateDirectoryFromAppW(name, security);
 }
 BOOL WINAPI Hook_RemoveDirectoryW(LPCWSTR name) {
+    if (o_RemoveDirectoryW && InAppStorage(name)) return o_RemoveDirectoryW(name);
     return RemoveDirectoryFromAppW(name);
 }
 BOOL WINAPI Hook_DeleteFileW(LPCWSTR name) {
+    if (o_DeleteFileW && InAppStorage(name)) return o_DeleteFileW(name);
     return DeleteFileFromAppW(name);
 }
 BOOL WINAPI Hook_MoveFileExW(LPCWSTR from, LPCWSTR to, DWORD flags) {
+    if (o_MoveFileExW && InAppStorage(from) && InAppStorage(to)) return o_MoveFileExW(from, to, flags);
     if (MoveFileFromAppW(from, to)) return TRUE;
     DWORD error = GetLastError();
     if ((flags & MOVEFILE_REPLACE_EXISTING) && (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)) {
@@ -193,12 +259,15 @@ BOOL WINAPI Hook_MoveFileExW(LPCWSTR from, LPCWSTR to, DWORD flags) {
     return FALSE;
 }
 BOOL WINAPI Hook_MoveFileW(LPCWSTR from, LPCWSTR to) {
+    if (o_MoveFileW && InAppStorage(from) && InAppStorage(to)) return o_MoveFileW(from, to);
     return MoveFileFromAppW(from, to);
 }
 BOOL WINAPI Hook_CopyFileW(LPCWSTR from, LPCWSTR to, BOOL failIfExists) {
+    if (o_CopyFileW && InAppStorage(from) && InAppStorage(to)) return o_CopyFileW(from, to, failIfExists);
     return CopyFileFromAppW(from, to, failIfExists);
 }
 HRESULT WINAPI Hook_CopyFile2(PCWSTR from, PCWSTR to, COPYFILE2_EXTENDED_PARAMETERS* params) {
+    if (o_CopyFile2 && InAppStorage(from) && InAppStorage(to)) return o_CopyFile2(from, to, params);
     const BOOL failIfExists = params && (params->dwCopyFlags & COPY_FILE_FAIL_IF_EXISTS);
     return CopyFileFromAppW(from, to, failIfExists) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
 }
@@ -209,20 +278,20 @@ struct Redirect {
     void** original; // CRT functions keep their original for the first try
 };
 const Redirect kRedirects[] = {
-    { "CreateFileW", reinterpret_cast<void*>(&Hook_CreateFileW), nullptr },
-    { "CreateFile2", reinterpret_cast<void*>(&Hook_CreateFile2), nullptr },
-    { "FindFirstFileExW", reinterpret_cast<void*>(&Hook_FindFirstFileExW), nullptr },
-    { "FindFirstFileW", reinterpret_cast<void*>(&Hook_FindFirstFileW), nullptr },
-    { "GetFileAttributesExW", reinterpret_cast<void*>(&Hook_GetFileAttributesExW), nullptr },
-    { "GetFileAttributesW", reinterpret_cast<void*>(&Hook_GetFileAttributesW), nullptr },
-    { "SetFileAttributesW", reinterpret_cast<void*>(&Hook_SetFileAttributesW), nullptr },
-    { "CreateDirectoryW", reinterpret_cast<void*>(&Hook_CreateDirectoryW), nullptr },
-    { "RemoveDirectoryW", reinterpret_cast<void*>(&Hook_RemoveDirectoryW), nullptr },
-    { "DeleteFileW", reinterpret_cast<void*>(&Hook_DeleteFileW), nullptr },
-    { "MoveFileExW", reinterpret_cast<void*>(&Hook_MoveFileExW), nullptr },
-    { "MoveFileW", reinterpret_cast<void*>(&Hook_MoveFileW), nullptr },
-    { "CopyFileW", reinterpret_cast<void*>(&Hook_CopyFileW), nullptr },
-    { "CopyFile2", reinterpret_cast<void*>(&Hook_CopyFile2), nullptr },
+    { "CreateFileW", reinterpret_cast<void*>(&Hook_CreateFileW), reinterpret_cast<void**>(&o_CreateFileW) },
+    { "CreateFile2", reinterpret_cast<void*>(&Hook_CreateFile2), reinterpret_cast<void**>(&o_CreateFile2) },
+    { "FindFirstFileExW", reinterpret_cast<void*>(&Hook_FindFirstFileExW), reinterpret_cast<void**>(&o_FindFirstFileExW) },
+    { "FindFirstFileW", reinterpret_cast<void*>(&Hook_FindFirstFileW), reinterpret_cast<void**>(&o_FindFirstFileW) },
+    { "GetFileAttributesExW", reinterpret_cast<void*>(&Hook_GetFileAttributesExW), reinterpret_cast<void**>(&o_GetFileAttributesExW) },
+    { "GetFileAttributesW", reinterpret_cast<void*>(&Hook_GetFileAttributesW), reinterpret_cast<void**>(&o_GetFileAttributesW) },
+    { "SetFileAttributesW", reinterpret_cast<void*>(&Hook_SetFileAttributesW), reinterpret_cast<void**>(&o_SetFileAttributesW) },
+    { "CreateDirectoryW", reinterpret_cast<void*>(&Hook_CreateDirectoryW), reinterpret_cast<void**>(&o_CreateDirectoryW) },
+    { "RemoveDirectoryW", reinterpret_cast<void*>(&Hook_RemoveDirectoryW), reinterpret_cast<void**>(&o_RemoveDirectoryW) },
+    { "DeleteFileW", reinterpret_cast<void*>(&Hook_DeleteFileW), reinterpret_cast<void**>(&o_DeleteFileW) },
+    { "MoveFileExW", reinterpret_cast<void*>(&Hook_MoveFileExW), reinterpret_cast<void**>(&o_MoveFileExW) },
+    { "MoveFileW", reinterpret_cast<void*>(&Hook_MoveFileW), reinterpret_cast<void**>(&o_MoveFileW) },
+    { "CopyFileW", reinterpret_cast<void*>(&Hook_CopyFileW), reinterpret_cast<void**>(&o_CopyFileW) },
+    { "CopyFile2", reinterpret_cast<void*>(&Hook_CopyFile2), reinterpret_cast<void**>(&o_CopyFile2) },
     { "_wfopen", reinterpret_cast<void*>(&Hook_wfopen), reinterpret_cast<void**>(&g_wfopen) },
     { "_wfopen_s", reinterpret_cast<void*>(&Hook_wfopen_s), reinterpret_cast<void**>(&g_wfopen_s) },
     { "_wfsopen", reinterpret_cast<void*>(&Hook_wfsopen), reinterpret_cast<void**>(&g_wfsopen) },
@@ -258,6 +327,16 @@ const void* ResolvedImportFrom(HMODULE module, const char* prefix) {
 }
 
 namespace vita3k_uwp {
+void SetAppStorageRoots(const std::vector<std::wstring>& roots) {
+    std::lock_guard<std::mutex> guard(g_mutex);
+    g_appRoots.clear();
+    for (const auto& root : roots) {
+        std::wstring value = NormalisedPath(root.c_str());
+        if (value.empty()) continue;
+        if (value.back() != L'\\') value.push_back(L'\\');
+        g_appRoots.push_back(value);
+    }
+}
 HMODULE ModuleFromAddress(const void* address) {
     MEMORY_BASIC_INFORMATION info{};
     if (!address || VirtualQuery(address, &info, sizeof(info)) == 0) return nullptr;

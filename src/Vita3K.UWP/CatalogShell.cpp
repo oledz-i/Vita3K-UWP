@@ -355,6 +355,17 @@ CatalogShell::CatalogShell() {
     catch (...) { uiSoundVolume_ = 0.40; }
     uiSoundVolume_ = std::max(0.0, std::min(1.0, uiSoundVolume_));
 
+    // Paths in the app's own storage keep the fast plain file functions;
+    // everything else (USB drives) goes through the FromApp ones.
+    {
+        std::wstring local = ApplicationData::Current->LocalFolder->Path->Data();
+        const auto slash = local.find_last_of(L'\\');
+        std::vector<std::wstring> roots;
+        roots.push_back(slash == std::wstring::npos ? local : local.substr(0, slash));
+        try { roots.push_back(Windows::ApplicationModel::Package::Current->InstalledLocation->Path->Data()); }
+        catch (Platform::Exception^) {}
+        vita3k_uwp::SetAppStorageRoots(roots);
+    }
     // The app's own file calls (std::filesystem in Settings) reach USB drives too.
     vita3k_uwp::RedirectCoreFileAccess(vita3k_uwp::ModuleFromAddress(reinterpret_cast<const void*>(&Pref)));
     libretro_.SetLogPath(std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-runtime.log");

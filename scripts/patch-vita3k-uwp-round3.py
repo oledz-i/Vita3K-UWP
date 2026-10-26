@@ -519,3 +519,104 @@ replace(inst, '    int dec_result = execute(app_zRIF, src_str, dst_str, f00d_enc
         '    (void)f00d_enc_type;\n    int dec_result = run_pfs_decryption(app_zRIF, src_str, dst_str);')
 replace(inst, '#if defined(_WIN32)\n#include <excpt.h>', '#include <iostream>\n#include <streambuf>\n#include <openssl/evp.h>\n\n#if defined(_WIN32)\n#include <excpt.h>', 1)
 print('Added firmware exports for the frontend and guarded, logged NoNpDrm decryption.')
+
+# ── Paths without canonicalisation ──────────────────────────────────────────
+# The third console run got through firmware and the game copy, then
+# psvpfstools stopped with "weakly_canonical: Access is denied" on the
+# installed game's sce_sys. std::filesystem::relative() canonicalises both
+# paths, which walks the parent folders of the app's storage; a UWP app may
+# not open those. Every path compared here is built from the same root, so
+# the lexical form gives the same answer without touching the disk.
+pfs_utils = 'external/psvpfstools/psvpfsparser/Utils.cpp'
+replace(pfs_utils, '''   psvpfs::path dest_path = dest_root / psvpfs::relative(source_path, source_root);''',
+'''   psvpfs::path rel = psvpfs::path(source_path.generic_string()).lexically_normal().lexically_relative(
+      psvpfs::path(source_root.generic_string()).lexically_normal());
+   if (rel.empty())
+      rel = psvpfs::relative(source_path, source_root);
+   psvpfs::path dest_path = dest_root / rel;''')
+replace('vita3k/util/src/fs_utils.cpp', '            const auto relative_path = fs::relative(src.path(), src_path);',
+        '            const auto relative_path = src.path().lexically_normal().lexically_relative(src_path.lexically_normal());')
+replace('vita3k/packages/src/sce_utils.cpp', '            const auto output_file_path = output_path / fs::relative(entry.path(), input_path);',
+        '            const auto output_file_path = output_path / entry.path().lexically_normal().lexically_relative(input_path.lexically_normal());')
+replace('vita3k/packages/src/sce_utils.cpp', '            const auto out_rel = fs::relative(output_file_path, cache_path);',
+        '            const auto out_rel = output_file_path.lexically_normal().lexically_relative(cache_path.lexically_normal());')
+replace('vita3k/libretro/libretro_lazy_pkg.cpp', '            e.name = fs::relative(it->path(), dir, ec).generic_string();',
+        '            e.name = it->path().lexically_normal().lexically_relative(dir.lexically_normal()).generic_string();')
+print('Replaced canonicalising path helpers with lexical ones.')
+
+# ── Encrypted game folders: decrypt straight from where they are ───────────
+# A NoNpDrm folder was first copied whole into ux0/app, then decrypted into
+# a second folder that replaced the copy: twice the game's size on a console
+# whose internal partition can be 5 GB, and two full passes over the data.
+# The decrypted output replaces the copy entirely, so for a game (category gd)
+# decrypt from the source folder itself; updates and DLC keep the old path.
+replace(inst, '''static bool decrypt_nonpdrm_app(const fs::path &install_path, const fs::path &pref_path, const GameInstallResult &result,
+    std::vector<uint8_t> &work_bin_data, std::string &app_zRIF, bool keep_license = true) {
+    const auto work_bin = install_path / "sce_sys" / "package" / "work.bin";''',
+'''static bool decrypt_nonpdrm_app(const fs::path &install_path, const fs::path &pref_path, const GameInstallResult &result,
+    std::vector<uint8_t> &work_bin_data, std::string &app_zRIF, bool keep_license = true, const fs::path &source = {}) {
+    // The encrypted files come from source when given (a game folder read
+    // where it lies), else from the copy at install_path.
+    const fs::path &encrypted = source.empty() ? install_path : source;
+    const auto work_bin = encrypted / "sce_sys" / "package" / "work.bin";''')
+replace(inst, '''    std::string src_str = install_path.generic_string();
+    std::string dst_str = install_decrypt_folder(pref_path, install_path).generic_string();''',
+'''    std::string src_str = encrypted.generic_string();
+    std::string dst_str = install_decrypt_folder(pref_path, install_path).generic_string();''')
+replace(inst, '''    lr_log(RETRO_LOG_INFO, "PFS decryption succeeded, replacing encrypted files...\\n");
+    try {
+        fs::remove_all(install_path);
+        fs::rename(fs::path(dst_str), install_path);''', '''    lr_log(RETRO_LOG_INFO, "PFS decryption succeeded, replacing encrypted files...\\n");
+    try {
+        fs::remove_all(install_path);
+        fs::create_directories(install_path.parent_path());
+        fs::rename(fs::path(dst_str), install_path);''')
+replace(inst, '''    // An encrypted one twice over for a while: decrypting writes a second copy
+    if (!has_room(pref_path, folder_size(content_dir) * (fs::is_directory(content_dir / "sce_pfs") ? 2 : 1)))
+        return result;
+    try {
+        fs::create_directories(install_path);
+        fs::copy(content_dir, install_path, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        lr_log(RETRO_LOG_INFO, "App folder copy completed.\\n");
+    } catch (const fs::filesystem_error &e) {
+        lr_log(RETRO_LOG_ERROR, "Failed to copy game folder: %s\\n", e.what());
+        lr_msg("Failed to copy the game's directory!", 300);
+        return result;
+    }
+
+    // A NoNpDrm copy is decrypted in place: a game with its own license, kept; an update
+    // or DLC with its own or the game's. An update stays in ux0/patch and is laid over the
+    // game when it starts, as one from a PKG or VPK/ZIP (sco8487), never merged into it.
+    if (fs::is_directory(install_path / "sce_pfs")) {''', '''    // An encrypted game is decrypted straight from its folder into ux0, so it
+    // needs its size once; an encrypted update or DLC is still copied first
+    // and so needs it twice for a while.
+    const bool encrypted_source = fs::is_directory(content_dir / "sce_pfs");
+    const bool decrypt_from_source = encrypted_source && app_info.app_category.find("gd") != std::string::npos
+        && fs::exists(content_dir / "sce_sys" / "package" / "work.bin");
+    if (!has_room(pref_path, folder_size(content_dir) * (encrypted_source && !decrypt_from_source ? 2 : 1)))
+        return result;
+    if (decrypt_from_source) {
+        lr_log(RETRO_LOG_INFO, "Encrypted game folder: decrypting it straight into ux0, without copying it first\\n");
+        std::vector<uint8_t> work_bin_data;
+        std::string app_zRIF;
+        if (!decrypt_nonpdrm_app(install_path, pref_path, result, work_bin_data, app_zRIF, true, content_dir)) {
+            fs::remove_all(install_path);
+            return result;
+        }
+    } else {
+    try {
+        fs::create_directories(install_path);
+        fs::copy(content_dir, install_path, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        lr_log(RETRO_LOG_INFO, "App folder copy completed.\\n");
+    } catch (const fs::filesystem_error &e) {
+        lr_log(RETRO_LOG_ERROR, "Failed to copy game folder: %s\\n", e.what());
+        lr_msg("Failed to copy the game's directory!", 300);
+        return result;
+    }
+    }
+
+    // A NoNpDrm copy is decrypted in place: a game with its own license, kept; an update
+    // or DLC with its own or the game's. An update stays in ux0/patch and is laid over the
+    // game when it starts, as one from a PKG or VPK/ZIP (sco8487), never merged into it.
+    if (!decrypt_from_source && fs::is_directory(install_path / "sce_pfs")) {''')
+print('Encrypted game folders are decrypted from where they are.')
