@@ -320,6 +320,10 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
         return false;
     }
     std::string vulkanError;
+    VitaVulkanBridge::SetDriverLog([](int level, const char* message) {
+        // Mesa: 0 error, 1 warning, 2 info, 3 debug
+        Log(level == 0 ? 3 : level == 1 ? 2 : 1, "[driver] %s\n", message);
+    });
     if (!vulkan_.Initialize(vulkanError)) {
         Log(3, "Vulkan initialization failed: %s\n", vulkanError.c_str());
         detail = L"Vulkan initialization failed: " + FromUtf8(vulkanError.c_str());

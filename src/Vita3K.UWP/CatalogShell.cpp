@@ -3347,6 +3347,15 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
             }));
     });
     ApplyCoreOptions();
+    {
+        // Dozen keeps this game's compiled D3D12 pipelines here, so a scene
+        // seen before draws without compiling again (as OnyxEMU does).
+        const std::wstring dir = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\pso";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        wchar_t name[32] = {};
+        swprintf_s(name, L"\\%016llx.bin", static_cast<unsigned long long>(std::hash<std::wstring>{}(contentPath->Data())));
+        VitaVulkanBridge::SetPipelineCachePath(dir + name);
+    }
     create_task([this,system,content]() {
         std::wstring detail;
         if (!libretro_.Initialize(system, detail)) return std::make_pair(false, detail);

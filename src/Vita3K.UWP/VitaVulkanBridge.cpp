@@ -2,8 +2,29 @@
 #include "VitaVulkanBridge.h"
 #include <stdexcept>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
+std::mutex g_driverLogMutex;
+std::function<void(int, const char*)> g_driverLog;
+unsigned g_driverLines = 0;
+void __cdecl DriverLogHook(int level, const char* message) {
+    std::lock_guard<std::mutex> guard(g_driverLogMutex);
+    // A driver failing on every draw would otherwise fill the log.
+    if (!g_driverLog || !message || ++g_driverLines > 4000) return;
+    g_driverLog(level, message);
+}
+using SetLogHook = void(__cdecl*)(void (*)(int, const char*));
+
+// Dozen has its own C runtime: only the Win32 environment block is shared
+// with it, and it reads these once, when it loads and makes its device.
+void SetDriverVariable(const wchar_t* name, const std::wstring& value) {
+    SetEnvironmentVariableW(name, value.empty() ? nullptr : value.c_str());
+    std::string narrowName, narrowValue;
+    for (const wchar_t* c = name; *c; ++c) narrowName.push_back(static_cast<char>(*c));
+    for (wchar_t c : value) narrowValue.push_back(static_cast<char>(c));
+    _putenv_s(narrowName.c_str(), narrowValue.c_str());
+}
 void Check(VkResult result, const char* stage) {
     if (result != VK_SUCCESS) throw std::runtime_error(std::string(stage) + ": VkResult " + std::to_string(result));
 }
@@ -19,6 +40,14 @@ template<class T> T VitaVulkanBridge::DeviceProc(const char* name) const {
     return fn;
 }
 VitaVulkanBridge::~VitaVulkanBridge() { Shutdown(); }
+void VitaVulkanBridge::SetDriverLog(std::function<void(int, const char*)> log) {
+    std::lock_guard<std::mutex> guard(g_driverLogMutex);
+    g_driverLog = std::move(log);
+    g_driverLines = 0;
+}
+void VitaVulkanBridge::SetPipelineCachePath(const std::wstring& path) {
+    SetDriverVariable(L"ONYX_PSO_CACHE", path);
+}
 bool VitaVulkanBridge::Accept(retro_hw_render_callback* cb) {
     if (!cb || cb->context_type != RETRO_HW_CONTEXT_VULKAN) return false;
     callback_ = *cb;
@@ -33,8 +62,18 @@ bool VitaVulkanBridge::Initialize(std::string& error) {
     if (device_) return true;
     try {
         if (!negotiation_ || !callback_.context_reset) throw std::runtime_error("Core did not supply Vulkan context negotiation");
+        // The Xbox's DXIL validator refuses Dozen's shaders for many games;
+        // unsigned, every pipeline built from them is refused by D3D12 and
+        // Dozen skips its draws (Onyx patches 0008, 0016, 0018): the game
+        // runs behind a black screen. This makes Dozen sign them itself, as
+        // OnyxEMU does. Set before the DLL loads; it reads it once.
+        SetDriverVariable(L"ONYX_DXIL_SELFSIGN", L"1");
         icd_ = LoadPackagedLibrary(L"vulkan_dzn.dll", 0);
         if (!icd_) throw std::runtime_error("Packaged Dozen ICD could not load: " + std::to_string(GetLastError()));
+        if (auto setHook = reinterpret_cast<SetLogHook>(GetProcAddress(icd_, "onyx_set_log_hook")))
+            setHook(&DriverLogHook); // Dozen answers with a "log hook installed" line
+        else
+            DriverLogHook(1, "Dozen has no onyx_set_log_hook export: its errors are not logged");
         using NegotiateIcd = VkResult(VKAPI_PTR*)(uint32_t*);
         auto negotiate = reinterpret_cast<NegotiateIcd>(GetProcAddress(icd_, "vk_icdNegotiateLoaderICDInterfaceVersion"));
         if (negotiate) { uint32_t version = 5; Check(negotiate(&version), "ICD negotiation"); }
@@ -230,6 +269,10 @@ void VitaVulkanBridge::Shutdown() {
     } catch (...) {}
     device_ = VK_NULL_HANDLE; instance_ = VK_NULL_HANDLE; queue_ = VK_NULL_HANDLE; haveImage_ = false;
     negotiation_ = nullptr; callback_ = {}; waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE;
-    if (icd_) FreeLibrary(icd_);
+    if (icd_) {
+        // Unhook first: the driver must not call into the log while it unloads.
+        if (auto setHook = reinterpret_cast<SetLogHook>(GetProcAddress(icd_, "onyx_set_log_hook"))) setHook(nullptr);
+        FreeLibrary(icd_);
+    }
     icd_ = nullptr; ipa_ = nullptr; dpa_ = nullptr;
 }

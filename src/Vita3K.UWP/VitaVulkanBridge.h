@@ -22,6 +22,12 @@ public:
     const std::string& ReadbackInfo() const { return readbackInfo_; }
     const retro_hw_render_interface_vulkan* Interface() const { return device_ ? &interface_ : nullptr; }
     FrameSink sink;
+    // Dozen's own messages (refused pipelines, D3D12 failures), through the
+    // onyx_set_log_hook export of the Onyx Mesa build. Set before Initialize.
+    static void SetDriverLog(std::function<void(int, const char*)> log);
+    // Where Dozen keeps compiled D3D12 pipelines for this game (empty: none).
+    // Set before Initialize; Dozen reads it when the device is made.
+    static void SetPipelineCachePath(const std::wstring& path);
 private:
     template<class T> T InstanceProc(const char* name) const;
     template<class T> T DeviceProc(const char* name) const;
