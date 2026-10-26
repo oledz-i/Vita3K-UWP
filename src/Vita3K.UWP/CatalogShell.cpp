@@ -533,6 +533,12 @@ CatalogShell::CatalogShell() {
                     ShowPage(page_ == 4 ? 1 : 0);
                 }
             });
+    // B on Xbox also raises a system back request; one left unhandled closes
+    // the app (B at Home, or B in a game, dropped you to the dashboard). The
+    // key handler above does all the going back, so every request is taken.
+    Windows::UI::Core::SystemNavigationManager::GetForCurrentView()->BackRequested +=
+        ref new EventHandler<Windows::UI::Core::BackRequestedEventArgs^>(
+            [](Platform::Object^, Windows::UI::Core::BackRequestedEventArgs^ e) { e->Handled = true; });
     BuildNavigation();
     Render();
     RestorePaths();
