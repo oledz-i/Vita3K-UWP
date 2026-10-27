@@ -998,3 +998,42 @@ if '#include <algorithm>' not in text:
     assert '#include <algorithm>' in text, 'scene.cpp include anchor'
 write(scene, text)
 print('Texture descriptor pools stay within Dozen\'s 1024-sampler heap.')
+
+# ── Images without a format ─────────────────────────────────────────────────
+# A Vita format with no Vulkan equivalent reached init_image as
+# VK_FORMAT_UNDEFINED (Gravity Rush, a 256x128 cast texture). Desktop drivers
+# let it slide; Dozen has no size for it, the allocation fails and the render
+# thread stops. Such an image is made RGBA8 instead, and logged once.
+replace('vita3k/vkutil/src/objects.cpp', '''void Image::init_image(vk::ImageUsageFlags usage, vk::ComponentMapping mapping, const vk::ImageCreateFlags image_create_flags, const void *pNext) {
+    vk::ImageCreateInfo image_info{''', '''void Image::init_image(vk::ImageUsageFlags usage, vk::ComponentMapping mapping, const vk::ImageCreateFlags image_create_flags, const void *pNext) {
+    if (format == vk::Format::eUndefined) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            LOG_WARN("Image {}x{} has no Vulkan format; made RGBA8 instead", width, height);
+        }
+        format = vk::Format::eR8G8B8A8Unorm;
+    }
+    vk::ImageCreateInfo image_info{''')
+print('Format-less images are created as RGBA8.')
+
+# ── OpenGL objects judged by a stale error ──────────────────────────────────
+# GLObjectArray::init reported failure whenever glGetError held an error left
+# by any earlier call; the surface cache then dropped a render target and the
+# game died (Danganronpa on OpenGL, at its first scene). Old errors are
+# cleared first, and the objects count as made when they have names.
+replace('vita3k/glutil/include/glutil/object_array.h', '''        this->deleter = deleter;
+        generator(static_cast<GLsizei>(names.size()), &names[0]);
+
+        return glGetError() == GL_NO_ERROR;''', '''        this->deleter = deleter;
+        for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
+        }
+        generator(static_cast<GLsizei>(names.size()), &names[0]);
+
+        if (glGetError() != GL_NO_ERROR)
+            return false;
+        for (const GLuint name : names)
+            if (name == 0)
+                return false;
+        return true;''')
+print('GL object creation ignores errors left by earlier calls.')
