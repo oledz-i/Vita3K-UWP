@@ -8,6 +8,7 @@ on:
     paths:
       - scripts/dozen-patches/**
       - scripts/build-onyx-dozen.ps1
+      - scripts/build-onyx-gl.ps1
       - .github/workflows/dozen-source.yml
   workflow_dispatch:
 permissions:
@@ -32,6 +33,9 @@ jobs:
       - name: Build Dozen (UWP)
         shell: pwsh
         run: ./scripts/build-onyx-dozen.ps1
+      - name: Build OpenGL on D3D12 (onyx_gl, UWP)
+        shell: pwsh
+        run: ./scripts/build-onyx-gl.ps1
       - name: Show build errors on the run page
         if: failure()
         shell: pwsh

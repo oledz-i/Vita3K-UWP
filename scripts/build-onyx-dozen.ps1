@@ -56,15 +56,6 @@ try {
     & (Join-Path $work 'tools/build-dozen.ps1') *>&1 |
         Tee-Object -FilePath (Join-Path $out 'build.log')
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Onyx build-dozen failed' }
-    # OpenGL on D3D12 (onyx_gl.dll) from the same Mesa tree: Onyx patches
-    # 0029-0034 and its build-mesa-gl.ps1. Optional: Dozen still ships if it fails.
-    try {
-        & (Join-Path $work 'tools/build-mesa-gl.ps1') *>&1 |
-            Tee-Object -FilePath (Join-Path $out 'build-gl.log')
-        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
-    } catch {
-        Write-Host "::warning title=OpenGL driver::onyx_gl.dll was not built: $_"
-    }
 } finally {
     Pop-Location
 }
@@ -82,11 +73,6 @@ if ($imports -match '(?i)(^|\W)VCRUNTIME140(_1)?\.dll(\W|$)' -and
     throw 'Dozen links desktop VCRUNTIME instead of UWP Store runtime'
 }
 Copy-Item -LiteralPath $dzn -Destination (Join-Path $out 'vulkan_dzn.dll') -Force
-$gl = Join-Path $work 'deps/bin/onyx_gl.dll'
-if (Test-Path $gl) {
-    Copy-Item -LiteralPath $gl -Destination (Join-Path $out 'onyx_gl.dll') -Force
-    $glMap = Join-Path $work 'deps/bin/onyx_gl.map'
-    if (Test-Path $glMap) { Copy-Item -LiteralPath $glMap -Destination (Join-Path $out 'onyx_gl.map') -Force }
 }
 Copy-Item -LiteralPath $dxil -Destination (Join-Path $out 'dxil.dll') -Force
 Get-FileHash $dzn,$dxil -Algorithm SHA256 |
