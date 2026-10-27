@@ -4,6 +4,8 @@
 #include "GameFormats.h"
 #include "VitaLibretroHost.h"
 #include "LivingBackdrop.h"
+#include "GameInfo.h"
+#include <set>
 #include <collection.h>
 #include <ppltasks.h>
 #include <string>
@@ -101,6 +103,12 @@ private:
     Windows::UI::Xaml::Controls::TextBox^ searchBox_;
     Windows::UI::Xaml::Controls::StackPanel^ libraryResults_;
     void RefreshLibraryItems();
+    // A game's page: what the internet knows about it (GameInfo.h).
+    void AppendGameInfo(size_t index);
+    void FetchGameInfoFor(size_t index, bool force);
+    std::wstring GameInfoKey(size_t index) const;
+    std::wstring GameTitleId(size_t index) const;
+    std::set<std::wstring> infoFetching_;
     D3D12Host renderer_;
     VitaLibretroHost libretro_;
     int page_ = 0;

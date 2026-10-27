@@ -9,6 +9,7 @@
 #include "CoreOptions.h"
 #include "UwpFileRedirect.h"
 #include "CrashLog.h"
+#include "GameInfo.h"
 #include <fileapifromapp.h>
 #include <share.h>
 #include <cstdio>
@@ -1240,10 +1241,162 @@ void CatalogShell::GameDetails() {
     layout->Children->Append(right);
     feature->Child = layout;
     content_->Children->Append(feature);
+    AppendGameInfo(index);
     // The controller lands on Play.
     play->Loaded += ref new RoutedEventHandler([play](Platform::Object^, RoutedEventArgs^) {
         play->Focus(Windows::UI::Xaml::FocusState::Programmatic);
     });
+}
+std::wstring CatalogShell::GameTitleId(size_t index) const {
+    const auto& game = games_[index];
+    std::wstring id;
+    if (game.directory) id = vita3k_uwp::FindTitleId(game.directory->Name->Data());
+    if (id.empty() && game.file) id = vita3k_uwp::FindTitleId(game.file->Name->Data());
+    if (id.empty() && game.key) id = vita3k_uwp::FindTitleId(game.key->Data());
+    return id;
+}
+std::wstring CatalogShell::GameInfoKey(size_t index) const {
+    const auto id = GameTitleId(index);
+    if (!id.empty()) return id;
+    std::wstring name = games_[index].name ? games_[index].name->Data() : L"";
+    std::wstring key;
+    for (wchar_t c : name)
+        if (iswalnum(c)) key.push_back(static_cast<wchar_t>(towlower(c)));
+    return key.empty() ? L"unknown" : key.substr(0, 60);
+}
+void CatalogShell::FetchGameInfoFor(size_t index, bool force) {
+    if (index >= games_.size()) return;
+    const auto key = GameInfoKey(index);
+    if (infoFetching_.count(key)) return;
+    vita3k_uwp::GameInfo cached;
+    bool stale = false;
+    if (!force && vita3k_uwp::LoadGameInfo(key, cached, stale) && !stale) return;
+    infoFetching_.insert(key);
+    const std::wstring title = games_[index].name ? games_[index].name->Data() : L"";
+    const auto titleId = GameTitleId(index);
+    const int shownGame = static_cast<int>(index);
+    vita3k_uwp::FetchGameInfo(title, titleId).then([this, key, shownGame](vita3k_uwp::GameInfo info) {
+        infoFetching_.erase(key);
+        // Nothing found (offline, say) keeps what was there before.
+        vita3k_uwp::GameInfo previous;
+        bool oldStale = false;
+        if (!info.Empty() || !vita3k_uwp::LoadGameInfo(key, previous, oldStale)) vita3k_uwp::SaveGameInfo(key, info);
+        if (page_ == 4 && selectedGame_ == shownGame) Render();
+    }, concurrency::task_continuation_context::use_current());
+}
+void CatalogShell::AppendGameInfo(size_t index) {
+    const auto key = GameInfoKey(index);
+    vita3k_uwp::GameInfo info;
+    bool stale = false;
+    const bool have = vita3k_uwp::LoadGameInfo(key, info, stale);
+    if (!have || stale) FetchGameInfoFor(index, false);
+    auto S = [](const std::wstring& s) { return ref new Platform::String(s.c_str()); };
+
+    auto body = Vertical();
+    auto eyebrow = Text(L"ABOUT THIS GAME", 10, true);
+    eyebrow->CharacterSpacing = 160;
+    eyebrow->Foreground = Solid(Accent());
+    body->Children->Append(eyebrow);
+
+    if (!have) {
+        auto waiting = Text(infoFetching_.count(key) ? L"Looking this game up online…" : L"Nothing found online for this game yet.", 14, false, true);
+        waiting->Margin = Thickness(0, 10, 0, 0);
+        body->Children->Append(waiting);
+    } else if (info.Empty()) {
+        auto none = Text(L"Nothing was found online for this game. Its name may differ from the one Wikipedia uses.", 14, false, true);
+        none->Margin = Thickness(0, 10, 0, 0);
+        none->MaxWidth = 900;
+        body->Children->Append(none);
+    } else {
+        if (!info.description.empty()) {
+            auto about = Text(S(info.description), 15);
+            about->Margin = Thickness(0, 10, 0, 4);
+            about->MaxWidth = 960;
+            about->MaxLines = 7;
+            about->LineHeight = 23;
+            body->Children->Append(about);
+        }
+        // Who made it and when.
+        std::vector<std::pair<std::wstring, std::wstring>> facts;
+        if (!info.developer.empty()) facts.emplace_back(L"DEVELOPER", info.developer);
+        if (!info.publisher.empty() && info.publisher != info.developer) facts.emplace_back(L"PUBLISHER", info.publisher);
+        if (!info.released.empty()) facts.emplace_back(L"RELEASED", info.released);
+        if (!info.genre.empty()) facts.emplace_back(L"GENRE", info.genre);
+        if (!facts.empty()) {
+            auto row = ref new StackPanel();
+            row->Orientation = Orientation::Horizontal;
+            row->Margin = Thickness(0, 14, 0, 0);
+            for (const auto& fact : facts) {
+                auto cell = Vertical();
+                cell->Margin = Thickness(0, 0, 34, 10);
+                cell->MaxWidth = 280;
+                auto label = Text(S(fact.first), 10, true, true);
+                label->CharacterSpacing = 120;
+                cell->Children->Append(label);
+                auto value = Text(S(fact.second), 14, true);
+                value->Margin = Thickness(0, 3, 0, 0);
+                cell->Children->Append(value);
+                row->Children->Append(cell);
+            }
+            body->Children->Append(row);
+        }
+        // What critics gave it, and how it runs in Vita3K.
+        auto chips = ref new StackPanel();
+        chips->Orientation = Orientation::Horizontal;
+        chips->Margin = Thickness(0, 10, 0, 0);
+        auto chip = [&](const std::wstring& top, const std::wstring& bottom, Color tint) {
+            auto box = ref new Border();
+            box->CornerRadius = Windows::UI::Xaml::CornerRadius(12);
+            box->Padding = Thickness(14, 9, 16, 10);
+            box->Margin = Thickness(0, 0, 10, 10);
+            box->Background = Solid(tint);
+            box->BorderBrush = Solid(Alpha(30, 255, 255, 255));
+            box->BorderThickness = Thickness(1);
+            auto stack = Vertical();
+            auto a = Text(S(top), 10, true, true);
+            a->CharacterSpacing = 80;
+            stack->Children->Append(a);
+            auto b = Text(S(bottom), 18, true);
+            b->Margin = Thickness(0, 2, 0, 0);
+            stack->Children->Append(b);
+            box->Child = stack;
+            chips->Children->Append(box);
+        };
+        for (const auto& score : info.scores) chip(score.first, score.second, Alpha(40, 255, 255, 255));
+        if (!info.compat.empty()) {
+            const bool good = info.compat == L"Playable" || info.compat == L"Ingame +";
+            const bool bad = info.compat == L"Nothing" || info.compat == L"Bootable" || info.compat == L"Intro";
+            chip(L"VITA3K COMPATIBILITY", info.compat,
+                 good ? Alpha(70, 60, 190, 120) : bad ? Alpha(70, 210, 80, 80) : Alpha(70, 220, 170, 60));
+        }
+        if (chips->Children->Size) body->Children->Append(chips);
+        if (!info.compat.empty()) {
+            auto meaning = Text(S(vita3k_uwp::DescribeCompat(info.compat) +
+                L" (reported for Vita3K on PC; the Xbox version can differ)"), 12, false, true);
+            meaning->MaxWidth = 900;
+            body->Children->Append(meaning);
+        }
+    }
+
+    auto footer = ref new StackPanel();
+    footer->Orientation = Orientation::Horizontal;
+    footer->Margin = Thickness(0, 14, 0, 0);
+    auto source = Text(L"From Wikipedia, Wikidata and the Vita3K compatibility list.", 11, false, true);
+    source->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+    source->Opacity = 0.75;
+    footer->Children->Append(source);
+    auto refresh = Button(infoFetching_.count(key) ? L"Looking up…" : L"Refresh info");
+    refresh->Margin = Thickness(16, 0, 0, 0);
+    refresh->IsEnabled = !infoFetching_.count(key);
+    refresh->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
+        FetchGameInfoFor(index, true);
+        Render();
+    });
+    footer->Children->Append(refresh);
+    body->Children->Append(footer);
+    auto panel = Panel(body, 24);
+    panel->Margin = Thickness(0, 14, 0, 10);
+    content_->Children->Append(panel);
 }
 void CatalogShell::Render() {
     content_->Children->Clear();

@@ -58,6 +58,10 @@
       <CompileAsWinRT>true</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
+    <ClCompile Include="GameInfo.cpp">
+      <CompileAsWinRT>true</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
     <ClCompile Include="CatalogShell.cpp">
       <CompileAsWinRT>true</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
@@ -107,6 +111,7 @@
     <ClInclude Include="D3D12Host.h" />
     <ClInclude Include="VitaLibretroHost.h" />
     <ClInclude Include="GlHost.h" />
+    <ClInclude Include="GameInfo.h" />
     <ClInclude Include="UwpFileRedirect.h" />
     <ClInclude Include="CrashLog.h" />
     <ClInclude Include="LivingBackdrop.h" />
