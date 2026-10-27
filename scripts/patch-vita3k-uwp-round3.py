@@ -974,3 +974,27 @@ replace('vita3k/libretro/libretro_vita3k.cpp', '''    libretro.renderer_ready = 
     }
     lr_log(RETRO_LOG_INFO, "Vulkan context reset complete\\n");''')
 print('Core logs memory mapping and surface sync state.')
+
+# ── Descriptor pools that fit Dozen's sampler heap ──────────────────────────
+# Each new texture descriptor pool holds 64 sets per frame, three frames:
+# textures_count * 192 samplers. Dozen caps one pool's sampler heap at 1024,
+# so six textures (1152) failed allocateDescriptorSets and stopped the render
+# thread (Gravity Rush). The pack shrinks so a pool stays within 1024.
+scene = 'vita3k/renderer/src/vulkan/scene.cpp'
+text = read(scene)
+start = text.index('static vk::DescriptorSet retrieve_descriptor(VKContext &context, bool is_vertex, uint16_t textures_count) {')
+end = text.index('static void draw_bind_descriptors', start)
+body = text[start:end]
+body = body.replace('DESCRIPTOR_PACK_SIZE', 'pack')
+body = body.replace('''    // we have no more frame descriptor available, create a bunch of new one for this specific layout
+    vk::DescriptorPoolSize pool_size{''', '''    // we have no more frame descriptor available, create a bunch of new one for this specific layout
+    // (no more than 1024 samplers in one pool: Dozen's limit)
+    const uint32_t pack = (std::max)(1u, (std::min)(DESCRIPTOR_PACK_SIZE, 1024u / (textures_count * MAX_FRAMES_RENDERING)));
+    vk::DescriptorPoolSize pool_size{''', 1)
+assert 'Dozen\'s limit' in body, 'scene.cpp retrieve_descriptor anchor'
+text = text[:start] + body + text[end:]
+if '#include <algorithm>' not in text:
+    text = text.replace('#include <renderer/vulkan/functions.h>', '#include <algorithm>\n#include <renderer/vulkan/functions.h>', 1)
+    assert '#include <algorithm>' in text, 'scene.cpp include anchor'
+write(scene, text)
+print('Texture descriptor pools stay within Dozen\'s 1024-sampler heap.')

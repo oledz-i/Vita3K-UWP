@@ -210,7 +210,8 @@ jobs:
     runs-on: windows-2022
     env:
       VITA3K_RELEASE: ${{ inputs.release && '1' || '0' }}
-    timeout-minutes: 40
+    # Can wait for this commit's Dozen/OpenGL driver build (get-dozen.ps1).
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
@@ -240,6 +241,7 @@ jobs:
             $ErrorActionPreference = 'Stop'
             Copy-Item artifacts/core-runtime/*.dll src/Vita3K.UWP/ -Force
             Copy-Item artifacts/onyx-dozen/vulkan_dzn.dll, artifacts/onyx-dozen/dxil.dll src/Vita3K.UWP/ -Force
+            if (Test-Path artifacts/onyx-dozen/onyx_gl.dll) { Copy-Item artifacts/onyx-dozen/onyx_gl.dll src/Vita3K.UWP/ -Force }
             if (!(Test-Path src/Vita3K.UWP/vita3k_libretro.dll)) { throw 'core DLL not staged' }
             python scripts/validate.py
             if ($LASTEXITCODE -ne 0) { throw 'Repository validator failed' }

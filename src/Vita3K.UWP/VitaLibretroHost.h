@@ -17,6 +17,7 @@
 #include <Xinput.h>
 #include "CoreAudio.h"
 #include "VitaVulkanBridge.h"
+#include "GlHost.h"
 
 class VitaLibretroHost final {
 public:
@@ -50,6 +51,10 @@ public:
     void SetPaused(bool paused) { paused_.store(paused); }
     bool Paused() const { return paused_.load(); }
     void SetFrameSink(VitaVulkanBridge::FrameSink sink) { vulkan_.sink = std::move(sink); }
+    // Which renderer the running game uses ("Vulkan" or "OpenGL"), and the GPU
+    // and driver behind OpenGL once its context exists.
+    bool UsingOpenGL() const { return glMode_; }
+    std::string OpenGLDescription() const { return gl_.Description(); }
     void UnloadGame();
     // Core options (retro_variable keys). Values set before Initialize are
     // what the core reads at start; later changes reach it through
@@ -138,6 +143,14 @@ private:
     std::atomic<bool> framePresented_{false};
     std::thread runThread_;
     VitaVulkanBridge vulkan_;
+    // OpenGL (onyx_gl.dll): chosen when the core asks for a GL context. The
+    // context lives on the emulation thread; the core's context_reset runs
+    // there before the first frame.
+    GlHost gl_;
+    bool glMode_ = false;
+    retro_hw_render_callback glCallback_{};
+    bool StartOpenGLOnThisThread();
+    void StopOpenGL();
     CoreAudio audio_;
     std::vector<std::int16_t> sampleBuffer_;
     XINPUT_STATE inputState_{};

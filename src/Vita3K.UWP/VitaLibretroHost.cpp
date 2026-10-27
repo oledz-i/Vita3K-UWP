@@ -110,7 +110,7 @@ void VitaLibretroHost::ObserveLog(const char* message) {
     else if (has("Installing '")) progressSink_("Installing the game", -1);
     else if (has("Not enough free space")) progressSink_("Not enough free space to install this game", -1);
     else if (has("retro_load_game.install")) progressSink_("Loading the game", -1);
-    else if (has("context_reset_vulkan.enter")) progressSink_("Preparing graphics", -1);
+    else if (has("context_reset_vulkan.enter") || has("context_reset_opengl.enter")) progressSink_("Preparing graphics", -1);
     else if (has("context_reset_finalize.before_libretro_run_app")) progressSink_("Starting the game", -1);
     else if (has("First core video frame presented")) progressSink_("Waiting for the game's first picture", -1);
     else if (has("Render thread stopped"))
@@ -315,10 +315,14 @@ std::wstring VitaLibretroHost::RecentLog() const {
 void VitaLibretroHost::UnloadGame() {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     StopRunning();
+    // OpenGL: the core frees its GL objects as it unloads, so its context is
+    // made current here (the emulation thread that used it has ended).
+    if (glMode_) gl_.MakeCurrent(true);
     // retro_unload_game stops the guest/render threads and frees the core's
     // Vulkan allocations. Its shared device must remain alive until it returns.
     if (gameLoaded_ && unloadGame_) unloadGame_();
     vulkan_.Shutdown();
+    StopOpenGL();
     gameLoaded_ = false;
     sampleBuffer_.clear();
     framesExecuted_ = 0;
@@ -367,6 +371,17 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
         detail += L"Core log: " + RecentLog();
         return false;
     }
+    if (glMode_) {
+        // The context and the core's context_reset come on the emulation
+        // thread (StartRunning), where every GL call of the game will be made.
+        gl_.sink = [this](const std::uint8_t* pixels, unsigned width, unsigned height) {
+            if (vulkan_.sink) vulkan_.sink(pixels, width, height, true);
+        };
+        Log(1, "Renderer: OpenGL (Mesa OpenGL on D3D12); the context is made when the game starts.\n");
+        vita3k_uwp::ReassertCrashLog();
+        detail = L"Vita3K retro_load_game returned true (OpenGL).";
+        return true;
+    }
     std::string vulkanError;
     VitaVulkanBridge::SetDriverLog([](int level, const char* message) {
         // Mesa: 0 error, 1 warning, 2 info, 3 debug
@@ -399,6 +414,39 @@ bool VitaLibretroHost::RunFrame(std::wstring& detail) {
         L"calling this gameplay.";
     return true;
 }
+bool VitaLibretroHost::StartOpenGLOnThisThread() {
+    if (gl_.HasContext()) {
+        if (gl_.MakeCurrent(true)) return true;
+        Log(3, "OpenGL: the context could not be made current on the emulation thread.\n");
+        return false;
+    }
+    std::string error;
+    if (!gl_.CreateContext(glCallback_.depth, glCallback_.stencil, error)) {
+        Log(3, "OpenGL renderer could not start: %s\n", error.c_str());
+        if (progressSink_) progressSink_("!OpenGL could not start on this console. Set Renderer back to Vulkan in Settings, then save the log.", -1);
+        return false;
+    }
+    Log(1, "Renderer: %s\n", gl_.Description().c_str());
+    if (glCallback_.context_reset) {
+        CoreFault fault;
+        if (!GuardedRun(reinterpret_cast<void(__cdecl*)()>(glCallback_.context_reset), &fault)) {
+            Log(3, "%s", DescribeFault("OpenGL context_reset", fault, module_).c_str());
+            return false;
+        }
+    }
+    vita3k_uwp::ReassertCrashLog();
+    return true;
+}
+void VitaLibretroHost::StopOpenGL() {
+    if (!glMode_) return;
+    if (gl_.HasContext()) {
+        gl_.MakeCurrent(true);
+        if (glCallback_.context_destroy) glCallback_.context_destroy();
+        gl_.DestroyContext();
+    }
+    glMode_ = false;
+    glCallback_ = {};
+}
 void VitaLibretroHost::StopRunning() {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     running_.store(false);
@@ -420,6 +468,10 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
             // The pinned core reports 60 Hz. Pace frames without running the
             // guest on the XAML dispatcher or spinning to catch up after stalls.
             constexpr auto period = std::chrono::microseconds(16667);
+            if (glMode_ && !StartOpenGLOnThisThread()) {
+                running_.store(false);
+                return;
+            }
             try {
                 while (running_.load()) {
                     const auto start = std::chrono::steady_clock::now();
@@ -442,6 +494,8 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
                 Log(3, "Core frame execution threw an exception; session stopped.\n");
                 running_.store(false);
             }
+            // The context goes with the thread; UnloadGame binds it again.
+            if (glMode_) gl_.MakeCurrent(false);
         });
     } catch (...) {
         running_.store(false);
@@ -523,9 +577,28 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
     case 56: // GET_PREFERRED_HW_RENDER
         *static_cast<unsigned*>(data) = 6; // Vulkan (Onyx Dozen backend)
         return true;
-    case 14: // SET_HW_RENDER (OpenGL/Vulkan context negotiation)
-        host->unsupportedVideo_ = !host->vulkan_.Accept(static_cast<retro_hw_render_callback*>(data));
+    case 14: { // SET_HW_RENDER (OpenGL/Vulkan context negotiation)
+        auto* callback = static_cast<retro_hw_render_callback*>(data);
+        if (callback->context_type == RETRO_HW_CONTEXT_OPENGL_CORE || callback->context_type == RETRO_HW_CONTEXT_OPENGL) {
+            std::string error;
+            host->gl_.log = [](int level, const std::string& text) { Log(static_cast<unsigned>(level), "%s\n", text.c_str()); };
+            if (!host->gl_.Load(error)) {
+                // The core then asks for Vulkan.
+                Log(2, "OpenGL renderer unavailable (%s); using Vulkan.\n", error.c_str());
+                host->glMode_ = false;
+                return false;
+            }
+            callback->get_current_framebuffer = &GlHost::CurrentFramebuffer;
+            callback->get_proc_address = reinterpret_cast<retro_hw_get_proc_address_t>(&GlHost::ProcAddress);
+            host->glCallback_ = *callback;
+            host->glMode_ = true;
+            host->unsupportedVideo_ = false;
+            return true;
+        }
+        host->glMode_ = false;
+        host->unsupportedVideo_ = !host->vulkan_.Accept(callback);
         return !host->unsupportedVideo_;
+    }
     case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
         return host->vulkan_.Negotiate(static_cast<const retro_hw_render_context_negotiation_interface_vulkan*>(data));
     case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE: {
@@ -569,6 +642,12 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
 void __cdecl VitaLibretroHost::Video(
     const void* data, unsigned width, unsigned height, std::size_t) {
     if (!active_ || data != RETRO_HW_FRAME_BUFFER_VALID) return;
+    if (active_->glMode_) {
+        active_->gl_.OnFrame(width, height);
+        if (!active_->framePresented_.exchange(true))
+            Log(1, "First core video frame presented: %u x %u (OpenGL, %s).\n", width, height, active_->gl_.Description().c_str());
+        return;
+    }
     std::string error;
     if (active_->vulkan_.Present(width, height, error)) {
         if (!active_->framePresented_.exchange(true))

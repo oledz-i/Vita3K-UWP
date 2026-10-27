@@ -15,6 +15,7 @@ cats = {c[0]: c[1] for c in data['cats']}
 
 # Shown, in this order. Anything else keeps the core default.
 shown = [
+    'vita3k_backend_renderer',
     'vita3k_resolution_multiplier', 'vita3k_screen_filter', 'vita3k_anisotropic_filtering',
     'vita3k_v_sync', 'vita3k_async_pipeline', 'vita3k_compile_overlay', 'vita3k_surface_sync',
     'vita3k_memory_mapping', 'vita3k_high_accuracy',
@@ -26,6 +27,7 @@ shown = [
     'vita3k_psn_signed_in', 'vita3k_http_enable',
 ]
 xbox_notes = {
+    'vita3k_backend_renderer': '',
     'vita3k_resolution_multiplier': 'Series S: stay at 1x until games run well. Series X can try 2x.',
     'vita3k_memory_mapping': 'On Xbox the Vulkan layer may not support the higher methods. Keep Double Buffer unless testing.',
     'vita3k_cpu_opt': 'Off is far slower and only useful to tell a JIT problem from a game problem.',
@@ -43,6 +45,7 @@ xbox_defaults = {
 }
 category_names = {'install': 'Content', 'gpu': 'Graphics', 'cpu': 'CPU and JIT'}
 label_overrides = {
+    'vita3k_backend_renderer': 'Renderer',
     'vita3k_cpu_opt': 'JIT recompiler (Dynarmic)',
     'vita3k_resolution_multiplier': 'Internal resolution',
     'vita3k_async_pipeline': 'Compile shaders in the background',
@@ -50,6 +53,7 @@ label_overrides = {
     'vita3k_pkg_mode': 'Run mode',
 }
 info_overrides = {
+    'vita3k_backend_renderer': 'Vulkan: the tested path (Mesa Dozen). OpenGL (experimental): Mesa\'s OpenGL on D3D12; surface sync works only here, which some games need (Danganronpa item checks). Takes effect when a game starts.',
     'vita3k_cpu_opt': 'On: the Vita\'s ARM code is recompiled to x64 as it runs, which is what makes games playable. Off: far slower; only for telling a JIT problem from a game problem.',
 }
 

@@ -2361,11 +2361,14 @@ struct TitleOverride {
     const wchar_t* titleId;
     const char* key;
     const char* value;
+    const char* renderer; // only with this renderer (nullptr: any)
 };
 const TitleOverride kTitleOverrides[] = {
     // Danganronpa: Trigger Happy Havoc (Vita3K/compatibility#94): the
     // prologue's classroom conversation only goes on with surface sync off.
-    { L"PCSE00261", "vita3k_surface_sync", "disabled" },
+    // On Vulkan here surface sync does nothing (Dozen gives no memory
+    // mapping); on OpenGL it works, and item checks need it, so it stays on.
+    { L"PCSE00261", "vita3k_surface_sync", "disabled", "Vulkan" },
 };
 // The title ID (four letters, five digits) in a game's folder or file name.
 std::wstring TitleIdIn(const std::wstring& path) {
@@ -2385,13 +2388,17 @@ std::wstring TitleIdIn(const std::wstring& path) {
 
 void CatalogShell::ApplyCoreOptions(const std::wstring& contentPath) {
     const std::wstring titleId = TitleIdIn(contentPath);
+    std::string renderer = "Vulkan";
+    for (std::size_t i = 0; i < vita3k_uwp::kCoreOptionCount; ++i)
+        if (std::strcmp(vita3k_uwp::kCoreOptions[i].key, "vita3k_backend_renderer") == 0)
+            renderer = SavedCoreOption(vita3k_uwp::kCoreOptions[i]);
     for (std::size_t i = 0; i < vita3k_uwp::kCoreOptionCount; ++i) {
         const auto& option = vita3k_uwp::kCoreOptions[i];
         std::string value = SavedCoreOption(option);
         const bool chosen = Pref(CoreOptionPrefKey(option), L"")->Length() != 0;
         if (!chosen && !titleId.empty()) {
             for (const auto& o : kTitleOverrides) {
-                if (titleId == o.titleId && std::strcmp(option.key, o.key) == 0) {
+                if (titleId == o.titleId && std::strcmp(option.key, o.key) == 0 && (!o.renderer || renderer == o.renderer)) {
                     value = o.value;
                     libretro_.LogLine(std::string("Game setting for ") + NarrowUtf8(titleId) + ": " + o.key + " = " + o.value);
                 }
@@ -2739,28 +2746,7 @@ void CatalogShell::EmulationSettings() {
     {
         // What draws the game, and how it fills the screen.
         auto display = Vertical();
-        display->Children->Append(Text(L"Display and renderer", 16, true));
-        auto rendererRow = ref new Grid();
-        rendererRow->Margin = Thickness(0, 14, 0, 0);
-        auto left = ref new ColumnDefinition();
-        left->Width = GridLength(1, GridUnitType::Star);
-        auto right = ref new ColumnDefinition();
-        right->Width = GridLength(1, GridUnitType::Auto);
-        rendererRow->ColumnDefinitions->Append(left);
-        rendererRow->ColumnDefinitions->Append(right);
-        auto rendererCopy = Vertical();
-        rendererCopy->Children->Append(Text(L"Renderer", 14, true));
-        auto rendererInfo = Text(L"Vita3K's Vulkan renderer, running on the Xbox's Direct3D 12 through Mesa Dozen. "
-            L"It is the only renderer that works on Xbox; Vita3K's OpenGL one has no driver here.", 12, false, true);
-        rendererInfo->Margin = Thickness(0, 3, 24, 0);
-        rendererCopy->Children->Append(rendererInfo);
-        rendererRow->Children->Append(rendererCopy);
-        auto rendererName = Text(L"Vulkan (Direct3D 12)", 13, true);
-        rendererName->Foreground = Solid(Accent());
-        rendererName->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
-        Grid::SetColumn(rendererName, 1);
-        rendererRow->Children->Append(rendererName);
-        display->Children->Append(rendererRow);
+        display->Children->Append(Text(L"Display", 16, true));
 
         auto screenRow = ref new Grid();
         screenRow->Margin = Thickness(0, 14, 0, 0);
