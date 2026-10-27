@@ -161,6 +161,11 @@ private:
     void ShowFirmwareProgress(double value, Platform::String^ message);
     void StorageSettings();
     void ChooseDataFolder();
+    // Updates and DLC: a folder of them, installed when new.
+    void ChooseAddonsFolder();
+    void InstallAddons();
+    Windows::UI::Xaml::Controls::TextBlock^ addonsLabel_ = nullptr;
+    bool addonsBusy_ = false;
     void ChangeDataRoot(const std::wstring& chosen);
     void CleanUpOldCopies();
     bool SystemFirmwareInstalled();

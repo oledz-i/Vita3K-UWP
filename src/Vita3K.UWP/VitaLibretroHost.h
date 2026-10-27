@@ -72,6 +72,9 @@ public:
     // What a .PUP holds: bit 0 os0, 1 vs0 (system firmware), 2 pd0
     // (preinstalled package), 3 sa0 (fonts); and its firmware version.
     bool PupInfo(const std::string& pupUtf8, std::uint32_t& version, std::uint32_t& partitions);
+    // An update or DLC (folder, .vpk/.zip or .pkg) installed into Vita3K's data.
+    bool InstallAddon(const std::string& systemFolder, const std::string& pathUtf8, std::string& titleId,
+                      std::string& category, std::wstring& detail);
     // Installs one .PUP into <systemFolder>/vita3k now, reporting 0-100.
     bool InstallFirmware(const std::string& systemFolder, const std::string& pupUtf8,
                          std::function<void(std::uint32_t)> progress, std::string& version, std::wstring& detail);

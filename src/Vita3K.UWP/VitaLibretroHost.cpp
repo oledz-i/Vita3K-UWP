@@ -275,6 +275,33 @@ bool VitaLibretroHost::InstallFirmware(const std::string& systemFolder, const st
     detail = ok ? L"Installed." : L"The firmware package could not be installed. " + RecentLog();
     return ok;
 }
+bool VitaLibretroHost::InstallAddon(const std::string& systemFolder, const std::string& pathUtf8, std::string& titleId,
+                                    std::string& category, std::wstring& detail) {
+    std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
+    if (gameLoaded_) {
+        detail = L"Stop the game before installing updates or DLC.";
+        return false;
+    }
+    if (!Initialize(systemFolder, detail)) return false;
+    using InstallFn = int(__cdecl*)(const char*, const char*, char*, std::uint32_t, char*, std::uint32_t);
+    const auto install = Entry<InstallFn>(module_, "vita3k_uwp_install_addon");
+    if (!install) {
+        detail = L"This Vita3K core cannot install updates or DLC on request.";
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> guard(logsMutex_);
+        latestCoreLogs_.clear();
+    }
+    const std::string pref = systemFolder + "\\vita3k";
+    char title[32] = {};
+    char kind[32] = {};
+    const bool ok = install(pref.c_str(), pathUtf8.c_str(), title, sizeof(title), kind, sizeof(kind)) != 0;
+    titleId = title;
+    category = kind;
+    detail = ok ? L"Installed." : L"It could not be installed. " + RecentLog();
+    return ok;
+}
 std::wstring VitaLibretroHost::RecentLog() const {
     std::lock_guard<std::mutex> guard(logsMutex_);
     return FromUtf8(latestCoreLogs_.c_str());

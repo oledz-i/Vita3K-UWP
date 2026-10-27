@@ -901,3 +901,37 @@ replace(lv, '''                    }
     lr_trace("context_reset_finalize.complete", "finished");''')
 print('Render thread errors are logged instead of ending the app.')
 
+
+# ── Updates and DLC on the frontend's request ───────────────────────────────
+# The Xbox app has an Updates and DLC folder, like its games folder. Each
+# update or DLC there (a folder, .vpk/.zip or .pkg) is installed the way one
+# loaded on its own is: into ux0/patch or ux0/addcont of its title.
+addon_inst = source / 'vita3k/libretro/libretro_installer.cpp'
+addon_text = addon_inst.read_text(encoding='utf-8')
+assert 'static GameInstallResult install_or_open(' in addon_text
+addon_text += '''
+#if defined(VITA3K_UWP)
+extern "C" __declspec(dllexport) int vita3k_uwp_install_addon(const char *pref_utf8, const char *path_utf8,
+    char *title_id, uint32_t title_size, char *category, uint32_t category_size) {
+    if (!pref_utf8 || !path_utf8)
+        return 0;
+    GameInstallResult result;
+    try {
+        result = install_or_open(fs_utils::utf8_to_path(path_utf8), fs_utils::utf8_to_path(pref_utf8), 1, false);
+    } catch (const std::exception &e) {
+        lr_log(RETRO_LOG_ERROR, "Installing %s failed: %s\\n", path_utf8, e.what());
+        return 0;
+    } catch (...) {
+        lr_log(RETRO_LOG_ERROR, "Installing %s failed\\n", path_utf8);
+        return 0;
+    }
+    if (title_id && title_size)
+        snprintf(title_id, title_size, "%s", result.title_id.c_str());
+    if (category && category_size)
+        snprintf(category, category_size, "%s", result.category.c_str());
+    return result.success ? 1 : 0;
+}
+#endif
+'''
+addon_inst.write_text(addon_text, encoding='utf-8')
+print('Updates and DLC can be installed on request from the frontend.')

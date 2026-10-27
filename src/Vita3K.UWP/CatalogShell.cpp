@@ -1727,6 +1727,10 @@ void CatalogShell::RestorePaths() {
             ? L"Game folder access saved." : L"No game folder chosen yet.";
     }
     RefreshFirmwareStatus();
+    if (addonsLabel_ != nullptr) {
+        auto addons = Pref(L"storage.addons", L"");
+        addonsLabel_->Text = addons->IsEmpty() ? ref new Platform::String(L"No updates folder chosen yet.") : L"Updates folder: " + addons;
+    }
     if (dataLabel_ != nullptr) {
         auto chosen = Pref(L"storage.dataRoot", L"");
         dataLabel_->Text = chosen->IsEmpty() ? ref new Platform::String(L"Internal storage") : chosen;
@@ -2535,6 +2539,13 @@ void CatalogShell::StorageSettings() {
     internal->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChangeDataRoot(L""); });
     addRow(L"Vita3K data", L"Firmware, installed games, saves and caches. Vita3K installs a game here the first "
         L"time it runs it, so if internal space is short, put this on your USB drive.", dataLabel_, onDrive, internal);
+    addonsLabel_ = Text(L"", 13);
+    auto chooseAddons = Button(L"Choose updates folder", true);
+    chooseAddons->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { ChooseAddonsFolder(); });
+    auto installAddons = Button(L"Install new ones");
+    installAddons->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { InstallAddons(); });
+    addRow(L"Updates and DLC", L"A folder of game updates and DLC (folders, .vpk, .zip or .pkg). New ones are installed "
+        L"when you choose it, with Install new ones, and before a game they belong to starts.", addonsLabel_, chooseAddons, installAddons);
     content_->Children->Append(Panel(box));
     RestorePaths();
 }
@@ -2549,6 +2560,119 @@ void CatalogShell::ChooseDataFolder() {
         if (folder == nullptr) return;
         StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-data", folder);
         ChangeDataRoot(std::wstring(folder->Path->Data()) + L"\\Vita3K");
+    }, task_continuation_context::use_current());
+}
+
+namespace {
+// The updates and DLC in a folder: folders with a param.sfo (one level of
+// grouping folders too), and .vpk/.zip/.pkg files.
+std::vector<std::filesystem::path> AddonItems(const std::wstring& root) {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> items;
+    std::error_code ec;
+    const auto isTitle = [](const fs::path& dir) {
+        std::error_code e;
+        return fs::exists(dir / L"sce_sys" / L"param.sfo", e);
+    };
+    const auto isPackage = [](const fs::path& file) {
+        std::wstring ext = file.extension().wstring();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+        return ext == L".pkg" || ext == L".vpk" || ext == L".zip";
+    };
+    for (fs::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code e;
+        const fs::path path = it->path();
+        if (fs::is_directory(path, e)) {
+            if (isTitle(path)) { items.push_back(path); continue; }
+            for (fs::directory_iterator sub(path, e), subEnd; !e && sub != subEnd; sub.increment(e)) {
+                std::error_code e2;
+                if (fs::is_directory(sub->path(), e2) ? isTitle(sub->path()) : isPackage(sub->path()))
+                    items.push_back(sub->path());
+            }
+        } else if (isPackage(path)) {
+            items.push_back(path);
+        }
+    }
+    return items;
+}
+// Changes when the item does: its size (a file) or its param.sfo's.
+std::wstring AddonSignature(const std::filesystem::path& item) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path probe = fs::is_directory(item, ec) ? item / L"sce_sys" / L"param.sfo" : item;
+    const auto size = fs::file_size(probe, ec);
+    const auto stamp = fs::last_write_time(probe, ec).time_since_epoch().count();
+    return item.wstring() + L"|" + std::to_wstring(size) + L"|" + std::to_wstring(stamp);
+}
+// Installs the items not installed before (for one title, when titleId is set:
+// those whose name says it). Returns a line for each one tried.
+std::wstring InstallPendingAddons(VitaLibretroHost& host, const std::string& system, const std::wstring& root,
+                                  const std::wstring& titleId, int& installed, int& failed) {
+    std::wstring summary;
+    for (const auto& item : AddonItems(root)) {
+        const std::wstring name = item.filename().wstring();
+        if (!titleId.empty() && item.wstring().find(titleId) == std::wstring::npos) continue;
+        const auto key = L"addon.done." + StableKey(ref new Platform::String(AddonSignature(item).c_str()));
+        if (!Pref(key, L"")->IsEmpty()) continue;
+        std::string id, category;
+        std::wstring detail;
+        host.LogLine("Updates and DLC: installing " + NarrowUtf8(item.wstring()));
+        if (host.InstallAddon(system, NarrowUtf8(item.wstring()), id, category, detail)) {
+            PutPref(key, L"1");
+            ++installed;
+            const wchar_t* kind = category.find("gp") != std::string::npos ? L"update" :
+                                  category.find("ac") != std::string::npos ? L"DLC" : L"content";
+            summary += name + L": " + kind + L" for " + WidenUtf8(id) + L" installed.\n";
+            host.LogLine("Updates and DLC: installed " + NarrowUtf8(name) + " (" + id + ", " + category + ")");
+        } else {
+            ++failed;
+            summary += name + L": not installed. " + ProblemLine(detail) + L"\n";
+            host.LogLine("Updates and DLC: " + NarrowUtf8(name) + " failed: " + NarrowUtf8(detail));
+        }
+    }
+    return summary;
+}
+}
+
+void CatalogShell::ChooseAddonsFolder() {
+    auto picker = ref new FolderPicker();
+    picker->SuggestedStartLocation = PickerLocationId::ComputerFolder;
+    picker->FileTypeFilter->Append(L"*");
+    create_task(picker->PickSingleFolderAsync()).then([this](task<StorageFolder^> picked) {
+        StorageFolder^ folder = nullptr;
+        try { folder = picked.get(); } catch (Platform::Exception^ e) { SetStatus(L"Folder picker failed: " + e->Message); }
+        if (folder == nullptr) return;
+        StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-addons", folder);
+        PutPref(L"storage.addons", folder->Path);
+        RestorePaths();
+        InstallAddons();
+    }, task_continuation_context::use_current());
+}
+
+void CatalogShell::InstallAddons() {
+    const std::wstring root = Pref(L"storage.addons", L"")->Data();
+    if (root.empty()) {
+        SetStatus(L"Choose an updates folder first.");
+        return;
+    }
+    if (addonsBusy_ || firmwareBusy_ || booting_ || libretro_.GameLoaded()) {
+        SetStatus(L"Wait until the game or the current install has finished.");
+        return;
+    }
+    addonsBusy_ = true;
+    SetStatus(L"Looking for new updates and DLC...");
+    const std::string system = NarrowUtf8(DataRoot());
+    create_task([this, root, system]() {
+        int installed = 0, failed = 0;
+        std::wstring summary = InstallPendingAddons(libretro_, system, root, std::wstring(), installed, failed);
+        if (installed == 0 && failed == 0) summary = L"No new updates or DLC in the folder.";
+        return summary;
+    }).then([this](task<std::wstring> done) {
+        addonsBusy_ = false;
+        std::wstring summary;
+        try { summary = done.get(); } catch (...) { summary = L"Installing updates and DLC stopped. vita3k-runtime.log has the details."; }
+        while (!summary.empty() && summary.back() == L'\n') summary.pop_back();
+        SetStatus(ref new Platform::String(summary.c_str()));
     }, task_continuation_context::use_current());
 }
 
@@ -3563,9 +3687,16 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
     // (ONYX_PSO_CACHE) came back with the GPU device removed, at the game's
     // first pipeline, and every later game then failed to start.
     VitaVulkanBridge::SetPipelineCachePath(L"");
-    create_task([this,system,content]() {
+    const std::wstring addonsRoot = Pref(L"storage.addons", L"")->Data();
+    const std::wstring titleId = TitleIdIn(contentPath->Data());
+    create_task([this,system,content,addonsRoot,titleId]() {
         std::wstring detail;
         if (!libretro_.Initialize(system, detail)) return std::make_pair(false, detail);
+        // Its updates and DLC dropped in the updates folder since it last ran
+        if (!addonsRoot.empty() && !titleId.empty()) {
+            int installed = 0, failed = 0;
+            InstallPendingAddons(libretro_, system, addonsRoot, titleId, installed, failed);
+        }
         if (!libretro_.LoadGame(content, detail)) return std::make_pair(false, detail);
         if (!libretro_.StartRunning(detail)) return std::make_pair(false, detail);
         return std::make_pair(true, detail);
