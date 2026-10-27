@@ -19288,7 +19288,7 @@ index afbb4cbf..37e9b67d 100644
      emuenv.app_info = {};
      emuenv.drop_inputs = false;
 diff --git a/vita3k/app/src/app_init.cpp b/vita3k/app/src/app_init.cpp
-index 466b7aef..01696481 100644
+index 466b7aef..3c34f132 100644
 --- a/vita3k/app/src/app_init.cpp
 +++ b/vita3k/app/src/app_init.cpp
 @@ -229,11 +229,11 @@ static Config::CurrentConfig get_runtime_current_config_after_save(
@@ -19472,18 +19472,22 @@ index 466b7aef..01696481 100644
      return portable;
  }
  
-@@ -492,6 +491,10 @@ bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
+@@ -492,6 +491,14 @@ bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
  
      state.motion.init();
  
++#ifndef BUILD_LIBRETRO
++    // The core takes its input from the frontend and writes no config.yml
++    // (reset_controller_binding saves one)
 +    if (state.cfg.controller_binds.empty() || state.cfg.controller_binds.size() != 15
 +        || state.cfg.controller_axis_binds.empty() || state.cfg.controller_axis_binds.size() != 6)
 +        reset_controller_binding(state);
++#endif
 +
      return true;
  }
  
-@@ -567,6 +570,7 @@ void reset_app_state(EmuEnvState &state) {
+@@ -567,6 +574,7 @@ void reset_app_state(EmuEnvState &state) {
      state.current_app_title.clear();
      state.self_name.clear();
      state.self_path.clear();
