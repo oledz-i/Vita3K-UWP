@@ -3,6 +3,7 @@
 #include "D3D12Host.h"
 #include "GameFormats.h"
 #include "VitaLibretroHost.h"
+#include "LivingBackdrop.h"
 #include <collection.h>
 #include <ppltasks.h>
 #include <string>
@@ -69,6 +70,14 @@ private:
     bool uiSounds_ = true;
     double uiSoundVolume_ = 0.40;
     Windows::UI::Xaml::Controls::TextBlock^ status_;
+    // The moving scene behind the menus, and the clock on Home.
+    vita3k_uwp::LivingBackdrop backdrop_;
+    Windows::UI::Xaml::Controls::Grid^ backdropHost_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ clock_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ greeting_ = nullptr;
+    Windows::UI::Xaml::DispatcherTimer^ clockTimer_ = nullptr;
+    void UpdateClock();
+    void ApplySurfaceColors();
     Windows::UI::Xaml::Controls::TextBlock^ folderLabel_;
     Windows::UI::Xaml::Controls::TextBlock^ firmwareStatus_[3] = {};
     Windows::UI::Xaml::Controls::Border^ firmwareDot_[3] = {};

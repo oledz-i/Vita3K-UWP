@@ -139,12 +139,13 @@ Color CatalogShell::Bg() const {
     }
 }
 Color CatalogShell::Card() const {
+    // Glass: the moving scene shows through every card a little.
     switch (theme_) {
-    case 1: return RgbColor(16, 32, 35);
-    case 2: return RgbColor(35, 24, 22);
-    case 3: return RgbColor(22, 33, 46);
-    case 4: return RgbColor(27, 22, 41);
-    default: return RgbColor(24, 25, 30);
+    case 1: return Alpha(206, 16, 32, 35);
+    case 2: return Alpha(206, 35, 24, 22);
+    case 3: return Alpha(206, 22, 33, 46);
+    case 4: return Alpha(206, 27, 22, 41);
+    default: return Alpha(206, 24, 25, 30);
     }
 }
 Color CatalogShell::Accent() const {
@@ -441,6 +442,21 @@ CatalogShell::CatalogShell() {
     Grid::SetColumn(statusBar, 1);
     Grid::SetRow(statusBar, 1);
     root_->Children->Append(statusBar);
+
+    // The living backdrop, behind everything (z-index), over the page colour.
+    backdropHost_ = ref new Grid();
+    backdropHost_->IsHitTestVisible = false;
+    Grid::SetColumnSpan(backdropHost_, 2);
+    Grid::SetRowSpan(backdropHost_, 2);
+    Canvas::SetZIndex(backdropHost_, -10);
+    root_->Children->Append(backdropHost_);
+    backdrop_.Attach(backdropHost_);
+    backdrop_.SetTheme(theme_, Bg(), Accent(), Glow());
+    ApplySurfaceColors();
+    clockTimer_ = ref new DispatcherTimer();
+    clockTimer_->Interval = Millis(15000);
+    clockTimer_->Tick += ref new EventHandler<Platform::Object^>([this](Platform::Object^, Platform::Object^) { UpdateClock(); });
+    clockTimer_->Start();
 
     musicPlayer_ = ref new MediaElement();
     musicPlayer_->AutoPlay = false;
@@ -842,6 +858,31 @@ void CatalogShell::Home() {
             if (!last->IsEmpty() && games_[i].name == last) { featured = i; playedBefore = true; break; }
         }
     }
+    // A greeting and the time, over the scene: the console's own front page.
+    {
+        auto header = ref new Grid();
+        header->Margin = Thickness(2, 0, 4, 14);
+        auto left = Vertical();
+        auto mood = Text(theme_ == 1 ? L"AURORA  \u2022  ELECTRIC TEAL" : theme_ == 2 ? L"EMBER  \u2022  WARM CINEMA" :
+                         theme_ == 3 ? L"GLACIER  \u2022  ARCTIC BLUE" : theme_ == 4 ? L"ORBIT  \u2022  COSMIC VIOLET" :
+                         L"ONYX  \u2022  MIDNIGHT & ROSE", 10, true);
+        mood->CharacterSpacing = 220;
+        mood->Foreground = Solid(Accent());
+        left->Children->Append(mood);
+        greeting_ = Text(L"", 26, false);
+        greeting_->FontWeight = FontWeights::Light;
+        greeting_->Margin = Thickness(0, 4, 0, 0);
+        left->Children->Append(greeting_);
+        header->Children->Append(left);
+        clock_ = Text(L"", 26, false);
+        clock_->FontWeight = FontWeights::Light;
+        clock_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
+        clock_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
+        clock_->TextWrapping = TextWrapping::NoWrap;
+        header->Children->Append(clock_);
+        content_->Children->Append(header);
+        UpdateClock();
+    }
     auto hero = ref new Border();
     hero->Height = 262;
     hero->CornerRadius = Windows::UI::Xaml::CornerRadius(18);
@@ -849,7 +890,7 @@ void CatalogShell::Home() {
     hero->BorderBrush = Solid(Alpha(22, 255, 255, 255));
     hero->BorderThickness = Thickness(1);
     auto heroLayout = ref new Grid();
-    heroLayout->Background = Gradient(Card(), Glow());
+    heroLayout->Background = Gradient(Card(), Alpha(190, Glow().R, Glow().G, Glow().B));
     if (hasGames && !ArtworkUri(featured)->IsEmpty()) {
         auto art = ref new Image();
         art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(featured)));
@@ -1206,6 +1247,8 @@ void CatalogShell::GameDetails() {
 }
 void CatalogShell::Render() {
     content_->Children->Clear();
+    clock_ = nullptr;
+    greeting_ = nullptr;
     musicStatus_ = nullptr;
     libraryResults_ = nullptr;
     switch(page_) {
@@ -1569,16 +1612,36 @@ void CatalogShell::Diagnostics() {
     });
 }
 
+void CatalogShell::ApplySurfaceColors() {
+    // The rail and the status line are tinted glass over the moving scene.
+    root_->Background = Solid(Bg());
+    const Color rail = RailColor();
+    navigation_->Background = Solid(Alpha(178, rail.R, rail.G, rail.B));
+    if (statusBar_ != nullptr) statusBar_->Background = Solid(Alpha(120, Bg().R, Bg().G, Bg().B));
+    if (status_ != nullptr) status_->Foreground = Solid(Muted());
+}
+void CatalogShell::UpdateClock() {
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    if (clock_ != nullptr) {
+        const int hour12 = now.wHour % 12 == 0 ? 12 : now.wHour % 12;
+        wchar_t text[32] = {};
+        swprintf_s(text, L"%d:%02d %s", hour12, now.wMinute, now.wHour < 12 ? L"AM" : L"PM");
+        clock_->Text = ref new Platform::String(text);
+    }
+    if (greeting_ != nullptr) {
+        const wchar_t* line = now.wHour < 5 ? L"Late-night session." : now.wHour < 12 ? L"Good morning." :
+                              now.wHour < 17 ? L"Good afternoon." : now.wHour < 22 ? L"Good evening." : L"Late-night session.";
+        greeting_->Text = ref new Platform::String(line);
+    }
+}
 void CatalogShell::SaveTheme(int theme) {
     if (theme < 0 || theme > 4) return;
     theme_ = theme;
     PutPref(L"theme", StringOf(std::to_wstring(theme)));
-    root_->Background = Solid(Bg());
-    navigation_->Background = Solid(RailColor());
     PlayCue(5);
-    auto footer = dynamic_cast<Border^>(root_->Children->GetAt(2));
-    if (footer != nullptr) footer->Background = Solid(Bg());
-    if (status_ != nullptr) status_->Foreground = Solid(Muted());
+    ApplySurfaceColors();
+    backdrop_.SetTheme(theme_, Bg(), Accent(), Glow());
     BuildNavigation();
     Render();
     SetStatus(L"Theme saved. Your colors will be restored on the next launch.");
@@ -3051,6 +3114,9 @@ void CatalogShell::EnterGameView(Platform::String^ title) {
     if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
     if (statusBar_) statusBar_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
     musicPlayer_->Pause();
+    // Nothing of the menu scene runs under a game.
+    backdrop_.SetActive(false);
+    if (clockTimer_) clockTimer_->Stop();
 
     gameLayer_ = ref new Grid();
     gameLayer_->Background = Solid(Colors::Black);
@@ -3229,6 +3295,8 @@ void CatalogShell::ExitGameView() {
         navigation_->Visibility = Windows::UI::Xaml::Visibility::Visible;
         if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Visible;
         if (statusBar_) statusBar_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        backdrop_.SetActive(true);
+        if (clockTimer_) clockTimer_->Start();
         if (track_ > 0) musicPlayer_->Play();
         SetStatus(L"Back in the library.");
         ShowPage(1);

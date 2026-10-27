@@ -54,6 +54,10 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <CompileAsWinRT>true</CompileAsWinRT>
     </ClCompile>
+    <ClCompile Include="LivingBackdrop.cpp">
+      <CompileAsWinRT>true</CompileAsWinRT>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
     <ClCompile Include="CatalogShell.cpp">
       <CompileAsWinRT>true</CompileAsWinRT>
       <LanguageStandard>stdcpp17</LanguageStandard>
@@ -103,6 +107,7 @@
     <ClInclude Include="VitaLibretroHost.h" />
     <ClInclude Include="UwpFileRedirect.h" />
     <ClInclude Include="CrashLog.h" />
+    <ClInclude Include="LivingBackdrop.h" />
     <ClInclude Include="CoreOptions.h" />
     <ClInclude Include="VitaGuestCpuUwpProbe.h" />
     <ClInclude Include="VulkanDznProbe.h" />
