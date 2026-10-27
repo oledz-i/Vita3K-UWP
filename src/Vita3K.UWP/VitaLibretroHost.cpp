@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "VitaLibretroHost.h"
+#include "CrashLog.h"
 #include "UwpFileRedirect.h"
 #include <algorithm>
 #include <cstdarg>
@@ -76,7 +77,18 @@ VitaLibretroHost::~VitaLibretroHost() {
 }
 
 void VitaLibretroHost::LogLine(const std::string& line) {
-    Log(1, "%s\n", line.c_str());
+    if (active_ == this) {
+        Log(1, "%s\n", line.c_str());
+        return;
+    }
+    // No core running yet (app start): straight to the file, or the line is lost.
+    std::lock_guard<std::mutex> guard(logsMutex_);
+    if (runtimeLogPath_.empty()) return;
+    if (FILE* file = _wfsopen(runtimeLogPath_.c_str(), L"ab", _SH_DENYNO)) {
+        std::fwrite(line.data(), 1, line.size(), file);
+        std::fputc('\n', file);
+        std::fclose(file);
+    }
 }
 
 // The loading screen's stages, recognised in what the core logs while it
@@ -119,6 +131,7 @@ void VitaLibretroHost::Shutdown() {
     unsupportedVideo_ = false;
     if (active_ == this) active_ = nullptr;
     if (module_) {
+        vita3k_uwp::DetachCrashLogChain(); // the core's filter goes with its DLL
         FreeLibrary(module_);
         module_ = nullptr;
     }
@@ -332,6 +345,8 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
         UnloadGame();
         return false;
     }
+    // The core put its guest fault filter in front: back on top, chaining to it.
+    vita3k_uwp::ReassertCrashLog();
     detail = L"Vita3K retro_load_game returned true. Guest execution and "
              L"visible game frames must still be verified.";
     return true;

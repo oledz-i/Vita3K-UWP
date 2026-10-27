@@ -84,7 +84,23 @@ void ScanStack(DWORD64 rsp) {
     }
 }
 
+thread_local int t_inFilter = 0;
+
 LONG WINAPI Filter(EXCEPTION_POINTERS* info) {
+    // Re-entered through the chain (a filter after this one chains back to
+    // it): let the outer call decide.
+    if (t_inFilter) return EXCEPTION_CONTINUE_SEARCH;
+    ++t_inFilter;
+    // The filters after this one first: the core's guest memory fault filter
+    // resumes faults it recovers from, and those are not crashes. Only call it
+    // while its code is still loaded (the core can be unloaded).
+    LONG result = EXCEPTION_CONTINUE_SEARCH;
+    if (g_previous && ImageOf(reinterpret_cast<DWORD64>(g_previous)))
+        result = g_previous(info);
+    if (result == EXCEPTION_CONTINUE_EXECUTION) {
+        --t_inFilter;
+        return result;
+    }
     if (InterlockedExchange(&g_reported, 1) == 0 && info && info->ExceptionRecord) {
         const auto* record = info->ExceptionRecord;
         char line[512];
@@ -106,7 +122,8 @@ LONG WINAPI Filter(EXCEPTION_POINTERS* info) {
 #endif
         Append("CRASH: end of report\n");
     }
-    return g_previous ? g_previous(info) : EXCEPTION_CONTINUE_SEARCH;
+    --t_inFilter;
+    return result;
 }
 
 void OnAbort(int) {
@@ -130,5 +147,19 @@ void InstallCrashLog(const std::wstring& logPath) {
 
 void WriteCrashLine(const char* text) {
     Append(text);
+}
+
+void ReassertCrashLog() {
+    if (!g_path[0]) return;
+    // Something installed its own filter since (the UI framework, the core's
+    // guest fault filter): go back on top and chain to it. Filter calls the
+    // rest of the chain first, so the order is safe either way.
+    const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(Filter);
+    if (current && current != Filter) g_previous = current;
+}
+
+void DetachCrashLogChain() {
+    // Before the core is unloaded: its filter's code goes with it.
+    g_previous = nullptr;
 }
 }

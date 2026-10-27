@@ -8,6 +8,7 @@
 #include "VitaGuestCpuUwpProbe.h"
 #include "CoreOptions.h"
 #include "UwpFileRedirect.h"
+#include "CrashLog.h"
 #include <fileapifromapp.h>
 #include <share.h>
 #include <cstdio>
@@ -375,6 +376,23 @@ CatalogShell::CatalogShell() {
     // The app's own file calls (std::filesystem in Settings) reach USB drives too.
     vita3k_uwp::RedirectCoreFileAccess(vita3k_uwp::ModuleFromAddress(reinterpret_cast<const void*>(&Pref)));
     libretro_.SetLogPath(std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-runtime.log");
+    {
+        // A game was running when the app last ended and nothing cleared the
+        // marker: the app was closed or terminated mid-game. A crash the
+        // crash log caught is above in the log; a fail-fast or the console
+        // ending the app leaves only this.
+        const std::wstring marker = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-session.txt";
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, marker.c_str(), L"rb") == 0 && file) {
+            char text[400] = {};
+            const size_t got = fread(text, 1, sizeof(text) - 1, file);
+            fclose(file);
+            text[got] = 0;
+            libretro_.LogLine(std::string("Previous session ended while a game was running, without returning to the library (") + text +
+                "). If no CRASH: lines precede this, the app was closed from the console or ended by a fail-fast.");
+            DeleteFileW(marker.c_str());
+        }
+    }
     CleanUpOldCopies();
 
     // Cinematic television layout: permanently dark canvas, narrow icon rail,
@@ -3100,6 +3118,7 @@ void CatalogShell::ExitGameView() {
     inGame_ = false;
     libretro_.SetProgressSink(nullptr);
     libretro_.SetMenuSink(nullptr);
+    DeleteFileW((std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-session.txt").c_str());
     quickMenuOpen_ = false;
     quickMenu_ = nullptr;
     SetStatus(L"Closing the game...");
@@ -3283,6 +3302,18 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
     libretro_.StopRunning();
     renderer_.Shutdown();
     EnterGameView(title);
+    {
+        const std::wstring marker = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-session.txt";
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, marker.c_str(), L"wb") == 0 && file) {
+            SYSTEMTIME now{};
+            GetLocalTime(&now);
+            const std::string line = NarrowUtf8(title->Data()) + ", started " + std::to_string(now.wHour) + ":" +
+                (now.wMinute < 10 ? "0" : "") + std::to_string(now.wMinute);
+            fwrite(line.data(), 1, line.size(), file);
+            fclose(file);
+        }
+    }
     std::wstring displayError;
     if (!renderer_.Initialize(reinterpret_cast<IUnknown*>(renderSurface_), 960, 544, displayError)) {
         booting_ = false;
@@ -3303,6 +3334,7 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         std::wstring error;
         const bool presented = renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
         const auto shown = ++framesShown_;
+        if (shown % 3600 == 0) vita3k_uwp::ReassertCrashLog();
         if (shown <= 5 || shown % 30 == 0) {
             for (const auto& message : renderer_.TakeDebugMessages())
                 libretro_.LogLine("[d3d12] " + message);
