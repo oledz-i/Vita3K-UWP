@@ -27721,6 +27721,18 @@ index 0ec652c0..3bbdf98d 100644
 +LANG_STRING(resume, "overlay.resume")
 +LANG_STRING(exit, "overlay.exit")
  LANG_STRING(compiling_shaders, "overlay.compiling_shaders")
+diff --git a/vita3k/libretro/CMakeLists.txt b/vita3k/libretro/CMakeLists.txt
+index 78ac8e50..c975ca1b 100644
+--- a/vita3k/libretro/CMakeLists.txt
++++ b/vita3k/libretro/CMakeLists.txt
+@@ -23,7 +23,6 @@ target_link_libraries(vita3k_libretro PRIVATE
+ 	audio
+ 	camera
+ 	config
+-	cppcommon
+ 	ctrl
+ 	compat
+ 	dialog
 diff --git a/vita3k/libretro/libretro_game_loader.cpp b/vita3k/libretro/libretro_game_loader.cpp
 index dc81795a..4b5faf64 100644
 --- a/vita3k/libretro/libretro_game_loader.cpp
