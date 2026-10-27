@@ -761,128 +761,15 @@ void shutdown_app_runtime''', '''    state.motion.init();
 void shutdown_app_runtime''')
 print('app::init timing added.')
 
-# ── Black screen on Dozen (Vulkan on Direct3D 12) ───────────────────────────
-# On Xbox the game's frames came out black while Vita3K's own overlay, drawn
-# through a plain Vulkan pipeline, showed. Three things the game's rendering
-# uses and the overlay does not, each of which D3D12 has no direct equivalent
-# for and Dozen has to emulate, are replaced with what upstream already does
-# elsewhere.
-#
-# 1. Negative viewport heights. GXM's y axis points the other way, so the
-#    Vulkan viewport took a negative height (VK_KHR_maintenance1). D3D12 has
-#    none; Dozen flips y in a shader variant. The viewport is now positive and
-#    the vertex shader negates y, the way the OpenGL backend flips with
-#    viewport_flip: y_f = (-yScale) * (-y_ndc) + yOffset, the same pixels,
-#    winding and gl_FragCoord as before.
-sync = 'vita3k/renderer/src/vulkan/sync_state.cpp'
-replace(sync, '''    context.viewport = vk::Viewport{
-        .x = x * res_multiplier,
-        .y = y * res_multiplier,
-        .width = w * res_multiplier,
-        .height = h * res_multiplier,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f
-    };''', '''    context.viewport = vk::Viewport{
-        .x = x * res_multiplier,
-        .y = y * res_multiplier,
-        .width = w * res_multiplier,
-        .height = h * res_multiplier,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f
-    };
-#ifdef VITA3K_UWP
-    // a positive height, the y flip done in the vertex shader instead
-    context.viewport_y_flip = 1.0f;
-    if (h < 0) {
-        context.viewport.y = (y + h) * res_multiplier;
-        context.viewport.height = -h * res_multiplier;
-        context.viewport_y_flip = -1.0f;
-    }
-#endif''')
-replace(sync, '''void sync_viewport_flat(VKContext &context) {
-    context.viewport = vk::Viewport{''', '''void sync_viewport_flat(VKContext &context) {
-#ifdef VITA3K_UWP
-    context.viewport_y_flip = 1.0f;
-#endif
-    context.viewport = vk::Viewport{''')
-replace('vita3k/renderer/include/renderer/vulkan/types.h', '    vk::Viewport viewport;\n',
-        '    vk::Viewport viewport;\n#ifdef VITA3K_UWP\n    // -1 when the vertex shader flips y (the viewport is kept positive)\n    float viewport_y_flip = 1.0f;\n#endif\n')
-replace('vita3k/renderer/src/vulkan/scene.cpp', '    vert_ublock.viewport_flip = context.record.viewport_flip;\n',
-        '''#ifdef VITA3K_UWP
-    vert_ublock.viewport_flip = { 1.0f, context.viewport_y_flip, 1.0f, 1.0f };
-#else
-    vert_ublock.viewport_flip = context.record.viewport_flip;
-#endif
-''')
-replace('vita3k/shader/src/spirv_recompiler.cpp', '''                // Apply the viewport flip if opengl
-                if (!translation_state.is_vulkan && translation_state.render_info_id != spv::NoResult) {''', '''                // Apply the viewport flip: OpenGL's, and on Xbox Vulkan's too
-                // (its viewport is kept positive there)
-#ifdef VITA3K_UWP
-                if (translation_state.render_info_id != spv::NoResult) {
-#else
-                if (!translation_state.is_vulkan && translation_state.render_info_id != spv::NoResult) {
-#endif''')
-# Shaders on disk were made without the flip: a new cache version.
-replace('vita3k/shader/include/shader/spirv_recompiler.h', 'static constexpr uint32_t CURRENT_VERSION = 13;',
-        '#ifdef VITA3K_UWP\nstatic constexpr uint32_t CURRENT_VERSION = 9013; // Xbox: viewport flip in the shader\n#else\nstatic constexpr uint32_t CURRENT_VERSION = 13;\n#endif')
-
-# 2. The colour attachment as an input attachment of its own subpass, in
-#    every render pass, for framebuffer fetch. D3D12 cannot read a render
-#    target in the pass that writes it; Dozen emulates it. Only shaders that
-#    read the previous colour (programmable blending) need it, so on Xbox it
-#    is used with High Accuracy Rendering only. Without it those shaders read
-#    nothing, as on GPUs without any framebuffer fetch.
-# 3. Texture viewport: a std430 uniform block with a vec2 array (stride 8),
-#    which D3D12 constant buffers do not lay out that way. Read wrong, every
-#    texture lookup lands on one corner texel: a transparent one, in most
-#    sprite sheets. Upstream's path without it copies the texture instead.
-rend = 'vita3k/renderer/src/vulkan/renderer.cpp'
-replace(rend, '''    } else {
-        // We use subpass input to get something similar to direct fragcolor access (there is no difference for the shader)
-        features.direct_fragcolor = true;
-        features.support_shader_interlock = false;
-    }
-
-    // texture viewport is faster but not entirely accurate
-    if (support_standard_layout && !use_high_accuracy) {
-        LOG_INFO("The Vulkan renderer is using texture viewport for better performance");
-        features.use_texture_viewport = true;
-    }''', '''    } else {
-        // We use subpass input to get something similar to direct fragcolor access (there is no difference for the shader)
-        features.direct_fragcolor = true;
-        features.support_shader_interlock = false;
-    }
-#ifdef VITA3K_UWP
-    if (!use_high_accuracy) {
-        features.direct_fragcolor = false;
-        LOG_INFO("Xbox: framebuffer fetch off (High Accuracy Rendering turns it on)");
-    }
-    LOG_INFO("Xbox: viewport y flip done in the vertex shader; texture viewport off");
-#else
-
-    // texture viewport is faster but not entirely accurate
-    if (support_standard_layout && !use_high_accuracy) {
-        LOG_INFO("The Vulkan renderer is using texture viewport for better performance");
-        features.use_texture_viewport = true;
-    }
-#endif''')
-replace('vita3k/renderer/src/vulkan/pipeline_cache.cpp', '''        subpass.setColorAttachments(color_ref);
-        subpass.setInputAttachments(color_ref);''', '''        subpass.setColorAttachments(color_ref);
-#ifdef VITA3K_UWP
-        if (state.features.direct_fragcolor)
-#endif
-        subpass.setInputAttachments(color_ref);''')
-print('Dozen rendering: positive viewports, framebuffer fetch only with high accuracy, no texture viewport.')
 
 # ── The frame's way out, measured ───────────────────────────────────────────
 # With the three changes above the game's frames were still black on Xbox,
 # while the overlay showed. Two steps between the game and the frontend were
 # never seen working on Dozen: the game's surface itself, and the blit that
 # copies it into the image handed over (the overlay is drawn straight into
-# that image). The surface is now read back at nine points each time it is
-# presented (logged at first and every 600 frames), and a same-size copy
-# between 32-bit RGBA/BGRA formats is a plain image copy, which D3D12 does
-# natively, rather than a blit, which Dozen draws with a shader.
+# that image). The surface is read back at nine points each time it is
+# presented (logged at first and every 600 frames): zeros there mean the
+# game's draws never reached it.
 lv = 'vita3k/libretro/libretro_vita3k.cpp'
 replace(lv, '''    std::array<vk::Framebuffer, 3> overlay_framebuffers;
 } s_present;''', '''    std::array<vk::Framebuffer, 3> overlay_framebuffers;
@@ -920,18 +807,6 @@ replace(lv, '''    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, 
         cmd.copyImageToBuffer(surface, vk::ImageLayout::eGeneral, s_present.probe.buffer, taps);
         probed = true;
     }
-    const bool same_size_32bit = surface_format == vk::Format::eR8G8B8A8Unorm || surface_format == vk::Format::eB8G8R8A8Unorm
-        || surface_format == vk::Format::eB8G8R8A8Srgb;
-    if (surface && same_size_32bit) {
-        vk::ImageCopy region{
-            .srcSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
-            .srcOffset = { static_cast<int32_t>(ox), static_cast<int32_t>(oy), 0 },
-            .dstSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
-            .dstOffset = { 0, 0, 0 },
-            .extent = { w, h, 1 },
-        };
-        cmd.copyImage(surface, vk::ImageLayout::eGeneral, image.image, vk::ImageLayout::eGeneral, region);
-    } else
 #endif
     if (surface && surface_format == vk::Format::eR8G8B8A8Srgb) {''')
 replace(lv, '''    (void)vk_state.device.waitForFences(s_present.fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
@@ -957,7 +832,7 @@ replace(lv, '''    (void)vk_state.device.waitForFences(s_present.fence, VK_TRUE,
     }
 #endif
 ''')
-print('Presentation: surface probe in the log, plain copies for 32-bit surfaces.')
+print('Presentation: surface probe in the log.')
 
 # ── The render thread does not take the app down ────────────────────────────
 # A Vulkan error on the libretro render thread (a lost D3D12 device, for one)
@@ -996,31 +871,3 @@ replace(lv, '''                    }
     lr_trace("context_reset_finalize.complete", "finished");''')
 print('Render thread errors are logged instead of ending the app.')
 
-# ── Depth format the Xbox accepts ───────────────────────────────────────────
-# With Dozen's log in, every game pipeline was refused by D3D12 with
-# E_INVALIDARG although both its shaders passed DXIL validation; the dump
-# showed the depth format, D32_FLOAT_S8X24_UINT, and the overlay pipeline,
-# which has no depth buffer, was the only one that built. Azahar draws through
-# the same Dozen with D24S8. On Xbox D24S8 comes first.
-replace('vita3k/renderer/src/vulkan/renderer.cpp', '''    if (depth_attachment(vk::Format::eD32SfloatS8Uint))
-        s.deep_stencil_use = vk::Format::eD32SfloatS8Uint;
-    else if (depth_attachment(vk::Format::eD24UnormS8Uint))
-        s.deep_stencil_use = vk::Format::eD24UnormS8Uint;
-    else
-        s.deep_stencil_use = vk::Format::eD16Unorm;''', '''#ifdef VITA3K_UWP
-    if (depth_attachment(vk::Format::eD24UnormS8Uint))
-        s.deep_stencil_use = vk::Format::eD24UnormS8Uint;
-    else if (depth_attachment(vk::Format::eD32SfloatS8Uint))
-        s.deep_stencil_use = vk::Format::eD32SfloatS8Uint;
-    else
-        s.deep_stencil_use = vk::Format::eD16Unorm;
-    LOG_INFO("Xbox: depth/stencil format {}", vk::to_string(s.deep_stencil_use));
-#else
-    if (depth_attachment(vk::Format::eD32SfloatS8Uint))
-        s.deep_stencil_use = vk::Format::eD32SfloatS8Uint;
-    else if (depth_attachment(vk::Format::eD24UnormS8Uint))
-        s.deep_stencil_use = vk::Format::eD24UnormS8Uint;
-    else
-        s.deep_stencil_use = vk::Format::eD16Unorm;
-#endif''')
-print('Xbox: D24S8 depth first.')

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <wrl/client.h>
 #include <string>
+#include <vector>
 #include <cstdint>
 
 class D3D12Host final {
@@ -38,6 +39,14 @@ public:
     void SetViewport(float width, float height, bool stretch);
     void Shutdown();
     bool Ready() const { return swapChain_ != nullptr; }
+    // The D3D12 debug layer, which says in words why a call failed (an
+    // E_INVALIDARG from CreatePipelineState, for one). Only before the first
+    // D3D12 device of the process; false when the console has no layer.
+    static bool EnableDebugLayer();
+    static bool DebugLayerOn();
+    // Errors and warnings D3D12 recorded since the last call. The device is
+    // one per GPU in a process, so these include Dozen's (the game's) calls.
+    std::vector<std::string> TakeDebugMessages();
 
 private:
     static constexpr unsigned kBufferCount = 2;
@@ -50,6 +59,8 @@ private:
     Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain_;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameUpload_;
+    Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue_;
+    unsigned debugMessagesLogged_ = 0;
     unsigned width_ = 0;
     unsigned height_ = 0;
     HANDLE fenceEvent_ = nullptr;

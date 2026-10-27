@@ -10,6 +10,37 @@ using Microsoft::WRL::ComPtr;
 
 D3D12Host::~D3D12Host() { Shutdown(); }
 
+namespace { bool g_debugLayer = false; }
+bool D3D12Host::EnableDebugLayer() {
+    ComPtr<ID3D12Debug> debug;
+    if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(debug.GetAddressOf()))) || !debug) return false;
+    debug->EnableDebugLayer();
+    g_debugLayer = true;
+    return true;
+}
+bool D3D12Host::DebugLayerOn() { return g_debugLayer; }
+
+std::vector<std::string> D3D12Host::TakeDebugMessages() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<std::string> out;
+    if (!infoQueue_) return out;
+    const UINT64 count = infoQueue_->GetNumStoredMessages();
+    for (UINT64 i = 0; i < count && debugMessagesLogged_ < 400; ++i) {
+        SIZE_T size = 0;
+        if (FAILED(infoQueue_->GetMessage(i, nullptr, &size)) || size == 0) continue;
+        std::vector<char> raw(size);
+        auto* message = reinterpret_cast<D3D12_MESSAGE*>(raw.data());
+        if (FAILED(infoQueue_->GetMessage(i, message, &size))) continue;
+        if (message->Severity > D3D12_MESSAGE_SEVERITY_WARNING) continue; // info and messages
+        const char* level = message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR ? "error" : "warning";
+        out.push_back(std::string(level) + " " + std::to_string(static_cast<int>(message->ID)) + ": " +
+            (message->pDescription ? std::string(message->pDescription, message->DescriptionByteLength ? message->DescriptionByteLength - 1 : 0) : std::string()));
+        ++debugMessagesLogged_;
+    }
+    infoQueue_->ClearStoredMessages();
+    return out;
+}
+
 bool D3D12Host::Fail(const wchar_t* stage, HRESULT code, std::wstring& result) {
     result = std::wstring(stage) + L" failed (HRESULT " +
         std::to_wstring(static_cast<unsigned long>(code)) + L")";
@@ -26,6 +57,8 @@ void D3D12Host::Shutdown() {
         fenceEvent_ = nullptr;
     }
     frameUpload_.Reset();
+    infoQueue_.Reset();
+    debugMessagesLogged_ = 0;
     width_ = 0;
     height_ = 0;
     fence_.Reset();
@@ -54,6 +87,10 @@ bool D3D12Host::Initialize(IUnknown* panel, unsigned width, unsigned height, std
     HRESULT hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0,
         IID_PPV_ARGS(device_.GetAddressOf()));
     if (FAILED(hr)) return Fail(L"D3D12CreateDevice", hr, result);
+    if (g_debugLayer && SUCCEEDED(device_.As(&infoQueue_)) && infoQueue_) {
+        infoQueue_->SetMessageCountLimit(4096);
+        infoQueue_->ClearStoredMessages();
+    }
 
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
     queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;

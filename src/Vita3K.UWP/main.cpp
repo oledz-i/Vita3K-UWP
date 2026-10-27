@@ -20,6 +20,12 @@ public:
                 L": " + message + L"\n").c_str(), -1, line, sizeof(line) - 1, nullptr, nullptr);
             vita3k_uwp::WriteCrashLine(line);
         });
+#if !defined(VITA3K_RELEASE_BUILD)
+        // Before any D3D12 device exists (turning it on later removes the
+        // device): D3D12 then says in words why a call failed, which goes to
+        // the log as [d3d12] lines while a game runs.
+        D3D12Host::EnableDebugLayer();
+#endif
         RequiresPointerMode = ApplicationRequiresPointerMode::WhenRequested;
         ElementSoundPlayer::State = ElementSoundPlayerState::Off;
     }

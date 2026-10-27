@@ -3295,11 +3295,18 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         return;
     }
     libretro_.LogLine("Display: presenter ready (" + NarrowUtf8(displayError) + ")");
+    libretro_.LogLine(D3D12Host::DebugLayerOn()
+        ? "Display: D3D12 debug layer on; its errors follow as [d3d12] lines"
+        : "Display: D3D12 debug layer not available on this console (or a release build)");
     const std::wstring snapshotPath = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\frame-300.bmp";
     libretro_.SetFrameSink([this,snapshotPath](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
         std::wstring error;
         const bool presented = renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
         const auto shown = ++framesShown_;
+        if (shown <= 5 || shown % 30 == 0) {
+            for (const auto& message : renderer_.TakeDebugMessages())
+                libretro_.LogLine("[d3d12] " + message);
+        }
         if (shown == 300) {
             // Exactly what the core handed over, next to the log: settles
             // whether a dark screen is in the frames or in the display.
