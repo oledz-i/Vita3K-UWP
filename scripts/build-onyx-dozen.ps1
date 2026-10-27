@@ -73,7 +73,6 @@ if ($imports -match '(?i)(^|\W)VCRUNTIME140(_1)?\.dll(\W|$)' -and
     throw 'Dozen links desktop VCRUNTIME instead of UWP Store runtime'
 }
 Copy-Item -LiteralPath $dzn -Destination (Join-Path $out 'vulkan_dzn.dll') -Force
-}
 Copy-Item -LiteralPath $dxil -Destination (Join-Path $out 'dxil.dll') -Force
 Get-FileHash $dzn,$dxil -Algorithm SHA256 |
     Select-Object Path,Hash | Format-Table | Out-String |
