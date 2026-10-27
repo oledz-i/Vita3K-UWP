@@ -22,11 +22,11 @@ TimeSpan Seconds(double s) {
     return t;
 }
 Color WithAlpha(Color c, int a) {
-    return ColorHelper::FromArgb(static_cast<unsigned char>(std::max(0, std::min(255, a))), c.R, c.G, c.B);
+    return ColorHelper::FromArgb(static_cast<unsigned char>((std::max)(0, (std::min)(255, a))), c.R, c.G, c.B);
 }
 Color Scale(Color c, double f) {
     const auto ch = [f](unsigned char v) {
-        return static_cast<unsigned char>(std::max(0.0, std::min(255.0, v * f)));
+        return static_cast<unsigned char>((std::max)(0.0, (std::min)(255.0, v * f)));
     };
     return ColorHelper::FromArgb(255, ch(c.R), ch(c.G), ch(c.B));
 }
@@ -108,7 +108,7 @@ struct Scene {
     // Large lights wandering slowly across the screen.
     void Wanderers(Color a, Color b, int count, int core) {
         for (int i = 0; i < count; ++i) {
-            const float size = Rand(0.55f, 0.95f) * std::max(w, h);
+            const float size = Rand(0.55f, 0.95f) * (std::max)(w, h);
             const Color color = i % 2 == 0 ? a : b;
             auto glow = Sprite(Glow(color, core), size, size, 0, 0);
             glow->CenterPoint = float3(size / 2, size / 2, 0);
@@ -251,7 +251,7 @@ void LivingBackdrop::Build() {
     case 4: { // Orbit: a starfield, a planet glow and a ring turning around it
         s.Stars(white, 90);
         s.Wanderers(glow_, Mix(glow_, accent_, 0.5), 2, 130);
-        const float planet = std::min(width_, height_) * 0.62f;
+        const float planet = (std::min)(width_, height_) * 0.62f;
         const float px = width_ * 0.66f;
         const float py = height_ * 0.18f;
         auto halo = s.Sprite(s.Glow(accent_, 140, 0.3f), planet, planet, px, py);
