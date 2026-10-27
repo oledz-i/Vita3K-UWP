@@ -12,6 +12,7 @@
 #include <wrl/client.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <cstdint>
 
 class D3D12Host final {
@@ -60,7 +61,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameUpload_;
     Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue_;
-    unsigned debugMessagesLogged_ = 0;
+    std::map<int, unsigned long long> debugSeen_; // message ID -> times seen (whole session)
     unsigned width_ = 0;
     unsigned height_ = 0;
     HANDLE fenceEvent_ = nullptr;

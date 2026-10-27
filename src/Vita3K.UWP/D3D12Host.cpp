@@ -24,18 +24,26 @@ std::vector<std::string> D3D12Host::TakeDebugMessages() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<std::string> out;
     if (!infoQueue_) return out;
+    // Each distinct message once (the first time it appears), then how many
+    // more of it came, every 2000: one repeated warning filled the old cap
+    // of 400 lines before the first refused pipeline, and its reason was lost.
     const UINT64 count = infoQueue_->GetNumStoredMessages();
-    for (UINT64 i = 0; i < count && debugMessagesLogged_ < 400; ++i) {
+    for (UINT64 i = 0; i < count; ++i) {
         SIZE_T size = 0;
         if (FAILED(infoQueue_->GetMessage(i, nullptr, &size)) || size == 0) continue;
         std::vector<char> raw(size);
         auto* message = reinterpret_cast<D3D12_MESSAGE*>(raw.data());
         if (FAILED(infoQueue_->GetMessage(i, message, &size))) continue;
         if (message->Severity > D3D12_MESSAGE_SEVERITY_WARNING) continue; // info and messages
+        auto& seen = debugSeen_[static_cast<int>(message->ID)];
+        ++seen;
         const char* level = message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR ? "error" : "warning";
-        out.push_back(std::string(level) + " " + std::to_string(static_cast<int>(message->ID)) + ": " +
-            (message->pDescription ? std::string(message->pDescription, message->DescriptionByteLength ? message->DescriptionByteLength - 1 : 0) : std::string()));
-        ++debugMessagesLogged_;
+        if (seen == 1 && debugSeen_.size() <= 300) {
+            out.push_back(std::string(level) + " " + std::to_string(static_cast<int>(message->ID)) + ": " +
+                (message->pDescription ? std::string(message->pDescription, message->DescriptionByteLength ? message->DescriptionByteLength - 1 : 0) : std::string()));
+        } else if (seen % 2000 == 0) {
+            out.push_back(std::string(level) + " " + std::to_string(static_cast<int>(message->ID)) + " seen " + std::to_string(seen) + " times so far");
+        }
     }
     infoQueue_->ClearStoredMessages();
     return out;
@@ -58,7 +66,6 @@ void D3D12Host::Shutdown() {
     }
     frameUpload_.Reset();
     infoQueue_.Reset();
-    debugMessagesLogged_ = 0;
     width_ = 0;
     height_ = 0;
     fence_.Reset();
