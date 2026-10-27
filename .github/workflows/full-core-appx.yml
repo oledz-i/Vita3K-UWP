@@ -206,7 +206,7 @@ jobs:
         with:
           name: vita3k-core-uwp-runtime
           path: artifacts/core-runtime/
-      - name: Retrieve the verified Onyx Mesa Dozen driver
+      - name: Retrieve Dozen (source build, else the pinned Onyx build)
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -216,11 +216,8 @@ jobs:
           Start-Transcript -Path artifacts/logs/steps.log -Append
           try {
             $ErrorActionPreference = 'Stop'
-            gh run download 40146146144 --repo oledz-i/Vita3K-UWP --name onyx-mesa-dozen-uwp --dir artifacts/onyx-dozen
-            if ($LASTEXITCODE -ne 0) { throw 'Could not download the pinned Onyx Dozen build; re-run onyx-dozen.yml and update the run id' }
-            foreach ($f in @('vulkan_dzn.dll','dxil.dll')) {
-              if (!(Test-Path (Join-Path 'artifacts/onyx-dozen' $f))) { throw "$f missing from Dozen artifact" }
-            }
+            # Newest Dozen built from source (Onyx patches + scripts/dozen-patches), else the pinned one.
+            ./scripts/get-dozen.ps1 -Destination artifacts/onyx-dozen
           } finally { Stop-Transcript }
       - name: Stage everything beside the app
         shell: pwsh

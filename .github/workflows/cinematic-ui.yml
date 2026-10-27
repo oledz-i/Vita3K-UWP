@@ -28,8 +28,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          gh run download 40146146144 --repo oledz-i/Vita3K-UWP --name onyx-mesa-dozen-uwp --dir artifacts/onyx-cached-gpu
-          if ($LASTEXITCODE -ne 0) { throw 'Could not retrieve the actual Onyx-patched Mesa UWP build' }
+          ./scripts/get-dozen.ps1 -Destination artifacts/onyx-cached-gpu
           foreach ($dll in @('vulkan_dzn.dll', 'dxil.dll')) {
             $from = Join-Path 'artifacts/onyx-cached-gpu' $dll
             if (!(Test-Path $from)) { throw "$dll missing from the Onyx source-compiled GPU artifact" }
