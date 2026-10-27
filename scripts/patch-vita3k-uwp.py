@@ -291,8 +291,9 @@ text = text.replace(old, '''#ifdef VITA3K_UWP
 core.write_text(text)
 print('Connected staged firmware installation to UWP game loading; skipped installed components.')
 
-# UWP cannot register a vectored handler. Its supported process top-level
-# filter can resume a handled protection fault. Preserve the real callback and
+# The UWP headers hide AddVectoredExceptionHandler. MemoryFaultHandler finds
+# it at run time and takes guest faults first, as desktop Vita3K does, with
+# the top-level filter as the fallback. Preserve the real callback and
 # protect-tree invalidation; never replace guest fault handling with a no-op.
 import shutil
 helper = pathlib.Path(__file__).resolve().parent.parent / 'src/platform/UwpMemoryFaultHandler.h'

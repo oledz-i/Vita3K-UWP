@@ -449,10 +449,18 @@ void __cdecl VitaLibretroHost::Log(unsigned level, const char* format, ...) {
             // the app runs; _wfopen_s would lock it.
             host->logFile_ = _wfsopen(host->runtimeLogPath_.c_str(), L"ab", _SH_DENYNO);
             host->logFilePath_ = host->runtimeLogPath_;
+            if (host->logFile_) std::setvbuf(host->logFile_, nullptr, _IOFBF, 64 * 1024);
         }
         if (host->logFile_) {
             std::fwrite(message, 1, std::strlen(message), host->logFile_);
-            std::fflush(host->logFile_);
+            // A flush per line was a write to the drive for every file a game
+            // opened (hundreds a second in some games). Warnings and errors
+            // still go out at once; the rest at least every quarter second.
+            const unsigned long long now = GetTickCount64();
+            if (level >= 2 || now - host->lastLogFlush_ >= 250) {
+                std::fflush(host->logFile_);
+                host->lastLogFlush_ = now;
+            }
         }
     }
     host->ObserveLog(message);
