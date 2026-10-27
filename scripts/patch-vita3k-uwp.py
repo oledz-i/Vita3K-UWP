@@ -19,16 +19,12 @@ source = pathlib.Path(sys.argv[1]).resolve()
 if not (source / "vita3k/util/include/util/fs.h").is_file():
     raise SystemExit("Missing real upstream Vita3K filesystem header")
 
+# Upstream Vita3K uses std::filesystem and header-only Boost since its
+# 2026-10 filesystem switch (merged into the pinned core): no Boost.Filesystem
+# to take out any more. The Xbox build still needs its VITA3K_UWP define.
 manifest_file = source / "vcpkg.json"
 manifest = json.loads(manifest_file.read_text())
-removed = {"boost-filesystem"}
-existing = set(x for x in manifest["dependencies"] if isinstance(x, str))
-assert "boost-filesystem" in existing, existing
-manifest["dependencies"] = [
-    dep for dep in manifest["dependencies"]
-    if not isinstance(dep, str) or dep not in removed
-]
-manifest_file.write_text(json.dumps(manifest, indent=2) + "\n")
+assert "boost-filesystem" not in manifest["dependencies"], "Boost.Filesystem is back in the core"
 
 cmake = source / "CMakeLists.txt"
 text = cmake.read_text()
@@ -36,81 +32,27 @@ assert text.count("\nget_boost()\n") == 1, "Upstream Boost integration moved"
 text = text.replace(
     "\nget_boost()\n",
     "\nif(CMAKE_SYSTEM_NAME STREQUAL \"WindowsStore\")\n"
-    "  # Port experiment: use std::filesystem, not the desktop-only Boost.Filesystem.\n"
     "  add_compile_definitions(VITA3K_UWP=1)\n"
-    "  find_package(Boost 1.81 REQUIRED)\n"
-    "  set(Boost_LIBRARIES \"\")\n"
-    "else()\n"
-    "  get_boost()\n"
-    "endif()\n",
+    "endif()\n"
+    "get_boost()\n",
 )
 cmake.write_text(text)
-
 filesystem = source / "vita3k/util/include/util/fs.h"
-original = filesystem.read_text()
-old = (
-    "#include <boost/filesystem.hpp>\n"
-    "#include <boost/filesystem/fstream.hpp>"
-)
-new = (
-    "#ifdef VITA3K_UWP\n"
-    "#include <filesystem>\n"
-    "#include <fstream>\n"
-    "namespace fs {\n"
-    "using namespace std::filesystem;\n"
-    "using ifstream = std::ifstream;\n"
-    "using ofstream = std::ofstream;\n"
-    "using fstream = std::fstream;\n"
-    "}\n"
-    "#else\n"
-    "#include <boost/filesystem.hpp>\n"
-    "#include <boost/filesystem/fstream.hpp>\n"
-    "#endif"
-)
-assert old in original, "Vita3K util filesystem includes moved"
-original = original.replace(old, new)
-assert "namespace fs = boost::filesystem;" in original
-original = original.replace(
-    "namespace fs = boost::filesystem;",
-    "#ifndef VITA3K_UWP\nnamespace fs = boost::filesystem;\n#endif"
-)
-assert "struct fmt::formatter<boost::filesystem::path> : ostream_formatter {};" in original
-original = original.replace(
-    "struct fmt::formatter<boost::filesystem::path> : ostream_formatter {};",
-    "struct fmt::formatter<fs::path> : ostream_formatter {};"
-)
-filesystem.write_text(original)
+assert "namespace fs = std::filesystem;" in filesystem.read_text(), "fs is no longer std::filesystem"
+print("Core uses std::filesystem; VITA3K_UWP defined for WindowsStore builds.")
 
-print("Applied experimental genuine Vita3K WindowsStore std::filesystem port patch.")
-print(f"Removed manifest dependencies: {', '.join(sorted(existing & removed))}")
-print("Emulator CPU, Vita kernel, package loader, GXM, and graphics code kept intact.")
-
-# The nested build invokes get_boost() again; do not reintroduce filesystem.
-nested = source / 'vita3k/CMakeLists.txt'
-text = nested.read_text()
-assert text.count('\nget_boost()\n') == 1
-nested.write_text(text.replace('\nget_boost()\n', '\nif(NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")\n  get_boost()\nendif()\n'))
-
-# Match the standard filesystem error_code type at its actual call sites.
-for relative in [
-    'config/src/settings.cpp', 'config/src/config.cpp', 'io/src/io.cpp',
-    'libretro/libretro_game_loader.cpp', 'libretro/libretro_vita3k.cpp',
-    'libretro/libretro_lazy_pkg.cpp', 'libretro/libretro_installer.cpp',
-]:
-    path = source / 'vita3k' / relative
-    text = path.read_text()
-    assert 'boost::system::error_code' in text, relative
-    text = text.replace('boost::system::error_code', 'std::error_code')
-    text = '#include <system_error>\n' + text
-    # Trophy refresh hashes the timestamp. std::filesystem returns a clock point.
-    if relative == 'libretro/libretro_vita3k.cpp':
-        assert 'static_cast<long long>(stamp)' in text
-        text = text.replace('static_cast<long long>(stamp)', 'static_cast<long long>(stamp.time_since_epoch().count())')
-    path.write_text(text)
-parent = source / 'vita3k/modules/module_parent.cpp'
-text = parent.read_text().replace('#include <boost/filesystem/operations.hpp>', '#include <util/fs.h>')
-parent.write_text(text)
-print('Adapted nested Boost discovery, filesystem error codes and trophy timestamp handling.')
+# Host CPU details for the log: the registry and process-memory calls are
+# desktop-only APIs that an Xbox app cannot call (or link).
+sysinfo = source / 'vita3k/util/src/sysinfo.cpp'
+text = sysinfo.read_text()
+old = '#elif defined(_WIN32)\n    DWORD mhz = 0, size = sizeof(mhz);'
+assert text.count(old) == 1
+text = text.replace(old, '#elif defined(VITA3K_UWP)\n    return 0;\n' + old, 1)
+old = 'uint64_t get_process_memory_usage() {\n#if defined(_WIN32)'
+assert text.count(old) == 1
+text = text.replace(old, 'uint64_t get_process_memory_usage() {\n#if defined(VITA3K_UWP)\n    return 0;\n#elif defined(_WIN32)', 1)
+sysinfo.write_text(text)
+print('Host CPU/memory details: no desktop-only registry or psapi calls on Xbox.')
 
 # The libretro backend delivers guest audio to the frontend. Do not build
 # the desktop Cubeb fallback or include its desktop-only headers for Xbox.
@@ -175,15 +117,6 @@ endif()''')
 external.write_text(text)
 print('Codec dependencies use source-built UWP FFmpeg 6.1.1 instead of desktop binaries.')
 
-# OSVersion is host logging metadata. Do not probe desktop system DLLs from
-# an AppContainer merely to decorate a log line.
-environment = source / 'external/CppCommon/source/environment.cpp'
-text = environment.read_text()
-old = 'std::string Environment::OSVersion() {\n#if defined(__APPLE__)'
-assert old in text
-text = text.replace(old, 'std::string Environment::OSVersion() {\n#if defined(VITA3K_UWP)\n    return "Windows UWP";\n#elif defined(__APPLE__)', 1)
-environment.write_text(text)
-
 # Pin at the source level too, so a CMake regeneration cannot bring back
 # C++23 on SDL's C++/CX files. Keep Vita3K and the other dependencies unchanged.
 text = external.read_text()
@@ -200,16 +133,7 @@ endif()''')
 external.write_text(text)
 print('Isolated SDL C++/CX targets at C++17 without downgrading the emulator core.')
 
-# std::filesystem has native()/wstring(), but no Boost generic_path() member.
-# All these consumers want a host path; Windows file APIs accept native paths.
-for relative in [
-    'io/include/io/filesystem.h', 'io/include/io/util.h', 'io/src/io.cpp',
-    'util/src/fs_utils.cpp', 'util/src/logging.cpp', 'interface.cpp',
-]:
-    path = source / 'vita3k' / relative
-    text = path.read_text()
-    assert '.generic_path()' in text, relative
-    path.write_text(text.replace('.generic_path()', ''))
+# (generic_path(): upstream now calls fs_utils::generic_path, nothing to adapt.)
 
 # The libretro host owns presentation; Xbox never creates a Win32 HWND surface.
 screen = source / 'vita3k/renderer/src/vulkan/screen_renderer.cpp'
@@ -309,18 +233,7 @@ text = text.replace(old, '''#if defined(VITA3K_UWP)
     PIP_ADAPTER_INFO pAdapterInfo;''', 1)
 network.write_text(text)
 
-# The pinned spdlog predates fmt 12's deprecated implicit format-string
-# conversion. Use its explicit accessor instead of suppressing compiler errors.
-logger = source / 'external/spdlog/include/spdlog/logger.h'
-text = logger.read_text()
-old = '        log_(loc, lvl, details::to_string_view(fmt), std::forward<Args>(args)...);'
-assert text.count(old) == 2
-new = '''#if !defined(SPDLOG_USE_STD_FORMAT) && FMT_VERSION >= 120000
-        log_(loc, lvl, fmt.get(), std::forward<Args>(args)...);
-#else
-''' + old + '\n#endif'
-text = text.replace(old, new, 1)
-logger.write_text(text)
+# (spdlog 1.17, with the core since the upstream merge, uses fmt.get() itself.)
 print('Fixed UWP utility exception logging, network enumeration and fmt 12 compatibility.')
 
 # The libretro wrapper has its own optional desktop VEH logger too. Keep its

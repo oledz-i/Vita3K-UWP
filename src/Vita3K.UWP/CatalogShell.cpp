@@ -2287,10 +2287,50 @@ std::string SavedCoreOption(const vita3k_uwp::CoreOptionDef& option) {
 }
 }
 
-void CatalogShell::ApplyCoreOptions() {
+namespace {
+// Settings a game needs to get through, applied when the player has not set
+// that option themselves. Each from the game's Vita3K compatibility report.
+struct TitleOverride {
+    const wchar_t* titleId;
+    const char* key;
+    const char* value;
+};
+const TitleOverride kTitleOverrides[] = {
+    // Danganronpa: Trigger Happy Havoc (Vita3K/compatibility#94): the
+    // prologue's classroom conversation only goes on with surface sync off.
+    { L"PCSE00261", "vita3k_surface_sync", "disabled" },
+};
+// The title ID (four letters, five digits) in a game's folder or file name.
+std::wstring TitleIdIn(const std::wstring& path) {
+    for (std::size_t i = 0; i + 9 <= path.size(); ++i) {
+        bool match = true;
+        for (std::size_t k = 0; k < 9 && match; ++k) {
+            const wchar_t c = path[i + k];
+            match = k < 4 ? (c >= L'A' && c <= L'Z') : (c >= L'0' && c <= L'9');
+        }
+        const bool edgeBefore = i == 0 || !iswalnum(path[i - 1]);
+        const bool edgeAfter = i + 9 == path.size() || !iswalnum(path[i + 9]);
+        if (match && edgeBefore && edgeAfter) return path.substr(i, 9);
+    }
+    return std::wstring();
+}
+}
+
+void CatalogShell::ApplyCoreOptions(const std::wstring& contentPath) {
+    const std::wstring titleId = TitleIdIn(contentPath);
     for (std::size_t i = 0; i < vita3k_uwp::kCoreOptionCount; ++i) {
         const auto& option = vita3k_uwp::kCoreOptions[i];
-        libretro_.SetOption(option.key, SavedCoreOption(option));
+        std::string value = SavedCoreOption(option);
+        const bool chosen = Pref(CoreOptionPrefKey(option), L"")->Length() != 0;
+        if (!chosen && !titleId.empty()) {
+            for (const auto& o : kTitleOverrides) {
+                if (titleId == o.titleId && std::strcmp(option.key, o.key) == 0) {
+                    value = o.value;
+                    libretro_.LogLine(std::string("Game setting for ") + NarrowUtf8(titleId) + ": " + o.key + " = " + o.value);
+                }
+            }
+        }
+        libretro_.SetOption(option.key, value);
     }
 }
 
@@ -3450,7 +3490,7 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
                 if (percent >= 0) loadingBar_->Value = percent;
             }));
     });
-    ApplyCoreOptions();
+    ApplyCoreOptions(contentPath->Data());
     // No D3D12 pipeline library: on the Xbox, Dozen's attempt to make one
     // (ONYX_PSO_CACHE) came back with the GPU device removed, at the game's
     // first pipeline, and every later game then failed to start.

@@ -27,6 +27,8 @@ on:
       - tests/uwp-path-format-test.cpp
       - scripts/test-uwp-path-format.ps1
       - scripts/apply-onyx-dynarmic.ps1
+      - scripts/apply-core-merge.ps1
+      - scripts/core-merge/**
       - core-candidates.lock.json
       - render-abi.lock.json
       - scripts/build-appx.ps1
@@ -78,6 +80,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Submodule retrieval failed' }
             $actual = (git -C upstream-core rev-parse HEAD).Trim()
             if ($actual -ne $lock.libretro_candidate.commit) { throw 'Pinned core SHA mismatch' }
+          } finally { Stop-Transcript }
+      - name: Merge upstream Vita3K into the pinned core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/core-port | Out-Null
+          Start-Transcript -Path artifacts/core-port/steps.log -Append
+          try {
+            ./scripts/apply-core-merge.ps1 -Source upstream-core
           } finally { Stop-Transcript }
       - name: Use pinned UWP SDL3 platform port
         shell: pwsh

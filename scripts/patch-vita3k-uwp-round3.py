@@ -77,8 +77,8 @@ replace(sce, '''static void traverse_directory(Fat16::Image &img, Fat16::Entry m
         return;
     }
 ''')
-replace(sce, '''                traverse_directory(img, baby, dir_path / std::wstring(dir_name.begin(), dir_name.end()) / "");''',
-        '''                traverse_directory(img, baby, dir_path / std::wstring(dir_name.begin(), dir_name.end()) / "", depth + 1);''')
+replace(sce, '''                traverse_directory(img, baby, dir_path / std::wstring(dir_name.begin(), dir_name.end()));''',
+        '''                traverse_directory(img, baby, dir_path / std::wstring(dir_name.begin(), dir_name.end()), depth + 1);''')
 replace(sce, '''    FILE *f = FOPEN((partition_path / partition).native().c_str(), "rb");
     Fat16::Image img(''', '''    FILE *f = FOPEN((partition_path / partition).native().c_str(), "rb");
     if (!f) {
@@ -781,17 +781,9 @@ replace(app_init, '''        LOG_ERROR("Failed to initialize file system for the
     LOG_INFO("app::init: folders created at {:.1f} s", init_elapsed());
 ''')
 replace(app_init, '''    state.motion.init();
-
-    return true;
-}
-
-void shutdown_app_runtime''', '''    state.motion.init();
+''', '''    state.motion.init();
     LOG_INFO("app::init: motion ready at {:.1f} s", init_elapsed());
-
-    return true;
-}
-
-void shutdown_app_runtime''')
+''')
 print('app::init timing added.')
 
 

@@ -25,21 +25,7 @@ for suffix in [
     replace(cli, '#ifdef _WIN32\n' + suffix,
             '#if defined(_WIN32) && !defined(VITA3K_UWP)\n' + suffix)
 
-# Preserve guest deletion and directory semantics with the standard filesystem.
-replace('vita3k/io/src/io.cpp', 'fs::detail::remove(emulated_path, &error_code)',
-        'fs::remove(emulated_path, error_code)')
-replace('vita3k/io/src/io.cpp', 'cur_path.filename_is_dot() || cur_path.filename_is_dot_dot()',
-        'cur_path.filename() == fs::path(".") || cur_path.filename() == fs::path("..")')
-replace('vita3k/io/src/io.cpp', 'fs::path(emulated_path).remove_trailing_separator().parent_path()',
-        'fs::without_trailing_separator(emulated_path).parent_path()')
-replace('vita3k/util/include/util/fs.h', 'using fstream = std::fstream;\n}',
-'''using fstream = std::fstream;
-inline path without_trailing_separator(path p) {
-    while (!p.empty() && !p.has_filename() && p != p.root_path())
-        p = p.parent_path();
-    return p;
-}
-}''')
+# (Guest deletion/directory semantics: upstream's std::filesystem switch.)
 
 # Preserve AAC's exact consumed-byte callback. The complete FFCodec declaration
 # was token-compared to n6.1.1 upstream; a version guard rejects ABI drift.
@@ -82,23 +68,7 @@ replace('vita3k/codec/src/aac.cpp', '''        LOG_WARN("Error sending Aac packe
         return false;''')
 print('Applied checked UWP CLI argv, filesystem semantics and padded AAC decoder fixes.')
 
-# The app library is downstream of config/io. Catch the same known Boost
-# assumptions here before waiting for another compile layer to expose them.
-replace('vita3k/app/src/apps_list.cpp',
-        'entry.path().filename_is_dot() || entry.path().filename_is_dot_dot()',
-        'entry.path().filename() == fs::path(".") || entry.path().filename() == fs::path("..")')
-replace('vita3k/app/src/apps_list.cpp',
-        'static_cast<int64_t>(fs::last_write_time(path))',
-        'static_cast<int64_t>(fs::last_write_time(path).time_since_epoch().count())')
-
-# fmt/std.h owns std::filesystem::path, including its :g presentation. An
-# ostream specialization shadows that formatter and breaks fmt's own helpers.
-replace('vita3k/util/include/util/fs.h',
-        '#include <fmt/ostream.h>',
-        '#include <fmt/ostream.h>\n#ifdef VITA3K_UWP\n#include <fmt/std.h>\n#endif')
-replace('vita3k/util/include/util/fs.h',
-        'template <>\nstruct fmt::formatter<fs::path> : ostream_formatter {};',
-        '#ifndef VITA3K_UWP\ntemplate <>\nstruct fmt::formatter<fs::path> : ostream_formatter {};\n#endif')
+# (apps_list and the fmt path formatter: upstream's std::filesystem switch.)
 
 # Winsock 1 declarations are desktop-only. Keep the real debugger service and
 # use Winsock 2, with its import library explicitly attached to the target.
@@ -141,26 +111,11 @@ replace('vita3k/modules/SceNet/SceNet.cpp', 'InetPton(af, src, dst)', 'InetPtonA
 
 # A Vita user name is a guest profile setting. On UWP do not probe the host
 # machine name. Bound both the host fallback and guest copy and terminate them.
+# Upstream bounds the user name itself; the host-name fallback is a desktop
+# network call, so the Xbox goes straight to the "Vita3K" fallback.
 replace('vita3k/modules/SceAppUtil/SceAppUtil.cpp',
-        '    char devname[devname_len];\n    switch (paramId) {',
-        '    if (!buf || bufSize == 0)\n        return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);\n    char devname[devname_len]{};\n    switch (paramId) {')
-replace('vita3k/modules/SceAppUtil/SceAppUtil.cpp', '''        if (gethostname(devname, devname_len)) {
-            // fallback to User Name
-            std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname));
-        }
-        std::strncpy(reinterpret_cast<char *>(buf), devname, sizeof(devname));''', '''#ifdef VITA3K_UWP
-        std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname) - 1);
-#else
-        if (gethostname(devname, devname_len)) {
-            std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname) - 1);
-        }
-#endif
-        devname[sizeof(devname) - 1] = '\\0';
-        {
-            const size_t capacity = (std::min)(static_cast<size_t>(bufSize), sizeof(devname));
-            std::strncpy(reinterpret_cast<char *>(buf), devname, capacity - 1);
-            buf[capacity - 1] = 0;
-        }''')
+        '            if (gethostname(devname, SCE_SYSTEM_PARAM_USERNAME_MAXSIZE) == 0) {',
+        '#ifdef VITA3K_UWP\n            if (false) {\n#else\n            if (gethostname(devname, SCE_SYSTEM_PARAM_USERNAME_MAXSIZE) == 0) {\n#endif')
 
 # SceSize is unsigned int: use unsigned two's-complement arithmetic explicitly
 # to isolate the low bit without MSVC's unary-minus warning (C4146).

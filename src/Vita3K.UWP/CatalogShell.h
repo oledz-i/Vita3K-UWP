@@ -162,7 +162,7 @@ private:
     void ResetInstalledFirmware();
     void FirmwareSettings();
     void EmulationSettings();
-    void ApplyCoreOptions();
+    void ApplyCoreOptions(const std::wstring& contentPath = std::wstring());
     void RestorePaths();
     void ScanGames();
     void ReadSfo(size_t index, Windows::Storage::StorageFolder^ folder);
