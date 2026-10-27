@@ -139,8 +139,41 @@ replace(pup, '''    fs::remove_all(pup_dec_root);
 
     return fw_version;''', '''    std::error_code cleanup_ec;
     fs::remove_all(pup_dec_root, cleanup_ec);
+    if (cleanup_ec)
+        LOG_WARN("PUP: could not remove the working folder {} yet ({}); the next install uses its own", fs_utils::path_to_utf8(pup_dec_root), cleanup_ec.message());
 
     return fw_version;''')
+# Several packages in one go (preinstall, fonts, then the system firmware)
+# failed on the later ones but worked alone or after a restart. Every
+# install reused vita3k/PUP_DEC: the previous one deleted it on the way
+# out, and on Windows a folder whose files were just deleted can stay
+# "delete pending" for a moment (a scanner or the indexer still holds one),
+# so the next install's remove_all/create_directory threw. Each install now
+# works in its own folder, clears old ones without throwing, and reports a
+# folder it cannot create.
+replace(pup, '''    fs::path pup_dec_root = vita_fs_path / "PUP_DEC";
+    if (fs::exists(pup_dec_root)) {
+        LOG_WARN("Path already exists, deleting it and reinstalling");
+        fs::remove_all(pup_dec_root);
+    }''', '''    {
+        std::error_code sweep_ec;
+        for (fs::directory_iterator it(vita_fs_path, sweep_ec), end; !sweep_ec && it != end; it.increment(sweep_ec)) {
+            const std::string name = it->path().filename().string();
+            if (name.rfind("PUP_DEC", 0) == 0) {
+                std::error_code remove_ec;
+                fs::remove_all(it->path(), remove_ec);
+            }
+        }
+    }
+    static std::atomic<uint32_t> install_serial{ 0 };
+    fs::path pup_dec_root = vita_fs_path / fmt::format("PUP_DEC-{}-{}", static_cast<unsigned long long>(std::chrono::steady_clock::now().time_since_epoch().count() & 0xFFFFFFFF), ++install_serial);
+    {
+        std::error_code mk_ec;
+        fs::create_directories(pup_dec_root, mk_ec);
+        if (mk_ec)
+            throw std::runtime_error(fmt::format("cannot create the working folder {}: {}", fs_utils::path_to_utf8(pup_dec_root), mk_ec.message()));
+    }''')
+replace(pup, '#include <system_error>\n', '#include <system_error>\n#include <atomic>\n#include <chrono>\n#include <stdexcept>\n')
 
 # ── Installer: system firmware first, fault guard, no half-installed parts ──
 inst = 'vita3k/libretro/libretro_installer.cpp'
@@ -785,7 +818,12 @@ replace(lv, '''    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, 
     if (surface && surface_format == vk::Format::eR8G8B8A8Srgb) {''', '''    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, before);
 #ifdef VITA3K_UWP
     bool probed = false;
-    if (surface && w > 2 && h > 2) {
+    // Only on the frames whose texels get logged (below): nine copies and a
+    // layout change through Dozen every frame cost frame time for nothing.
+    const uint64_t next_present = s_present.presents + 1;
+    const bool probe_now = next_present == 1 || next_present % 600 == 0 || surface_format != s_present.last_format ||
+        w != s_present.last_w || h != s_present.last_h;
+    if (surface && w > 2 && h > 2 && probe_now) {
         if (!s_present.probe.buffer) {
             static constexpr vma::AllocationCreateInfo readback_alloc = {
                 .flags = vma::AllocationCreateFlagBits::eHostAccessRandom | vma::AllocationCreateFlagBits::eMapped,

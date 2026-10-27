@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "D3D12Host.h"
+#include <tmmintrin.h>
 #include <windows.ui.xaml.media.dxinterop.h>
 #include <dxgi1_3.h>
 #include <vector>
@@ -58,6 +59,21 @@ bool D3D12Host::Fail(const wchar_t* stage, HRESULT code, std::wstring& result) {
 
 void D3D12Host::Shutdown() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    // Frames may still be in flight (PresentFrame does not wait for its own
+    // copy): let them finish before their buffers go, but never for long.
+    if (queue_ && fence_ && fenceEvent_) {
+        const UINT64 value = ++fenceValue_;
+        if (SUCCEEDED(queue_->Signal(fence_.Get(), value)) && fence_->GetCompletedValue() < value &&
+            SUCCEEDED(fence_->SetEventOnCompletion(value, fenceEvent_)))
+            WaitForSingleObjectEx(fenceEvent_, 2000, FALSE);
+    }
+    for (unsigned i = 0; i < kBufferCount; ++i) {
+        slotAllocator_[i].Reset();
+        slotUpload_[i].Reset();
+        slotUploadBytes_[i] = 0;
+        slotFence_[i] = 0;
+    }
+    slot_ = 0;
     uploadBytes_ = 0;
     format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
     if (fenceEvent_ != nullptr) {
@@ -174,8 +190,13 @@ bool D3D12Host::WaitForGpu(std::wstring& result) {
     const UINT64 value = ++fenceValue_;
     HRESULT hr = queue_->Signal(fence_.Get(), value);
     if (FAILED(hr)) return Fail(L"Queue::Signal", hr, result);
+    return WaitForValue(value, result);
+}
+
+bool D3D12Host::WaitForValue(UINT64 value, std::wstring& result) {
+    if (value == 0) return true;
     if (fence_->GetCompletedValue() < value) {
-        hr = fence_->SetEventOnCompletion(value, fenceEvent_);
+        const HRESULT hr = fence_->SetEventOnCompletion(value, fenceEvent_);
         if (FAILED(hr)) return Fail(L"SetEventOnCompletion", hr, result);
         const DWORD wait = WaitForSingleObjectEx(fenceEvent_, 5000, FALSE);
         if (wait != WAIT_OBJECT_0) {
@@ -443,8 +464,17 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
     }
     const unsigned rowPitch = (width * 4u + 255u) & ~255u;
     const UINT64 bytes = static_cast<UINT64>(rowPitch) * height;
-    if (!frameUpload_ || bytes > uploadBytes_) {
-        frameUpload_.Reset();
+    const unsigned slot = slot_;
+    slot_ = (slot_ + 1) % kBufferCount;
+    // Only the frame that last used this slot has to be done with it.
+    if (!WaitForValue(slotFence_[slot], result)) return false;
+    if (!slotAllocator_[slot]) {
+        const HRESULT made = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+            IID_PPV_ARGS(slotAllocator_[slot].GetAddressOf()));
+        if (FAILED(made)) return Fail(L"Create frame allocator", made, result);
+    }
+    if (!slotUpload_[slot] || bytes > slotUploadBytes_[slot]) {
+        slotUpload_[slot].Reset();
         D3D12_HEAP_PROPERTIES heap = {};
         heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         heap.CreationNodeMask = 1;
@@ -459,13 +489,14 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         const HRESULT created = device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(frameUpload_.GetAddressOf()));
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(slotUpload_[slot].GetAddressOf()));
         if (FAILED(created)) return Fail(L"Create frame upload buffer", created, result);
-        uploadBytes_ = bytes;
+        slotUploadBytes_[slot] = bytes;
     }
+    ID3D12Resource* upload = slotUpload_[slot].Get();
     D3D12_RANGE none = { 0, 0 };
     void* destination = nullptr;
-    HRESULT hr = frameUpload_->Map(0, &none, &destination);
+    HRESULT hr = upload->Map(0, &none, &destination);
     if (FAILED(hr)) return Fail(L"Map frame upload", hr, result);
     auto* out = static_cast<std::uint8_t*>(destination);
     if (!sourceRgba && strideBytes == rowPitch) {
@@ -474,23 +505,32 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
         for (unsigned y = 0; y < height; ++y)
             std::memcpy(out + static_cast<size_t>(y) * rowPitch, pixels + static_cast<size_t>(y) * strideBytes, width * 4u);
     } else {
-        // RGBA to BGRA, one 32-bit word at a time; alpha forced opaque.
+        // RGBA to BGRA with alpha forced opaque (the core's alpha means
+        // nothing for display), four pixels per SSSE3 shuffle.
+        const __m128i order = _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+        const __m128i opaque = _mm_set1_epi32(static_cast<int>(0xFF000000u));
         for (unsigned y = 0; y < height; ++y) {
-            const auto* in = reinterpret_cast<const std::uint32_t*>(pixels + static_cast<size_t>(y) * strideBytes);
-            auto* row = reinterpret_cast<std::uint32_t*>(out + static_cast<size_t>(y) * rowPitch);
-            for (unsigned x = 0; x < width; ++x) {
-                const std::uint32_t v = in[x];
-                row[x] = 0xFF000000u | ((v & 0xFFu) << 16) | (v & 0xFF00u) | ((v >> 16) & 0xFFu);
+            const auto* in = pixels + static_cast<size_t>(y) * strideBytes;
+            auto* row = out + static_cast<size_t>(y) * rowPitch;
+            unsigned x = 0;
+            for (; x + 4 <= width; x += 4) {
+                const __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(in + x * 4u));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(row + x * 4u), _mm_or_si128(_mm_shuffle_epi8(v, order), opaque));
+            }
+            for (; x < width; ++x) {
+                std::uint32_t v;
+                std::memcpy(&v, in + x * 4u, 4);
+                const std::uint32_t o = 0xFF000000u | ((v & 0xFFu) << 16) | (v & 0xFF00u) | ((v >> 16) & 0xFFu);
+                std::memcpy(row + x * 4u, &o, 4);
             }
         }
     }
-    // The core's alpha is meaningless for display; the swap chain ignores it.
     D3D12_RANGE written = { 0, static_cast<SIZE_T>(bytes) };
-    frameUpload_->Unmap(0, &written);
+    upload->Unmap(0, &written);
 
-    hr = allocator_->Reset();
+    hr = slotAllocator_[slot]->Reset();
     if (FAILED(hr)) return Fail(L"Frame allocator reset", hr, result);
-    hr = commands_->Reset(allocator_.Get(), nullptr);
+    hr = commands_->Reset(slotAllocator_[slot].Get(), nullptr);
     if (FAILED(hr)) return Fail(L"Frame command list reset", hr, result);
     const UINT frame = swapChain_->GetCurrentBackBufferIndex();
     D3D12_RESOURCE_BARRIER barrier = {};
@@ -501,7 +541,7 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
     commands_->ResourceBarrier(1, &barrier);
     D3D12_TEXTURE_COPY_LOCATION src = {};
-    src.pResource = frameUpload_.Get();
+    src.pResource = upload;
     src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     src.PlacedFootprint.Footprint.Format = format;
     src.PlacedFootprint.Footprint.Width = width;
@@ -522,5 +562,10 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
     // The emulation loop paces itself; do not wait for a vertical blank here as well.
     hr = swapChain_->Present(0, 0);
     if (FAILED(hr)) return Fail(L"Frame Present", hr, result);
-    return WaitForGpu(result);
+    // No wait here: the next frame waits only for its own slot (above).
+    const UINT64 value = ++fenceValue_;
+    hr = queue_->Signal(fence_.Get(), value);
+    if (FAILED(hr)) return Fail(L"Queue::Signal", hr, result);
+    slotFence_[slot] = value;
+    return true;
 }

@@ -60,6 +60,14 @@ private:
     Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain_;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameUpload_;
+    // Game frames: one upload buffer and allocator per back buffer, so the
+    // CPU fills the next frame while the GPU still copies the last one
+    // (PresentFrame waits only for the frame that used the same slot).
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> slotAllocator_[kBufferCount];
+    Microsoft::WRL::ComPtr<ID3D12Resource> slotUpload_[kBufferCount];
+    UINT64 slotUploadBytes_[kBufferCount] = {};
+    UINT64 slotFence_[kBufferCount] = {};
+    unsigned slot_ = 0;
     Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue_;
     std::map<int, unsigned long long> debugSeen_; // message ID -> times seen (whole session)
     unsigned width_ = 0;
@@ -77,4 +85,5 @@ private:
     void ApplyTransform();
     bool Fail(const wchar_t* stage, HRESULT code, std::wstring& result);
     bool WaitForGpu(std::wstring& result);
+    bool WaitForValue(UINT64 value, std::wstring& result);
 };

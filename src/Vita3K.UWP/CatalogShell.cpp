@@ -1415,6 +1415,20 @@ void CatalogShell::Settings() {
         L"It is also in the Device Portal: File Explorer, LocalAppData, this app, LocalState, vita3k-runtime.log.",
         11, false, true));
 #if !defined(VITA3K_RELEASE_BUILD)
+    // D3D12's debug layer checks every call the graphics driver makes, which
+    // costs frame time; it is for chasing a graphics bug, so it is off unless
+    // asked for here. It can only start with the app (before any device).
+    {
+        auto checks = Button(Pref(L"debug.d3d12")->Equals(L"1")
+            ? L"Graphics debug checks: On (slower)" : L"Graphics debug checks: Off");
+        checks->Margin = Thickness(0, 12, 0, 0);
+        checks->Click += ref new RoutedEventHandler([this,checks](Platform::Object^, RoutedEventArgs^) {
+            const bool on = !Pref(L"debug.d3d12")->Equals(L"1");
+            PutPref(L"debug.d3d12", on ? L"1" : L"0");
+            checks->Content = ref new Platform::String(on ? L"Graphics debug checks: On after a restart (slower)" : L"Graphics debug checks: Off after a restart");
+        });
+        advanced->Children->Append(checks);
+    }
     // Development builds only; release builds ship without the Tools page.
     auto openTools = Button(L"Developer diagnostics");
     openTools->Margin = Thickness(0, 12, 0, 0);
@@ -2116,11 +2130,31 @@ void CatalogShell::InstallFirmwareFiles(std::vector<StorageFile^> files) {
         const bool staged = _wcsicmp(finalRoot.c_str(), InternalDataRoot().c_str()) != 0;
         const std::wstring stagingRoot = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\Vita3KStaging";
         const std::string installRoot = staged ? NarrowUtf8(stagingRoot) : system;
+        // The system firmware first, then the preinstalled package, then the
+        // fonts: the system firmware is what games need, and it is the one
+        // that installed alone (or first after a restart) but failed after the
+        // other two in the same batch.
+        struct Pending { std::wstring path, name; bool recognised = false; std::uint32_t version = 0, partitions = 0; };
+        std::vector<Pending> order;
+        for (const auto& entry : *paths) {
+            Pending item{ entry.first, entry.second };
+            item.recognised = libretro_.PupInfo(NarrowUtf8(entry.first), item.version, item.partitions);
+            order.push_back(item);
+        }
+        const auto rank = [](const Pending& item) {
+            if (!item.recognised) return 9;
+            if (item.partitions & 3u) return 0;
+            if (item.partitions & 4u) return 1;
+            return 2;
+        };
+        std::stable_sort(order.begin(), order.end(), [&](const Pending& a, const Pending& b) { return rank(a) < rank(b); });
         for (size_t i = 0; i < total; ++i) {
             FirmwareResult result;
-            result.name = (*paths)[i].second;
-            const std::string pup = NarrowUtf8((*paths)[i].first);
-            result.recognised = libretro_.PupInfo(pup, result.headerVersion, result.partitions);
+            result.name = order[i].name;
+            const std::string pup = NarrowUtf8(order[i].path);
+            result.recognised = order[i].recognised;
+            result.headerVersion = order[i].version;
+            result.partitions = order[i].partitions;
             const wchar_t* kind = PupKindName(result.partitions);
             if (!result.recognised || !kind) {
                 result.detail = L"not a PS Vita firmware package";
@@ -2139,7 +2173,18 @@ void CatalogShell::InstallFirmwareFiles(std::vector<StorageFile^> files) {
             };
             notify(0);
             std::string version;
+            libretro_.LogLine("Firmware: installing " + NarrowUtf8(result.name) + " (" + std::to_string(i + 1) + " of " + std::to_string(total) + ")");
             result.installed = libretro_.InstallFirmware(installRoot, pup, notify, version, result.detail);
+            if (!result.installed && !libretro_.GameLoaded()) {
+                // It installs on its own: give the file system a moment to
+                // finish the previous package's cleanup and try once more.
+                libretro_.LogLine("Firmware: " + NarrowUtf8(result.name) + " failed in the batch; trying it once more");
+                Sleep(1500);
+                notify(0);
+                version.clear();
+                result.installed = libretro_.InstallFirmware(installRoot, pup, notify, version, result.detail);
+            }
+            libretro_.LogLine("Firmware: " + NarrowUtf8(result.name) + (result.installed ? " installed" : " failed: " + NarrowUtf8(result.detail)));
             result.version = version.empty() ? FirmwareVersionText(result.headerVersion) : WidenUtf8(version);
             if (result.installed && staged) {
                 dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,

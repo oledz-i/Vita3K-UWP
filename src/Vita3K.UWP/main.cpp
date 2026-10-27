@@ -23,8 +23,17 @@ public:
 #if !defined(VITA3K_RELEASE_BUILD)
         // Before any D3D12 device exists (turning it on later removes the
         // device): D3D12 then says in words why a call failed, which goes to
-        // the log as [d3d12] lines while a game runs.
-        D3D12Host::EnableDebugLayer();
+        // the log as [d3d12] lines while a game runs. It checks every call
+        // the graphics driver makes and costs frame time, so only when
+        // Settings, Diagnostics turned it on.
+        {
+            auto values = Windows::Storage::ApplicationData::Current->LocalSettings->Values;
+            auto key = ref new Platform::String(L"debug.d3d12");
+            if (values->HasKey(key)) {
+                auto value = dynamic_cast<Platform::String^>(values->Lookup(key));
+                if (value && value->Equals(L"1")) D3D12Host::EnableDebugLayer();
+            }
+        }
 #endif
         RequiresPointerMode = ApplicationRequiresPointerMode::WhenRequested;
         ElementSoundPlayer::State = ElementSoundPlayerState::Off;
