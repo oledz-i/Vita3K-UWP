@@ -33,6 +33,9 @@ public:
     bool Initialized() const { return initialized_; }
     bool RequestedUnsupportedGraphics() const { return unsupportedVideo_; }
     bool GameLoaded() const { return gameLoaded_; }
+    // Frames the game itself has finished since the core loaded (0 when the
+    // core does not count them): the overlay's game frame rate.
+    std::uint64_t GuestFrames();
     // Use a file staged into the UWP app sandbox or exposed by a working VFS.
     // This invokes Vita3K's retro_load_game, never a simulated boot screen.
     bool LoadGame(const std::string& readableContentPath, std::wstring& detail);

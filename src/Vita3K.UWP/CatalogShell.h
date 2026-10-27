@@ -52,6 +52,14 @@ private:
     std::mutex presentErrorMutex_;
     std::wstring presentError_;
     Windows::UI::Xaml::Controls::TextBlock^ statsLabel_ = nullptr;
+    // The performance overlay (quick menu: Off, FPS, Detailed), top left.
+    Windows::UI::Xaml::Controls::Border^ perfOverlay_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ perfText_ = nullptr;
+    unsigned long long perfLastTick_ = 0;
+    unsigned long long perfLastShown_ = 0;
+    unsigned long long perfLastGuest_ = 0;
+    void ApplyPerfMode();
+    void UpdatePerfOverlay();
     // The quick menu (View + Menu): the game paused under it.
     Windows::UI::Xaml::Controls::Grid^ quickMenu_ = nullptr;
     bool quickMenuOpen_ = false;

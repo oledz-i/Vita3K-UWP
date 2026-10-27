@@ -935,3 +935,28 @@ extern "C" __declspec(dllexport) int vita3k_uwp_install_addon(const char *pref_u
 '''
 addon_inst.write_text(addon_text, encoding='utf-8')
 print('Updates and DLC can be installed on request from the frontend.')
+
+# ── Performance overlay: the game's own frame rate ──────────────────────────
+# The Xbox app's overlay shows how many frames the game itself finishes a
+# second (each sceDisplaySetFrameBuf), beside what reaches the screen.
+display = 'vita3k/modules/SceDisplay/SceDisplay.cpp'
+replace(display, '#include "SceDisplay.h"\n', '''#include "SceDisplay.h"
+
+#ifdef VITA3K_UWP
+#include <atomic>
+#include <cstdint>
+static std::atomic<std::uint64_t> s_uwp_guest_frames{ 0 };
+extern "C" __declspec(dllexport) std::uint64_t vita3k_uwp_guest_frame_count() {
+    return s_uwp_guest_frames.load(std::memory_order_relaxed);
+}
+#endif
+''')
+replace(display, '''    emuenv.display.last_setframe_vblank_count = emuenv.display.vblank_count.load();
+    emuenv.frame_count++;
+''', '''    emuenv.display.last_setframe_vblank_count = emuenv.display.vblank_count.load();
+    emuenv.frame_count++;
+#ifdef VITA3K_UWP
+    s_uwp_guest_frames.fetch_add(1, std::memory_order_relaxed);
+#endif
+''')
+print('Guest frame count exported for the frontend overlay.')

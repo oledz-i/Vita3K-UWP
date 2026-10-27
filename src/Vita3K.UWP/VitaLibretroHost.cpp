@@ -302,6 +302,12 @@ bool VitaLibretroHost::InstallAddon(const std::string& systemFolder, const std::
     detail = ok ? L"Installed." : L"It could not be installed. " + RecentLog();
     return ok;
 }
+std::uint64_t VitaLibretroHost::GuestFrames() {
+    using CountFn = std::uint64_t(__cdecl*)();
+    if (!module_) return 0;
+    const auto count = Entry<CountFn>(module_, "vita3k_uwp_guest_frame_count");
+    return count ? count() : 0;
+}
 std::wstring VitaLibretroHost::RecentLog() const {
     std::lock_guard<std::mutex> guard(logsMutex_);
     return FromUtf8(latestCoreLogs_.c_str());

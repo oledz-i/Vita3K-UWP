@@ -3295,15 +3295,21 @@ void CatalogShell::EnterGameView(Platform::String^ title) {
     column->Children->Append(loadingHint_);
     loadingLayer_->Children->Append(column);
     gameLayer_->Children->Append(loadingLayer_);
-#if !defined(VITA3K_RELEASE_BUILD)
-    // Development builds: what the display path sees, always in a corner.
-    statsLabel_ = Text(L"", 10, false, true);
-    statsLabel_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
-    statsLabel_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
-    statsLabel_->Margin = Thickness(0, 0, 24, 14);
-    statsLabel_->Opacity = 0.6;
-    gameLayer_->Children->Append(statsLabel_);
-#endif
+    // The performance overlay: a small, quiet pill in the top-left corner.
+    perfOverlay_ = ref new Border();
+    perfOverlay_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+    perfOverlay_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
+    perfOverlay_->Margin = Thickness(22, 16, 0, 0);
+    perfOverlay_->Padding = Thickness(10, 3, 10, 4);
+    perfOverlay_->CornerRadius = Windows::UI::Xaml::CornerRadius(8);
+    perfOverlay_->Background = Solid(Alpha(105, 0, 0, 0));
+    perfOverlay_->IsHitTestVisible = false;
+    perfText_ = Text(L"", 12, true);
+    perfText_->TextWrapping = TextWrapping::NoWrap;
+    perfText_->Foreground = Solid(Alpha(225, 255, 255, 255));
+    perfOverlay_->Child = perfText_;
+    gameLayer_->Children->Append(perfOverlay_);
+    ApplyPerfMode();
     root_->Children->Append(gameLayer_);
 
     if (!gameTimer_) {
@@ -3324,6 +3330,7 @@ void CatalogShell::GameTick() {
         return;
     }
     if (!gameStarted_) return;
+    UpdatePerfOverlay();
     if (loadingHidden_) { UpdateGameStats(); return; }
     const auto now = GetTickCount64();
     if (!gameRunningSince_) gameRunningSince_ = now;
@@ -3348,6 +3355,47 @@ void CatalogShell::GameTick() {
         loadingStage_->Text = L"The game is running and getting its first picture ready. Some games stay dark for a while at start.";
     }
     UpdateGameStats();
+}
+
+void CatalogShell::ApplyPerfMode() {
+    const auto mode = Pref(L"overlay.mode", L"0");
+    perfLastTick_ = 0;
+    if (!perfOverlay_) return;
+    const bool on = mode->Equals(L"1") || mode->Equals(L"2");
+    perfOverlay_->Visibility = on ? Windows::UI::Xaml::Visibility::Visible : Windows::UI::Xaml::Visibility::Collapsed;
+    if (perfText_) perfText_->Text = on ? L"\u2026" : L"";
+}
+
+void CatalogShell::UpdatePerfOverlay() {
+    if (!perfOverlay_ || perfOverlay_->Visibility != Windows::UI::Xaml::Visibility::Visible) return;
+    const bool detailed = Pref(L"overlay.mode", L"0")->Equals(L"2");
+    const unsigned long long now = GetTickCount64();
+    const unsigned long long shown = framesShown_.load();
+    const unsigned long long guest = libretro_.GuestFrames();
+    if (perfLastTick_ == 0 || guest < perfLastGuest_ || shown < perfLastShown_) {
+        perfLastTick_ = now;
+        perfLastShown_ = shown;
+        perfLastGuest_ = guest;
+        return;
+    }
+    const unsigned long long elapsed = now - perfLastTick_;
+    if (elapsed < 1000) return;
+    const double output = static_cast<double>(shown - perfLastShown_) * 1000.0 / static_cast<double>(elapsed);
+    // The game's own frames when the core counts them, else what reached the screen
+    const double game = guest ? static_cast<double>(guest - perfLastGuest_) * 1000.0 / static_cast<double>(elapsed) : output;
+    perfLastTick_ = now;
+    perfLastShown_ = shown;
+    perfLastGuest_ = guest;
+    wchar_t text[160] = {};
+    if (!detailed) {
+        swprintf_s(text, L"%.0f FPS", game);
+    } else {
+        double gigabytes = 0;
+        try { gigabytes = static_cast<double>(Windows::System::MemoryManager::AppMemoryUsage) / (1024.0 * 1024.0 * 1024.0); } catch (...) {}
+        const double frameMs = game > 0.5 ? 1000.0 / game : 0.0;
+        swprintf_s(text, L"%.0f FPS  \u00B7  %.1f ms  \u00B7  Display %.0f  \u00B7  RAM %.2f GB", game, frameMs, output, gigabytes);
+    }
+    if (perfText_) perfText_->Text = ref new Platform::String(text);
 }
 
 void CatalogShell::UpdateGameStats() {
@@ -3415,6 +3463,8 @@ void CatalogShell::ExitGameView() {
         loadingBar_ = nullptr;
         renderSurface_ = nullptr;
         statsLabel_ = nullptr;
+        perfOverlay_ = nullptr;
+        perfText_ = nullptr;
         booting_ = false;
         navigation_->Visibility = Windows::UI::Xaml::Visibility::Visible;
         if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Visible;
@@ -3485,6 +3535,21 @@ void CatalogShell::ShowQuickMenu() {
         screen->Content = ref new Platform::String(next ? L"\u2B1A   Screen: Stretch" : L"\u2B1A   Screen: Fit");
         if (renderSurface_)
             renderer_.SetViewport(static_cast<float>(renderSurface_->ActualWidth), static_cast<float>(renderSurface_->ActualHeight), next);
+    });
+
+    const wchar_t* perfLabels[] = { L"\u25F7   Performance overlay: Off", L"\u25F7   Performance overlay: FPS",
+                                    L"\u25F7   Performance overlay: Detailed" };
+    const auto perfMode = Pref(L"overlay.mode", L"0");
+    const int perfIndex = perfMode->Equals(L"2") ? 2 : perfMode->Equals(L"1") ? 1 : 0;
+    auto perf = add(ref new Platform::String(perfLabels[perfIndex]), false);
+    perf->Click += ref new RoutedEventHandler([this,perf](Platform::Object^, RoutedEventArgs^) {
+        const auto current = Pref(L"overlay.mode", L"0");
+        const int next = current->Equals(L"2") ? 0 : current->Equals(L"1") ? 2 : 1;
+        PutPref(L"overlay.mode", ref new Platform::String(std::to_wstring(next).c_str()));
+        const wchar_t* labels[] = { L"\u25F7   Performance overlay: Off", L"\u25F7   Performance overlay: FPS",
+                                    L"\u25F7   Performance overlay: Detailed" };
+        perf->Content = ref new Platform::String(labels[next]);
+        ApplyPerfMode();
     });
 
     auto log = add(L"\u2913   Save log to your drive", false);
