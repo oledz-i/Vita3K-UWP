@@ -960,3 +960,17 @@ replace(display, '''    emuenv.display.last_setframe_vblank_count = emuenv.displ
 #endif
 ''')
 print('Guest frame count exported for the frontend overlay.')
+
+# ── Say what the GPU layer allows: memory mapping and surface sync ──────────
+# Surface sync (the GPU's pictures copied back for the game to read) only runs
+# when the Vulkan layer lets the renderer map guest memory, which needs buffer
+# device address and uniform buffer standard layout. The log now says which.
+replace('vita3k/libretro/libretro_vita3k.cpp', '''    libretro.renderer_ready = true;
+    lr_log(RETRO_LOG_INFO, "Vulkan context reset complete\\n");''', '''    libretro.renderer_ready = true;
+    if (libretro.emuenv && libretro.emuenv->renderer) {
+        const bool mapping = libretro.emuenv->renderer->features.enable_memory_mapping;
+        lr_log(RETRO_LOG_INFO, "GPU memory mapping: %s; surface sync: %s\\n", mapping ? "on" : "off (this GPU layer cannot map guest memory)",
+            (mapping && !libretro.emuenv->renderer->disable_surface_sync) ? "working" : "not running");
+    }
+    lr_log(RETRO_LOG_INFO, "Vulkan context reset complete\\n");''')
+print('Core logs memory mapping and surface sync state.')
