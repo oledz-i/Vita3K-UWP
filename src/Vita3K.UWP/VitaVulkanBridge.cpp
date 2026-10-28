@@ -136,8 +136,9 @@ void VitaVulkanBridge::Commands(void* p, uint32_t n, const VkCommandBuffer* comm
 void VitaVulkanBridge::Wait(void* p) {
     // The core is about to reuse this sync index's image: only the copy made
     // from it last time round has to be done, not the whole queue.
+    // The slots are the emulation thread's alone; the queue lock (which the
+    // core's render thread takes to submit) is not held while waiting.
     auto& self = *static_cast<VitaVulkanBridge*>(p);
-    std::lock_guard<std::mutex> lock(self.queueMutex_);
     if (!self.device_) return;
     std::string error;
     self.WaitSlot(self.slots_[self.index_], error);
@@ -190,17 +191,17 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
     const auto format = image_.create_info.format;
     const bool rgba = format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB;
     if (!rgba && format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB) { error = "Unsupported core image format"; return false; }
-    std::lock_guard<std::mutex> lock(queueMutex_);
     if (gpuStalled_) { error = "GPU stopped responding earlier; restart the game"; return false; }
     Slot& slot = slots_[index_];
+    // The core normally waited for this slot already (wait_sync_index).
+    if (slot.pending && !WaitSlot(slot, error)) {
+        waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(queueMutex_);
     bool submitted = false;
     try {
 #define FN(name) DeviceProc<PFN_##name>(#name)
-        // The core normally waited for this slot already (wait_sync_index).
-        if (slot.pending && !WaitSlot(slot, error)) {
-            waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
-            return false;
-        }
         const VkDeviceSize size = VkDeviceSize(width) * height * 4;
         if (size > slot.size) {
             if (slot.mapped) FN(vkUnmapMemory)(device_, slot.memory);
@@ -280,8 +281,9 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
         slot.serial = ++serial_;
         waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
         index_ = (index_ + 1) % kSlots;
+        lock.unlock();
         // Whatever has finished by now (usually the previous frame) is shown;
-        // nothing here waits for the GPU.
+        // nothing here waits for the GPU, nor holds the queue.
         DeliverReady();
         return true;
     } catch (const std::exception& e) {
