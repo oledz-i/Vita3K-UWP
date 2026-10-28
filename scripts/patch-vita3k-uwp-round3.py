@@ -1913,3 +1913,18 @@ installer = 'vita3k/libretro/libretro_installer.cpp'
 replace(installer, ' (pd0/) → https://bit.ly/4hlePsX\\n', ' (pd0/)\\n')
 replace(installer, ' (sa0/) → https://bit.ly/48ouDaa\\n', ' (sa0/)\\n')
 print('Firmware: no download links in the core\'s messages.')
+
+# ── An update installed before its game counts as installed ─────────────────
+# An update whose game is not installed yet is put in ux0/patch and applied
+# when the game starts, but the install reported failure all the same: the
+# app said "could not be installed" and installed the whole PKG again the
+# next time round (1.2 GB for Minecraft's).
+replace(installer, '''            lr_msg("Update installed. It is applied when the game is started.", 600);
+            return result;''', '''            lr_msg("Update installed. It is applied when the game is started.", 600);
+            result.success = true;
+            return result;''')
+replace(installer, '''        lr_msg("Installed. Start the game's own PKG or VPK to play.", 600);
+        return result;''', '''        lr_msg("Installed. Start the game's own PKG or VPK to play.", 600);
+        result.success = true;
+        return result;''')
+print('PKG: an update or DLC installed before its game reports success.')
