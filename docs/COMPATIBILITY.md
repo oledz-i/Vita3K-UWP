@@ -11,8 +11,7 @@ Results from hands-on testing on an Xbox Series S in Dev Mode. This is a snapsho
 | Ultra Despair Girls | 30 fps (its own rate) | Hitches | Cutscene stutter (frames held, then skipped) fixed by in-order frame delivery in build 78, needs confirming |
 | Danganronpa: Trigger Happy Havoc | Interaction bug | **Plays** (with surface sync on) | The interaction bug (open in upstream Vita3K) is gone on OpenGL with surface sync; the app sets both for this game. Stuck save screen addressed in build 78 |
 | Minecraft: PS Vita Edition | Around 24 fps in the world, about 8 fps in the creative inventory, some garbled text | Crashes | Use Vulkan. Its US update (PCSE00491) installs even before the game is played, from build 78 |
-
-Not yet tested: Uncharted: Golden Abyss.
+| Uncharted: Golden Abyss | Stuck on the splash screen (the quick menu still works) | Not tested | Fix planned for the next patch |
 
 ## Reporting
 
