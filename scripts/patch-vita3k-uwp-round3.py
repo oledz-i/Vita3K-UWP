@@ -1905,3 +1905,11 @@ replace(renderer_cpp, '''            if (dlg->poll_dialog(*common_dialog, sys_da
                 && common_dialog->type != TROPHY_SETUP_DIALOG) {''', '''            if (dlg->poll_dialog(*common_dialog, sys_date_format, sys_button)
                 && common_dialog->type != TROPHY_SETUP_DIALOG && !savedata_no_input) {''')
 print('Save dialog: while it waits on the game it is hidden and the controller is the game\'s.')
+
+# ── No firmware download links ──────────────────────────────────────────────
+# The core's "firmware missing" log lines carried download links. This port
+# neither ships firmware nor points to where it comes from.
+installer = 'vita3k/libretro/libretro_installer.cpp'
+replace(installer, ' (pd0/) → https://bit.ly/4hlePsX\\n', ' (pd0/)\\n')
+replace(installer, ' (sa0/) → https://bit.ly/48ouDaa\\n', ' (sa0/)\\n')
+print('Firmware: no download links in the core\'s messages.')

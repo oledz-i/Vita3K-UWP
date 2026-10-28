@@ -2335,7 +2335,7 @@ void CatalogShell::SetupCard() {
 
     // 2. Firmware.
     auto firmware = step(2, firmwareDone, storageDone && !firmwareDone, L"Install the PS Vita firmware",
-        firmwareDone ? L"Installed" : L"Pick the .PUP files you downloaded, all at once. They install right away.");
+        firmwareDone ? L"Installed" : L"Pick your .PUP files, all at once. They install right away.");
     if (!firmwareDone) {
         auto install = Button(L"Install firmware", storageDone);
         install->Margin = Thickness(0, 10, 0, 0);
@@ -2848,19 +2848,11 @@ void CatalogShell::FirmwareSettings() {
                                                   : Windows::UI::Xaml::Visibility::Collapsed;
     box->Children->Append(firmwareProgress_);
     firmwareMessage_ = Text(
-        L"Pick the .PUP files you downloaded, all at once, under any names. Vita3K looks inside each one, "
+        L"Pick your .PUP files, all at once, under any names. Vita3K looks inside each one, "
         L"tells the system firmware, preinstalled package and fonts apart, and installs them right away.",
         12, false, true);
     firmwareMessage_->Margin = Thickness(0, 10, 0, 0);
     box->Children->Append(firmwareMessage_);
-    auto where = Text(
-        L"Where to get them (on a PC, then copy them to a USB drive): the system firmware from Sony's PS Vita "
-        L"system software page. The preinstalled package and fonts are separate Sony downloads, linked by the "
-        L"Vita3K libretro core: bit.ly/4hlePsX (preinstalled) and bit.ly/48ouDaa (fonts).",
-        11, false, true);
-    where->Margin = Thickness(0, 8, 0, 0);
-    where->Opacity = 0.8;
-    box->Children->Append(where);
     content_->Children->Append(Panel(box));
     RefreshFirmwareStatus();
 }
