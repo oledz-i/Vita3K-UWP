@@ -569,6 +569,9 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
                     }
                 }
             };
+            // Above the core's own threads, so that a busy moment in the game
+            // delays the next frame's start as little as possible.
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
             VBlankClock vblank;
             if (vblank.Open())
                 Log(1, "Frame pacing: on the TV's refresh (%.2f ms, %d per frame)\n", vblank.periodMs, vblank.perFrame);

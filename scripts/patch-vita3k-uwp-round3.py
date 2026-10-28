@@ -1869,3 +1869,39 @@ replace(pipeline_cache, '''    for (auto &[hash, pipeline] : pipelines)
     }
     pipelines.clear();''')
 print('Vulkan: a pipeline that cannot be made skips its draws instead of stopping a compile thread.')
+
+# ── Save dialog: the game's turn after a slot is picked ─────────────────────
+# Picking a slot in a save list finishes the dialog's sub-step and leaves it
+# waiting for the game to go on (sceSaveDataDialogContinue / Finish). The
+# overlay drew it again as a card with no buttons and started reading the pad
+# for it, and while an overlay reads the pad the game gets none of it: a game
+# that asks its own question at that point (Danganronpa) never saw the answer,
+# under a card that hid it, and the save screen could not be left. While the
+# dialog waits on the game it is not drawn and takes no input; a progress bar
+# is drawn but takes no input either. The game's next step (Continue) brings
+# the dialog back.
+renderer_cpp = 'vita3k/renderer/src/renderer.cpp'
+replace(renderer_cpp, '''        if (common_dialog && common_dialog->type != NO_DIALOG && common_dialog->status == SCE_COMMON_DIALOG_STATUS_RUNNING) {''', '''#ifdef VITA3K_UWP
+        const bool savedata_waits_on_game = common_dialog && common_dialog->type == SAVEDATA_DIALOG
+            && common_dialog->status == SCE_COMMON_DIALOG_STATUS_RUNNING
+            && common_dialog->substatus == SCE_COMMON_DIALOG_STATUS_FINISHED
+            && !common_dialog->savedata.has_progress_bar;
+        const bool savedata_no_input = common_dialog && common_dialog->type == SAVEDATA_DIALOG
+            && common_dialog->savedata.btn_num == 0
+            && common_dialog->savedata.mode_to_display != SCE_SAVEDATA_DIALOG_MODE_LIST
+            && !common_dialog->savedata.draw_info_window;
+        {
+            static bool logged_wait = false;
+            if (savedata_waits_on_game != logged_wait) {
+                logged_wait = savedata_waits_on_game;
+                LOG_INFO("Save dialog {}", savedata_waits_on_game ? "waits for the game: hidden, the controller is the game's" : "back on screen");
+            }
+        }
+#else
+        const bool savedata_waits_on_game = false, savedata_no_input = false;
+#endif
+        if (common_dialog && common_dialog->type != NO_DIALOG && common_dialog->status == SCE_COMMON_DIALOG_STATUS_RUNNING && !savedata_waits_on_game) {''')
+replace(renderer_cpp, '''            if (dlg->poll_dialog(*common_dialog, sys_date_format, sys_button)
+                && common_dialog->type != TROPHY_SETUP_DIALOG) {''', '''            if (dlg->poll_dialog(*common_dialog, sys_date_format, sys_button)
+                && common_dialog->type != TROPHY_SETUP_DIALOG && !savedata_no_input) {''')
+print('Save dialog: while it waits on the game it is hidden and the controller is the game\'s.')
