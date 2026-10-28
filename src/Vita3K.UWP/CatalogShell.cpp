@@ -484,7 +484,7 @@ CatalogShell::CatalogShell() {
     statusBar_ = statusBar;
     statusBar->Background = Solid(Bg());
     statusBar->Padding = Thickness(32, 3, 48, 2);
-    status_ = Text(L"VITA3K  /  XBOX PREVIEW", 10, false, true);
+    status_ = Text(L"VITA3K  /  ALPHA", 10, false, true);
     status_->CharacterSpacing = 80;
     status_->TextTrimming = TextTrimming::CharacterEllipsis;
     status_->TextWrapping = TextWrapping::NoWrap;
@@ -1145,7 +1145,7 @@ void CatalogShell::Home() {
         promoScroll->Content = promos;
         content_->Children->Append(promoScroll);
     }
-    auto note = Text(L"PRE-ALPHA   \u2022   Some games don't run yet. If one fails, Settings has a button to save the log.", 10, false, true);
+    auto note = Text(L"ALPHA   \u2022   Some games don't run yet. If one fails, Settings has a button to save the log.", 10, false, true);
     note->CharacterSpacing = 40;
     note->Margin = Thickness(2, 16, 0, 6);
     content_->Children->Append(note);
@@ -1209,7 +1209,7 @@ void CatalogShell::RefreshLibraryItems() {
     if (matches.empty()) {
         libraryResults_->Children->Append(Text(L"No games match that search.", 13, false, true));
     }
-    auto warning = Text(L"Pre-alpha: compatibility varies from game to game.", 10, false, true);
+    auto warning = Text(L"Alpha: compatibility varies from game to game.", 10, false, true);
     warning->Margin = Thickness(2, 10, 0, 0);
     libraryResults_->Children->Append(warning);
 }
@@ -4672,7 +4672,7 @@ void CatalogShell::BootRenderer() {
     if (initialized) renderer_.DrawTestFrame(output);
     rendererResult_->Text = StringOf(output);
     SetStatus(initialized ? L"Native D3D12 device created. Check renderer status for present result." :
-                            L"Native D3D12 initialization failed; see developer results.");
+                            L"Native D3D12 initialization failed; see vita3k-runtime.log.");
 }
 void CatalogShell::PresentTestFrame() {
     if (rendererResult_ == nullptr) return;
