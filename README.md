@@ -50,6 +50,7 @@ It's an **alpha**. Plenty of games boot and play, some play well, and some don't
 ## Known issues
 
 - Minecraft crashes on OpenGL (use Vulkan) and has some garbled text. It runs at around 24 fps in the world, but the creative inventory drops it to about 8 fps while it's open.
+- Uncharted: Golden Abyss gets stuck on its splash screen on Vulkan (the quick menu still works). A fix is planned for the next patch.
 - The first time a game uses a new shader, the Xbox can take a moment to compile it. Until it's ready, whatever that shader draws is briefly missing. Nothing freezes.
 - Some games only work on one of the two renderers.
 
