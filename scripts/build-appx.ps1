@@ -37,7 +37,7 @@ try {
     $appx = @(Get-ChildItem $packages -Recurse -Filter '*.appx' | Where-Object { $_.FullName -notmatch '[\\/]Dependencies[\\/]' })
     if ($appx.Count -ne 1) { throw "Expected exactly one application APPX; found $($appx.Count)." }
     # A disposable test identity; no repository secrets or private-key artifact.
-    $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=Vita3K-UWP-Development' -KeyUsage DigitalSignature -FriendlyName 'Vita3K UWP disposable CI signing' -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddMonths(3) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3','2.5.29.19={text}')
+    $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=Vita3K-UWP' -KeyUsage DigitalSignature -FriendlyName 'Vita3K UWP disposable CI signing' -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddMonths(3) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3','2.5.29.19={text}')
     & $signTool sign /fd SHA256 /s My /sha1 $cert.Thumbprint $appx[0].FullName
     if ($LASTEXITCODE -ne 0) { throw 'APPX signing failed.' }
     Export-Certificate -Cert $cert -FilePath "$packages/Development.cer" | Out-Null

@@ -14,7 +14,7 @@ ns = {'m': 'http://schemas.microsoft.com/appx/manifest/foundation/windows10',
 manifest = ET.parse(app / 'Package.appxmanifest')
 identity = manifest.find('m:Identity', ns)
 assert identity.attrib['ProcessorArchitecture'] == 'x64'
-assert identity.attrib['Publisher'] == 'CN=Vita3K-UWP-Development'
+assert identity.attrib['Publisher'] == 'CN=Vita3K-UWP'
 assert re.fullmatch(r'\d+\.\d+\.\d+\.\d+', identity.attrib['Version'])
 assert all(0 <= int(n) <= 65535 for n in identity.attrib['Version'].split('.'))
 application = manifest.find('m:Applications/m:Application', ns)
