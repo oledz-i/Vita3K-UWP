@@ -5215,7 +5215,7 @@ void CatalogShell::LayoutXmb(int dx, int dy) {
     }
 
     // A chosen game shows its picture behind the menu, after a moment.
-    for (auto child : xmb_->Children) {
+    for (UIElement^ child : xmb_->Children) {
         auto picture = dynamic_cast<Image^>(child);
         if (!picture || picture->Name == nullptr || !picture->Name->Equals(L"xmbPicture")) continue;
         const auto& entry = items[chosenItem];
