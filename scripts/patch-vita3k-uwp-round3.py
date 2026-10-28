@@ -1090,32 +1090,131 @@ body = body.replace('        .components = swizzle,\n', '        .components = v
 write(texture, text[:start] + body + text[end:])
 print('U4U4U4U4 textures use B4G4R4A4 with an R/B swapped view when R4G4B4A4 is missing.')
 
-# ── OpenGL on Direct3D 12: no render target bound as a storage image ────────
+# ── OpenGL on Direct3D 12: programmable blending from a copy ───────────────
 # With GL_ARB_texture_barrier (which Mesa's D3D12 driver advertises) Vita3K's
 # GL renderer binds the render target as a read-write image in every shader
 # that reads the frame's colour, and the mask bit adds another read-write
 # RGBA8 image to every draw. Direct3D 12 cannot have one texture as render
-# target and UAV at once, and the Xbox lacks typed UAV loads for some
-# formats: the app was ended at the game's first draws (Danganronpa).
-# Vita3K's path for GPUs without these (its Android build) is used instead:
-# no programmable blending through the render target, mask bit off.
+# target and UAV at once: the app was ended at Danganronpa's first draws.
+# Turning texture barrier off stopped that, but then those shaders read
+# nothing for the frame's colour: Minecraft drew only black and Gravity Rush
+# lost most of its picture. So texture barrier stays on, and draw.cpp gives
+# such shaders a copy of the render target made just before the draw (the
+# same guarantee texture barrier gives: earlier draws are visible). Shader
+# interlock (image writes) and the mask bit stay off.
 gl_renderer = 'vita3k/renderer/src/gl/renderer.cpp'
 replace(gl_renderer, '''    return gl_state.init();
 }''', '''#ifdef VITA3K_UWP
-    gl_state.features.support_texture_barrier = false;
     gl_state.features.support_shader_interlock = false;
     gl_state.features.use_mask_bit = false;
-    LOG_INFO("OpenGL on Direct3D 12: render-target reads and the mask bit are off (Direct3D 12 cannot use a render target as a storage image)");
+    LOG_INFO("OpenGL on Direct3D 12: programmable blending reads a copy of the render target (texture barrier {}); shader interlock and the mask bit are off",
+        gl_state.features.support_texture_barrier ? "available" : "missing");
 #endif
     return gl_state.init();
 }''')
-# Shaders cached by earlier builds were made with those features on.
+# Shaders cached by earlier builds were made with other features.
 replace(gl_renderer, '''    shader_version = fmt::format("v{}", shader::CURRENT_VERSION);''', '''#ifdef VITA3K_UWP
-    shader_version = fmt::format("v{}-d3d12gl", shader::CURRENT_VERSION);
+    shader_version = fmt::format("v{}-d3d12gl2", shader::CURRENT_VERSION);
 #else
     shader_version = fmt::format("v{}", shader::CURRENT_VERSION);
 #endif''')
-print('OpenGL on D3D12: no storage-image render targets, own shader cache version.')
+
+gl_draw = 'vita3k/renderer/src/gl/draw.cpp'
+replace(gl_draw, '''void draw(GLState &renderer, GLContext &context, const FeatureState &features, SceGxmPrimitiveType type, SceGxmIndexFormat format, void *indices, size_t count, uint32_t instance_count,
+    MemState &mem, const Config &config) {''', '''#ifdef VITA3K_UWP
+// The render target's contents as they are now, in a texture of the same
+// size and format, for a shader that reads the frame's colour as an image:
+// Direct3D 12 cannot bind the render target itself as one while drawing to
+// it. A few copies are kept, one per size and format.
+static GLuint uwp_color_attachment_copy(GLuint attachment) {
+    struct Copy {
+        GLuint texture = 0;
+        GLint format = 0;
+        GLint width = 0;
+        GLint height = 0;
+    };
+    static Copy copies[4];
+    static int next = 0;
+    if (!attachment)
+        return 0;
+    GLint format = 0, width = 0, height = 0;
+    glGetTextureLevelParameteriv(attachment, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
+    glGetTextureLevelParameteriv(attachment, 0, GL_TEXTURE_WIDTH, &width);
+    glGetTextureLevelParameteriv(attachment, 0, GL_TEXTURE_HEIGHT, &height);
+    if (width <= 0 || height <= 0 || format == 0)
+        return attachment;
+    Copy *copy = nullptr;
+    for (auto &c : copies) {
+        if (c.texture && c.format == format && c.width == width && c.height == height) {
+            copy = &c;
+            break;
+        }
+    }
+    if (!copy) {
+        copy = &copies[next];
+        next = (next + 1) % 4;
+        if (copy->texture)
+            glDeleteTextures(1, &copy->texture);
+        glCreateTextures(GL_TEXTURE_2D, 1, &copy->texture);
+        glTextureStorage2D(copy->texture, 1, static_cast<GLenum>(format), width, height);
+        copy->format = format;
+        copy->width = width;
+        copy->height = height;
+        static int made = 0;
+        if (made < 8) {
+            made++;
+            LOG_INFO("Programmable blending: render target copy {}x{} format 0x{:X}", width, height, format);
+        }
+    }
+    glCopyImageSubData(attachment, GL_TEXTURE_2D, 0, 0, 0, 0, copy->texture, GL_TEXTURE_2D, 0, 0, 0, 0, width, height, 1);
+    return copy->texture;
+}
+#endif
+
+void draw(GLState &renderer, GLContext &context, const FeatureState &features, SceGxmPrimitiveType type, SceGxmIndexFormat format, void *indices, size_t count, uint32_t instance_count,
+    MemState &mem, const Config &config) {''')
+replace(gl_draw, '''    if (fragment_program_gxp.is_frag_color_used() && features.is_programmable_blending_need_to_bind_color_attachment()) {
+        if (use_raw_image) {
+            glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, context.current_color_attachment, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
+            glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, 0, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
+        } else {
+            glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
+            glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, context.current_color_attachment, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
+        }
+    }''', '''    if (fragment_program_gxp.is_frag_color_used() && features.is_programmable_blending_need_to_bind_color_attachment()) {
+#ifdef VITA3K_UWP
+        const GLuint color_source = uwp_color_attachment_copy(context.current_color_attachment);
+#else
+        const GLuint color_source = context.current_color_attachment;
+#endif
+        if (use_raw_image) {
+            glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, color_source, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
+            glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, 0, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
+        } else {
+            glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
+            glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, color_source, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
+        }
+    }''')
+# The copy above stands for the barrier; and a texture sampled while it is
+# the render target (a feedback loop Direct3D 12 forbids too) is read from
+# Vita3K's ping-pong copy, its path without texture barrier.
+replace(gl_draw, '''        } else if (features.should_use_texture_barrier()) {
+            // Needs texture barrier
+            glTextureBarrier();
+        }''', '''        } else if (features.should_use_texture_barrier()) {
+#ifndef VITA3K_UWP
+            // Needs texture barrier
+            glTextureBarrier();
+#endif
+        }''')
+replace(gl_draw, '''    } else if (!context.self_sampling_indices.empty()) {
+        if (features.support_texture_barrier) {''', '''    } else if (!context.self_sampling_indices.empty()) {
+#ifdef VITA3K_UWP
+        if (false) {
+#else
+        if (features.support_texture_barrier) {
+#endif''')
+print('OpenGL on D3D12: programmable blending reads a copy of the render target; own shader cache version.')
 
 # Say why a framebuffer is incomplete, with its attachments' formats.
 replace('vita3k/renderer/src/gl/surface_cache.cpp', '''    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
@@ -1143,3 +1242,291 @@ replace('vita3k/renderer/src/gl/surface_cache.cpp', '''    if (glCheckFramebuffe
         }
     }''')
 print('Incomplete GL framebuffers are described in the log.')
+
+# ── Vulkan: images in formats the GPU lacks get one it has ──────────────────
+# Dozen (Vulkan on the Xbox's Direct3D 12) has no resource format for
+# R4G4B4A4 or A2R10G10B10, and an image made in one fails to allocate
+# ("no allocation size ... format 0"). configure_texture handled R4G4B4A4
+# textures, but Gravity Rush's render-to-texture surfaces are sampled through
+# images the surface cache makes in the texture's format, and it stopped
+# drawing at the first. Every vkutil image now asks the GPU first: a format it
+# lacks for that use becomes the same layout with red and blue swapped (and
+# the view swapping them back), or failing that another format of the same
+# size, so the image exists; the log names each such format once.
+objects_h = 'vita3k/vkutil/include/vkutil/objects.h'
+replace(objects_h, '''void init(vma::Allocator vma_allocator);
+void deinit();''', '''void init(vma::Allocator vma_allocator);
+void deinit();
+
+#ifdef VITA3K_UWP
+// format if the GPU can make an image of it for this use; otherwise one it
+// can, of the same size, with mapping adjusted where that keeps the colours.
+vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ComponentMapping &mapping);
+#endif''')
+objects_cpp = 'vita3k/vkutil/src/objects.cpp'
+replace(objects_cpp, '''void deinit() {
+    allocator = nullptr;
+}''', '''void deinit() {
+    allocator = nullptr;
+}
+
+#ifdef VITA3K_UWP
+static vk::ComponentMapping swap_red_blue(const vk::ComponentMapping &m) {
+    const auto swap = [](vk::ComponentSwizzle c, vk::ComponentSwizzle self) {
+        if (c == vk::ComponentSwizzle::eIdentity)
+            c = self;
+        if (c == vk::ComponentSwizzle::eR)
+            return vk::ComponentSwizzle::eB;
+        if (c == vk::ComponentSwizzle::eB)
+            return vk::ComponentSwizzle::eR;
+        return c;
+    };
+    return vk::ComponentMapping{
+        swap(m.r, vk::ComponentSwizzle::eR),
+        swap(m.g, vk::ComponentSwizzle::eG),
+        swap(m.b, vk::ComponentSwizzle::eB),
+        swap(m.a, vk::ComponentSwizzle::eA),
+    };
+}
+
+static bool image_format_usable(vk::PhysicalDevice gpu, vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags) {
+    vk::ImageFormatProperties properties;
+    return gpu.getImageFormatProperties(format, vk::ImageType::e2D, vk::ImageTiling::eOptimal, usage, flags, &properties) == vk::Result::eSuccess;
+}
+
+vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ComponentMapping &mapping) {
+    if (!allocator || format == vk::Format::eUndefined)
+        return format;
+    const vk::PhysicalDevice gpu = allocator.getAllocatorInfo().physicalDevice;
+    if (!gpu || image_format_usable(gpu, format, usage, flags))
+        return format;
+
+    vk::Format substitute = vk::Format::eUndefined;
+    bool swapped = false;
+    switch (format) {
+    case vk::Format::eR4G4B4A4UnormPack16:
+        substitute = vk::Format::eB4G4R4A4UnormPack16;
+        swapped = true;
+        break;
+    case vk::Format::eB4G4R4A4UnormPack16:
+        substitute = vk::Format::eR4G4B4A4UnormPack16;
+        swapped = true;
+        break;
+    case vk::Format::eA2R10G10B10UnormPack32:
+        substitute = vk::Format::eA2B10G10R10UnormPack32;
+        swapped = true;
+        break;
+    case vk::Format::eA2B10G10R10UnormPack32:
+        substitute = vk::Format::eA2R10G10B10UnormPack32;
+        swapped = true;
+        break;
+    default:
+        break;
+    }
+    if (substitute != vk::Format::eUndefined && !image_format_usable(gpu, substitute, usage, flags))
+        substitute = vk::Format::eUndefined;
+
+    // Same size, another layout: the colours may be off, but the image exists
+    // and what is copied into it fits. Not for depth or compressed formats.
+    const char *first_component = vk::componentName(format, 0);
+    const bool depth_or_stencil = first_component && (first_component[0] == 'D' || first_component[0] == 'S');
+    if (substitute == vk::Format::eUndefined && !depth_or_stencil && !vk::isCompressed(format)) {
+        swapped = false;
+        std::vector<vk::Format> candidates;
+        switch (vk::blockSize(format)) {
+        case 1:
+            candidates = { vk::Format::eR8Unorm };
+            break;
+        case 2:
+            candidates = { vk::Format::eR5G6B5UnormPack16, vk::Format::eR8G8Unorm, vk::Format::eR16Unorm };
+            break;
+        case 4:
+            candidates = { vk::Format::eR8G8B8A8Unorm, vk::Format::eR32Uint };
+            break;
+        case 8:
+            candidates = { vk::Format::eR16G16B16A16Sfloat, vk::Format::eR32G32Uint };
+            break;
+        case 16:
+            candidates = { vk::Format::eR32G32B32A32Sfloat };
+            break;
+        default:
+            break;
+        }
+        for (const vk::Format candidate : candidates) {
+            if (image_format_usable(gpu, candidate, usage, flags)) {
+                substitute = candidate;
+                break;
+            }
+        }
+    }
+
+    {
+        static std::mutex logged_mutex;
+        static std::vector<std::pair<vk::Format, vk::ImageUsageFlags>> logged;
+        std::lock_guard<std::mutex> lock(logged_mutex);
+        if (logged.size() < 32 && std::find(logged.begin(), logged.end(), std::make_pair(format, usage)) == logged.end()) {
+            logged.emplace_back(format, usage);
+            if (substitute == vk::Format::eUndefined)
+                LOG_ERROR("Vulkan: the GPU cannot make {} images for {} and has no substitute", vk::to_string(format), vk::to_string(usage));
+            else
+                LOG_WARN("Vulkan: the GPU cannot make {} images for {}; made {} instead{}", vk::to_string(format), vk::to_string(usage),
+                    vk::to_string(substitute), swapped ? " (red and blue swapped back in the view)" : " (colours may be off)");
+        }
+    }
+    if (substitute == vk::Format::eUndefined)
+        return format;
+    if (swapped)
+        mapping = swap_red_blue(mapping);
+    return substitute;
+}
+#endif''')
+replace(objects_cpp, '''        format = vk::Format::eR8G8B8A8Unorm;
+    }
+    vk::ImageCreateInfo image_info{''', '''        format = vk::Format::eR8G8B8A8Unorm;
+    }
+#ifdef VITA3K_UWP
+    format = supported_image_format(format, usage, image_create_flags, mapping);
+#endif
+    vk::ImageCreateInfo image_info{''')
+replace(objects_cpp, '#include <utility>\n', '#include <vulkan/vulkan_format_traits.hpp>\n\n#include <algorithm>\n#include <mutex>\n#include <utility>\n#include <vector>\n')
+
+vk_texture = 'vita3k/renderer/src/vulkan/texture.cpp'
+replace(vk_texture, '''    current_texture->mip_count = mip_count;
+    current_texture->is_cube = is_cube;
+    uint32_t memory_needed = get_image_memory_upper_bound(gxm_texture, vk_format, base_format);''', '''#ifdef VITA3K_UWP
+    vk_format = vkutil::supported_image_format(vk_format, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+        is_cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), view_swizzle);
+#endif
+
+    current_texture->mip_count = mip_count;
+    current_texture->is_cube = is_cube;
+    uint32_t memory_needed = get_image_memory_upper_bound(gxm_texture, vk_format, base_format);''')
+print('Vulkan images in formats the GPU lacks are made in one it has.')
+
+# ── OpenGL: which formats a game's textures are made in ─────────────────────
+# One line per Vita texture format the first time a game uses it, to tell
+# texture problems (Gravity Rush's white interface) apart from others.
+gl_texture = 'vita3k/renderer/src/gl/texture.cpp'
+replace(gl_texture, '''    GLenum internal_format = translate_internal_format(base_format);
+    GLenum format = translate_format(base_format);
+    const GLenum type = compressed ? 0 : translate_type(base_format);
+''', '''    GLenum internal_format = translate_internal_format(base_format);
+    GLenum format = translate_format(base_format);
+    const GLenum type = compressed ? 0 : translate_type(base_format);
+#ifdef VITA3K_UWP
+    {
+        static std::vector<uint32_t> seen;
+        if (seen.size() < 48 && std::find(seen.begin(), seen.end(), static_cast<uint32_t>(fmt)) == seen.end()) {
+            seen.push_back(static_cast<uint32_t>(fmt));
+            LOG_INFO("GL texture format 0x{:X} (base 0x{:X}): internal 0x{:X}, format 0x{:X}, type 0x{:X}, swizzle 0x{:X} 0x{:X} 0x{:X} 0x{:X}, {}x{}",
+                static_cast<uint32_t>(fmt), static_cast<uint32_t>(base_format), internal_format, format, type,
+                swizzle[0], swizzle[1], swizzle[2], swizzle[3], width, height);
+        }
+    }
+#endif
+''')
+replace(gl_texture, '#include <gxm/functions.h>\n', '#include <gxm/functions.h>\n#include <util/log.h>\n\n#include <algorithm>\n#include <vector>\n')
+print('OpenGL texture formats are logged once each.')
+
+# ── System dialogs: a way out, and what they were told ──────────────────────
+# A save dialog took no button on the console (Danganronpa: "New Saved Data"
+# stayed up, and so did the load one): the game could only be closed. The
+# dialog's own input runs on Vita3K's overlay thread; this does not depend on
+# it. Holding Select (View) for a second and a half cancels a running dialog
+# as Circle would; held another second and a half, the dialog is ended
+# outright. Each change of a dialog's state, and each button the overlay
+# receives, goes to the log, to find why the buttons did nothing.
+lr = 'vita3k/libretro/libretro_vita3k.cpp'
+replace(lr, '''    libretro_poll_input();
+    if (libretro_update_name_entry(emuenv)) {''', '''    libretro_poll_input();
+#ifdef VITA3K_UWP
+    {
+        static int select_frames = 0;
+        static int last_type = -1, last_status = -1, last_substatus = -1;
+        auto &dialog = emuenv.common_dialog;
+        std::lock_guard<std::recursive_mutex> dialog_lock(dialog.mutex);
+        if (static_cast<int>(dialog.type) != last_type || static_cast<int>(dialog.status) != last_status
+            || static_cast<int>(dialog.substatus) != last_substatus) {
+            last_type = static_cast<int>(dialog.type);
+            last_status = static_cast<int>(dialog.status);
+            last_substatus = static_cast<int>(dialog.substatus);
+            LOG_INFO("System dialog: type {}, status {}, substatus {}, result {}", last_type, last_status, last_substatus,
+                static_cast<int>(dialog.result));
+        }
+        const bool running = dialog.type != NO_DIALOG && dialog.status == SCE_COMMON_DIALOG_STATUS_RUNNING;
+        const bool select_held = libretro.input_state_cb
+            && libretro.input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT) != 0;
+        if (running && select_held) {
+            ++select_frames;
+            if (select_frames == 90) {
+                LOG_WARN("System dialog (type {}) cancelled: Select held", static_cast<int>(dialog.type));
+                dialog.result = SCE_COMMON_DIALOG_RESULT_USER_CANCELED;
+                if (dialog.type == SAVEDATA_DIALOG) {
+                    // as the save dialog's Circle: the game then ends it
+                    dialog.savedata.button_id = SCE_SAVEDATA_DIALOG_BUTTON_ID_INVALID;
+                    dialog.savedata.draw_info_window = false;
+                    dialog.substatus = SCE_COMMON_DIALOG_STATUS_FINISHED;
+                } else {
+                    dialog.status = SCE_COMMON_DIALOG_STATUS_FINISHED;
+                }
+                emuenv.ctrl.overlay_input_intercepted.store(false, std::memory_order_relaxed);
+            } else if (select_frames == 180) {
+                LOG_WARN("System dialog (type {}) ended: Select still held", static_cast<int>(dialog.type));
+                dialog.result = SCE_COMMON_DIALOG_RESULT_USER_CANCELED;
+                dialog.substatus = SCE_COMMON_DIALOG_STATUS_FINISHED;
+                dialog.status = SCE_COMMON_DIALOG_STATUS_FINISHED;
+                emuenv.ctrl.overlay_input_intercepted.store(false, std::memory_order_relaxed);
+            }
+        } else if (!select_held) {
+            select_frames = 0;
+        }
+    }
+#endif
+    if (libretro_update_name_entry(emuenv)) {''')
+replace(lr, '#include <emuenv/state.h>\n', '#include <emuenv/state.h>\n' + ''.join(
+    f'#include <{h}>\n' for h in ('ctrl/state.h', 'dialog/state.h') if f'#include <{h}>' not in read(lr)))
+
+dialog_cpp = 'vita3k/overlay/src/common_dialog.cpp'
+replace(dialog_cpp, '''void common_dialog_overlay::on_button_pressed(pad_button button_press, bool is_auto_repeat) {
+    if (!m_dialog)
+        return;''', '''void common_dialog_overlay::on_button_pressed(pad_button button_press, bool is_auto_repeat) {
+#ifdef VITA3K_UWP
+    if (!is_auto_repeat) {
+        static int logged = 0;
+        if (logged < 64) {
+            logged++;
+            LOG_INFO("System dialog button {}: dialog type {}, fading in {}, closing {}, {} buttons, {} save slots",
+                static_cast<int>(button_press), m_active_type, m_fade_anim.active, m_dismissing, m_buttons.size(), m_save_slots.size());
+        }
+    }
+#endif
+    if (!m_dialog)
+        return;''')
+print('System dialogs: Select held cancels a stuck one; their states and buttons are logged.')
+
+# ── OpenGL: what each shown frame came from ─────────────────────────────────
+# Minecraft ran on OpenGL with a black picture throughout. The first frames,
+# then one a minute, say whether the frame was a rendered surface (and its
+# texture's size) or memory, so a black one can be traced.
+replace(lr, '''        // A frame no surface was rendered into (the game wrote it with the
+        // CPU, as some do for their first screen): uploaded from memory into a''', '''#ifdef VITA3K_UWP
+        {
+            static uint64_t presented = 0;
+            presented++;
+            if (presented <= 5 || presented % 3600 == 0) {
+                GLint tex_w = 0, tex_h = 0, tex_format = 0;
+                if (surface_tex) {
+                    glGetTextureLevelParameteriv(surface_tex, 0, GL_TEXTURE_WIDTH, &tex_w);
+                    glGetTextureLevelParameteriv(surface_tex, 0, GL_TEXTURE_HEIGHT, &tex_h);
+                    glGetTextureLevelParameteriv(surface_tex, 0, GL_TEXTURE_INTERNAL_FORMAT, &tex_format);
+                }
+                LOG_INFO("GL frame {}: display buffer 0x{:X} {}x{} pitch {}; {} (texture {}x{} format 0x{:X}, uv {:.3f} {:.3f} {:.3f} {:.3f})",
+                    presented, frame.base.address(), frame.image_size.x, frame.image_size.y, frame.pitch,
+                    surface_tex ? "rendered surface" : "no surface, from memory", tex_w, tex_h, tex_format,
+                    uvs[0], uvs[1], uvs[2], uvs[3]);
+            }
+        }
+#endif
+        // A frame no surface was rendered into (the game wrote it with the
+        // CPU, as some do for their first screen): uploaded from memory into a''')
+print('OpenGL frames say what they were shown from.')

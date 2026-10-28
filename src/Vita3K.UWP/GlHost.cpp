@@ -143,15 +143,18 @@ bool GlHost::Load(std::string& error) {
 
 void __stdcall GlHost::DebugMessage(unsigned source, unsigned type, unsigned id, unsigned severity, int length,
                                     const char* message, const void* user) {
-    (void)source;
     (void)length;
     auto* self = static_cast<GlHost*>(const_cast<void*>(user));
     if (!self || !message) return;
     // Errors (0x824C), undefined behaviour (0x824E) and high-severity
     // messages (0x9146); performance notes and the rest are left out.
     if (type != 0x824C && type != 0x824E && severity != 0x9146) return;
-    if (self->debugMessages_ >= 80) return;
-    if (++self->debugMessages_ == 80) {
+    // The shader compiler's warnings (source 0x8248) are Vita3K's to log: its
+    // generated shaders warn by the dozen ("used uninitialized") and filled
+    // the cap before any API error could show.
+    if (source == 0x8248 || std::strstr(message, "used uninitialized")) return;
+    if (self->debugMessages_ >= 200) return;
+    if (++self->debugMessages_ == 200) {
         self->Write(2, "OpenGL: further driver messages are not logged");
         return;
     }
