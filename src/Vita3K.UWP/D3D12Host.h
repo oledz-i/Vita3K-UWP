@@ -38,6 +38,10 @@ public:
     // The panel's size in DIPs: the frame is scaled to fit it (keeping its
     // shape, or filling it when stretch is set) by the compositor, on the GPU.
     void SetViewport(float width, float height, bool stretch);
+    // The controller's touch cursor, drawn over the next game frames at x, y
+    // (0..1 across the frame): a ring, filled while touching (orange on the
+    // front screen, blue on the rear touchpad).
+    void SetCursor(bool visible, float x, float y, bool pressed, bool rear);
     void Shutdown();
     bool Ready() const { return swapChain_ != nullptr; }
     // The D3D12 debug layer, which says in words why a call failed (an
@@ -50,6 +54,14 @@ public:
     std::vector<std::string> TakeDebugMessages();
 
 private:
+    struct Cursor {
+        bool visible = false;
+        float x = 0.5f;
+        float y = 0.5f;
+        bool pressed = false;
+        bool rear = false;
+    } cursor_;
+    static void DrawCursor(std::uint8_t* bgra, unsigned rowPitch, unsigned width, unsigned height, const Cursor& cursor);
     static constexpr unsigned kBufferCount = 2;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;

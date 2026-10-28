@@ -3813,6 +3813,8 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
     const std::wstring snapshotPath = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\frame-300.bmp";
     libretro_.SetFrameSink([this,snapshotPath](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
         std::wstring error;
+        const auto cursor = libretro_.Cursor();
+        renderer_.SetCursor(cursor.visible, cursor.x, cursor.y, cursor.pressed, cursor.rear);
         const bool presented = renderer_.PresentFrame(pixels, width, height, width * 4, rgba, error);
         const auto shown = ++framesShown_;
         if (shown % 3600 == 0) vita3k_uwp::ReassertCrashLog();
@@ -3830,7 +3832,7 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
             std::lock_guard<std::mutex> guard(presentErrorMutex_);
             presentError_ = error.empty() ? L"presenter not ready" : error;
         }
-        if (!pictureSeen_.load() || shown == 60 || shown == 600 || shown % 3600 == 0) {
+        if (!pictureSeen_.load() || shown == 60 || shown % 600 == 0) {
             // Sample a grid of the frame: is anything visible yet, and how bright is it?
             unsigned lit = 0, total = 0;
             unsigned long long sum = 0;
@@ -3848,6 +3850,14 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
             if (lit > 0) pictureSeen_ = true;
             lastLevel_ = static_cast<unsigned>(total ? sum / total : 0);
             lastLit_ = lit;
+            {
+                unsigned long long usedMb = 0, limitMb = 0;
+                try {
+                    usedMb = Windows::System::MemoryManager::AppMemoryUsage / (1024ull * 1024ull);
+                    limitMb = Windows::System::MemoryManager::AppMemoryUsageLimit / (1024ull * 1024ull);
+                } catch (...) {}
+                libretro_.NotePicture(lit, total, lastLevel_.load(), usedMb, limitMb);
+            }
             if (shown == 1 || shown == 60 || shown == 600 || shown % 3600 == 0) {
                 // Memory too: the console ends an app over its limit with no
                 // crash to log, so the climb towards it has to show here.
@@ -3900,6 +3910,16 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         if (!addonsRoot.empty() && !titleId.empty()) {
             int installed = 0, failed = 0;
             InstallPendingAddons(libretro_, system, addonsRoot, titleId, installed, failed);
+        }
+        {
+            std::string build = "0.1.?";
+            try {
+                const auto version = Windows::ApplicationModel::Package::Current->Id->Version;
+                build = std::to_string(version.Major) + "." + std::to_string(version.Minor) + "." + std::to_string(version.Build)
+                    + " (build #" + std::to_string(version.Build) + ")";
+            } catch (...) {}
+            libretro_.SetBuildLabel(build);
+            libretro_.LogLine("App version " + build);
         }
         if (!libretro_.LoadGame(content, detail)) return std::make_pair(false, detail);
         if (!libretro_.StartRunning(detail)) return std::make_pair(false, detail);

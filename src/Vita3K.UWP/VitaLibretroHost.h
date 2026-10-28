@@ -54,6 +54,27 @@ public:
     // Which renderer the running game uses ("Vulkan" or "OpenGL"), and the GPU
     // and driver behind OpenGL once its context exists.
     bool UsingOpenGL() const { return glMode_; }
+    // Touch from the controller. Clicking the right stick (R3) turns the
+    // touch cursor on or off; while it is on, the right stick moves it and
+    // does not reach the game. The right trigger touches the front screen
+    // where the cursor is (on or off), and with the left trigger held too, the
+    // rear touchpad. Position 0..1 across the game's picture.
+    struct TouchCursor {
+        bool visible = false;
+        float x = 0.5f;
+        float y = 0.5f;
+        bool pressed = false;
+        bool rear = false;
+    };
+    // Read on the core thread (the frame sink), where it is also updated.
+    TouchCursor Cursor() const { return cursor_; }
+    // vita3k-diagnostics.txt, next to the log: the same summary for every
+    // build and game, rewritten at the first frame, each minute and when the
+    // game closes, so builds can be compared without searching the log.
+    void SetBuildLabel(const std::string& label) { buildLabel_ = label; }
+    // From the frame sink when it samples a frame: how much of the picture
+    // is lit, its average level (0-255), and the app's memory.
+    void NotePicture(unsigned lit, unsigned total, unsigned level, unsigned long long usedMb, unsigned long long limitMb);
     std::string OpenGLDescription() const { return gl_.Description(); }
     void UnloadGame();
     // Core options (retro_variable keys). Values set before Initialize are
@@ -154,6 +175,35 @@ private:
     CoreAudio audio_;
     std::vector<std::int16_t> sampleBuffer_;
     XINPUT_STATE inputState_{};
+    TouchCursor cursor_;
+    bool cursorMode_ = false;
+    bool lastRightThumb_ = false;
+    LARGE_INTEGER lastCursorTick_{};
+    unsigned long long cursorShownUntil_ = 0;
+    void UpdateTouchCursor();
+    // Diagnostics: updated from Log (logsMutex_ held) and Video (core thread).
+    struct Diagnostics {
+        std::string game;
+        unsigned long long startTick = 0;
+        unsigned long long lastWrite = 0;
+        unsigned long long firstFrameMs = 0;
+        unsigned long long frames = 0;
+        unsigned long long windowFrames = 0;
+        unsigned long long windowStart = 0;
+        std::uint64_t windowGuestStart = 0;
+        double worstFrameMs = 0.0;
+        double windowWorstMs = 0.0;
+        LARGE_INTEGER lastFrame{};
+        unsigned long long errors = 0, warnings = 0, driverErrors = 0, stalls = 0, dialogs = 0, touches = 0, crashes = 0;
+        unsigned lit = 0, total = 0, level = 0;
+        unsigned long long usedMb = 0, limitMb = 0, peakMb = 0;
+        std::vector<std::string> notable;
+        std::vector<std::string> minutes;
+    } diag_;
+    std::string buildLabel_;
+    void DiagnosticsObserve(const char* message);
+    void DiagnosticsFrame();
+    void WriteDiagnostics(const char* when);
     bool inputConnected_ = false;
     HMODULE module_ = nullptr;
     Init init_ = nullptr;

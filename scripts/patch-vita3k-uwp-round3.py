@@ -1094,27 +1094,36 @@ print('U4U4U4U4 textures use B4G4R4A4 with an R/B swapped view when R4G4B4A4 is 
 # With GL_ARB_texture_barrier (which Mesa's D3D12 driver advertises) Vita3K's
 # GL renderer binds the render target as a read-write image in every shader
 # that reads the frame's colour, and the mask bit adds another read-write
-# RGBA8 image to every draw. Direct3D 12 cannot have one texture as render
-# target and UAV at once: the app was ended at Danganronpa's first draws.
-# Turning texture barrier off stopped that, but then those shaders read
-# nothing for the frame's colour: Minecraft drew only black and Gravity Rush
-# lost most of its picture. So texture barrier stays on, and draw.cpp gives
-# such shaders a copy of the render target made just before the draw (the
-# same guarantee texture barrier gives: earlier draws are visible). Shader
-# interlock (image writes) and the mask bit stay off.
+# RGBA8 image to every draw. On the Xbox any image (UAV) in a pixel shader
+# ended the GPU device: Danganronpa (mask bit) at its first draws, and in
+# build 70 Minecraft and Gravity Rush at their first shader reading the
+# frame's colour from a copy bound as an image (GL_OUT_OF_MEMORY, then the
+# device gone). Turning texture barrier off kept them alive but those shaders
+# then read nothing (Minecraft black, Gravity Rush's interface white). So
+# such shaders now read the frame's colour with texelFetch from a texture: a
+# copy of the render target made just before the draw (the guarantee texture
+# barrier gives: earlier draws are visible), bound to texture unit 32 (the
+# game's textures use 0-31). No images at all: shader interlock and the mask
+# bit stay off.
 gl_renderer = 'vita3k/renderer/src/gl/renderer.cpp'
 replace(gl_renderer, '''    return gl_state.init();
 }''', '''#ifdef VITA3K_UWP
     gl_state.features.support_shader_interlock = false;
     gl_state.features.use_mask_bit = false;
-    LOG_INFO("OpenGL on Direct3D 12: programmable blending reads a copy of the render target (texture barrier {}); shader interlock and the mask bit are off",
-        gl_state.features.support_texture_barrier ? "available" : "missing");
+    {
+        GLint combined_units = 0;
+        glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &combined_units);
+        if (combined_units <= shader::UWP_COLOR_ATTACHMENT_TEXTURE_UNIT)
+            gl_state.features.support_texture_barrier = false;
+        LOG_INFO("OpenGL on Direct3D 12: programmable blending {} (texture units {}); shader interlock and the mask bit are off",
+            gl_state.features.support_texture_barrier ? "reads a copy of the render target as a texture" : "is off", combined_units);
+    }
 #endif
     return gl_state.init();
 }''')
 # Shaders cached by earlier builds were made with other features.
 replace(gl_renderer, '''    shader_version = fmt::format("v{}", shader::CURRENT_VERSION);''', '''#ifdef VITA3K_UWP
-    shader_version = fmt::format("v{}-d3d12gl2", shader::CURRENT_VERSION);
+    shader_version = fmt::format("v{}-d3d12gl3", shader::CURRENT_VERSION);
 #else
     shader_version = fmt::format("v{}", shader::CURRENT_VERSION);
 #endif''')
@@ -1183,17 +1192,21 @@ replace(gl_draw, '''    if (fragment_program_gxp.is_frag_color_used() && feature
         }
     }''', '''    if (fragment_program_gxp.is_frag_color_used() && features.is_programmable_blending_need_to_bind_color_attachment()) {
 #ifdef VITA3K_UWP
-        const GLuint color_source = uwp_color_attachment_copy(context.current_color_attachment);
+        // texelFetch from a copy made now, bound as a texture (see the shader
+        // generator): Direct3D 12 here takes no image in a pixel shader
+        (void)use_raw_image;
+        (void)surface_format;
+        glActiveTexture(GL_TEXTURE0 + shader::UWP_COLOR_ATTACHMENT_TEXTURE_UNIT);
+        glBindTexture(GL_TEXTURE_2D, uwp_color_attachment_copy(context.current_color_attachment));
 #else
-        const GLuint color_source = context.current_color_attachment;
-#endif
         if (use_raw_image) {
-            glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, color_source, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
+            glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, context.current_color_attachment, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
             glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, 0, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
         } else {
             glBindImageTexture(shader::COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16UI);
-            glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, color_source, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
+            glBindImageTexture(shader::COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE, context.current_color_attachment, 0, GL_FALSE, 0, GL_READ_WRITE, surface_format);
         }
+#endif
     }''')
 # The copy above stands for the barrier; and a texture sampled while it is
 # the render target (a feedback loop Direct3D 12 forbids too) is read from
@@ -1214,7 +1227,69 @@ replace(gl_draw, '''    } else if (!context.self_sampling_indices.empty()) {
 #else
         if (features.support_texture_barrier) {
 #endif''')
-print('OpenGL on D3D12: programmable blending reads a copy of the render target; own shader cache version.')
+spirv_h = 'vita3k/shader/include/shader/spirv_recompiler.h'
+replace(spirv_h, '''static constexpr int COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE = 3;''', '''static constexpr int COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE = 3;
+#ifdef VITA3K_UWP
+// OpenGL on Direct3D 12: the texture unit the frame's colour is read from
+// (a sampler2D, texelFetch) instead of an image; the game's use 0-31.
+static constexpr int UWP_COLOR_ATTACHMENT_TEXTURE_UNIT = 32;
+#endif''')
+spirv_cpp = 'vita3k/shader/src/spirv_recompiler.cpp'
+replace(spirv_cpp, '''    bool is_vulkan = false;
+    spv::ImageFormat image_storage_format = spv::ImageFormat::ImageFormatUnknown;''', '''    bool is_vulkan = false;
+    // OpenGL on Direct3D 12: the frame's colour is a sampler2D, read with
+    // texelFetch, not a storage image
+    bool sampled_color_attachment = false;
+    spv::ImageFormat image_storage_format = spv::ImageFormat::ImageFormatUnknown;''')
+replace(spirv_cpp, '''            // Create a global sampler, which is our color attachment
+            spv::Id color_attachment = create_builtin_sampler(b, features, translation_state, "f_colorAttachment");
+            b.addDecoration(color_attachment, spv::DecorationCoherent);
+            b.setPrecision(color_attachment, precision);
+            spv::Id color_attachment_raw = spv::NoResult;
+
+            if (translation_state.is_vulkan) {
+                b.addDecoration(color_attachment, spv::DecorationBinding, 0);
+                b.addDecoration(color_attachment, spv::DecorationDescriptorSet, 1);
+            } else {
+                b.addDecoration(color_attachment, spv::DecorationBinding, COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE);
+            }''', '''#ifdef VITA3K_UWP
+            translation_state.sampled_color_attachment = !translation_state.is_vulkan && !features.support_shader_interlock;
+#endif
+            // Create a global sampler, which is our color attachment
+            spv::Id color_attachment = translation_state.sampled_color_attachment
+                ? create_param_sampler(b, "f_colorAttachment", spv::Dim2D)
+                : create_builtin_sampler(b, features, translation_state, "f_colorAttachment");
+            if (!translation_state.sampled_color_attachment)
+                b.addDecoration(color_attachment, spv::DecorationCoherent);
+            b.setPrecision(color_attachment, precision);
+            spv::Id color_attachment_raw = spv::NoResult;
+
+            if (translation_state.is_vulkan) {
+                b.addDecoration(color_attachment, spv::DecorationBinding, 0);
+                b.addDecoration(color_attachment, spv::DecorationDescriptorSet, 1);
+            } else {
+#ifdef VITA3K_UWP
+                b.addDecoration(color_attachment, spv::DecorationBinding,
+                    translation_state.sampled_color_attachment ? UWP_COLOR_ATTACHMENT_TEXTURE_UNIT : COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE);
+#else
+                b.addDecoration(color_attachment, spv::DecorationBinding, COLOR_ATTACHMENT_TEXTURE_SLOT_IMAGE);
+#endif
+            }''')
+replace(spirv_cpp, '''            } else {
+                source = b.createOp(spv::OpImageRead, v4, { b.createLoad(color_attachment, spv::NoPrecision), current_coord });
+                b.setPrecision(source, precision);''', '''            } else {
+                if (translation_state.sampled_color_attachment) {
+                    // texelFetch(f_colorAttachment, coord, 0)
+                    const spv::Id image_type = b.makeImageType(b.makeFloatType(32), spv::Dim2D, false, false, false, 1, spv::ImageFormatUnknown);
+                    const spv::Id image = b.createUnaryOp(spv::OpImage, image_type, b.createLoad(color_attachment, spv::NoPrecision));
+                    source = b.createOp(spv::OpImageFetch, v4,
+                        std::vector<spv::IdImmediate>{ { true, image }, { true, current_coord },
+                            { false, static_cast<unsigned>(spv::ImageOperandsLodMask) }, { true, b.makeIntConstant(0) } });
+                } else {
+                    source = b.createOp(spv::OpImageRead, v4, { b.createLoad(color_attachment, spv::NoPrecision), current_coord });
+                }
+                b.setPrecision(source, precision);''')
+print('OpenGL on D3D12: programmable blending reads a copy of the render target as a texture; own shader cache version.')
 
 # Say why a framebuffer is incomplete, with its attachments' formats.
 replace('vita3k/renderer/src/gl/surface_cache.cpp', '''    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
@@ -1260,8 +1335,12 @@ void deinit();
 
 #ifdef VITA3K_UWP
 // format if the GPU can make an image of it for this use; otherwise one it
-// can, of the same size, with mapping adjusted where that keeps the colours.
-vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ComponentMapping &mapping);
+// can, of the same size. swap_red_blue: the image's data comes from the
+// guest's memory in the original layout (a texture upload), so where the
+// substitute has red and blue the other way round, mapping swaps them back.
+// Images the GPU writes (render targets, copies of them) keep the plain
+// mapping: what is written through the substitute reads back the same.
+vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ComponentMapping &mapping, bool swap_red_blue);
 #endif''')
 objects_cpp = 'vita3k/vkutil/src/objects.cpp'
 replace(objects_cpp, '''void deinit() {
@@ -1271,7 +1350,7 @@ replace(objects_cpp, '''void deinit() {
 }
 
 #ifdef VITA3K_UWP
-static vk::ComponentMapping swap_red_blue(const vk::ComponentMapping &m) {
+static vk::ComponentMapping vkutil_swap_red_blue(const vk::ComponentMapping &m) {
     const auto swap = [](vk::ComponentSwizzle c, vk::ComponentSwizzle self) {
         if (c == vk::ComponentSwizzle::eIdentity)
             c = self;
@@ -1294,9 +1373,46 @@ static bool image_format_usable(vk::PhysicalDevice gpu, vk::Format format, vk::I
     return gpu.getImageFormatProperties(format, vk::ImageType::e2D, vk::ImageTiling::eOptimal, usage, flags, &properties) == vk::Result::eSuccess;
 }
 
-vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ComponentMapping &mapping) {
+static vk::Format find_supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, bool &swapped);
+
+vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ComponentMapping &mapping, bool swap_red_blue) {
     if (!allocator || format == vk::Format::eUndefined)
         return format;
+    // Asked for every surface lookup: the answers are kept.
+    struct Answer {
+        vk::Format format;
+        vk::ImageUsageFlags usage;
+        vk::ImageCreateFlags flags;
+        vk::Format result;
+        bool swapped;
+    };
+    static std::mutex answers_mutex;
+    static std::vector<Answer> answers;
+    bool swapped = false;
+    vk::Format result = vk::Format::eUndefined;
+    {
+        std::lock_guard<std::mutex> lock(answers_mutex);
+        for (const Answer &answer : answers) {
+            if (answer.format == format && answer.usage == usage && answer.flags == flags) {
+                result = answer.result;
+                swapped = answer.swapped;
+                break;
+            }
+        }
+    }
+    if (result == vk::Format::eUndefined) {
+        result = find_supported_image_format(format, usage, flags, swapped);
+        std::lock_guard<std::mutex> lock(answers_mutex);
+        if (answers.size() < 256)
+            answers.push_back({ format, usage, flags, result, swapped });
+    }
+    if (swapped && swap_red_blue)
+        mapping = vkutil_swap_red_blue(mapping);
+    return result;
+}
+
+static vk::Format find_supported_image_format(vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, bool &swapped_out) {
+    swapped_out = false;
     const vk::PhysicalDevice gpu = allocator.getAllocatorInfo().physicalDevice;
     if (!gpu || image_format_usable(gpu, format, usage, flags))
         return format;
@@ -1370,13 +1486,12 @@ vk::Format supported_image_format(vk::Format format, vk::ImageUsageFlags usage, 
                 LOG_ERROR("Vulkan: the GPU cannot make {} images for {} and has no substitute", vk::to_string(format), vk::to_string(usage));
             else
                 LOG_WARN("Vulkan: the GPU cannot make {} images for {}; made {} instead{}", vk::to_string(format), vk::to_string(usage),
-                    vk::to_string(substitute), swapped ? " (red and blue swapped back in the view)" : " (colours may be off)");
+                    vk::to_string(substitute), swapped ? " (red and blue the other way round)" : " (colours may be off)");
         }
     }
     if (substitute == vk::Format::eUndefined)
         return format;
-    if (swapped)
-        mapping = swap_red_blue(mapping);
+    swapped_out = swapped;
     return substitute;
 }
 #endif''')
@@ -1385,7 +1500,7 @@ replace(objects_cpp, '''        format = vk::Format::eR8G8B8A8Unorm;
     vk::ImageCreateInfo image_info{''', '''        format = vk::Format::eR8G8B8A8Unorm;
     }
 #ifdef VITA3K_UWP
-    format = supported_image_format(format, usage, image_create_flags, mapping);
+    format = supported_image_format(format, usage, image_create_flags, mapping, false);
 #endif
     vk::ImageCreateInfo image_info{''')
 replace(objects_cpp, '#include <utility>\n', '#include <vulkan/vulkan_format_traits.hpp>\n\n#include <algorithm>\n#include <mutex>\n#include <utility>\n#include <vector>\n')
@@ -1395,12 +1510,39 @@ replace(vk_texture, '''    current_texture->mip_count = mip_count;
     current_texture->is_cube = is_cube;
     uint32_t memory_needed = get_image_memory_upper_bound(gxm_texture, vk_format, base_format);''', '''#ifdef VITA3K_UWP
     vk_format = vkutil::supported_image_format(vk_format, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
-        is_cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), view_swizzle);
+        is_cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), view_swizzle, true);
 #endif
 
     current_texture->mip_count = mip_count;
     current_texture->is_cube = is_cube;
     uint32_t memory_needed = get_image_memory_upper_bound(gxm_texture, vk_format, base_format);''')
+# Surfaces are looked up by the format Vita3K wants for them; once made in a
+# substitute, that lookup has to ask for the substitute too, or every use
+# after the first made a view in the original format on an image of the
+# other (Gravity Rush's 10-bit lighting target: an A2R10G10B10 view of an
+# A2B10G10R10 image, which Direct3D 12 cannot have).
+gxm_to_vk = 'vita3k/renderer/src/vulkan/gxm_to_vulkan.cpp'
+replace(gxm_to_vk, '''    if (base_format == SCE_GXM_COLOR_BASE_FORMAT_U4U4U4U4 && (!support_native_rgba4 || use_shader_interlock))
+        return vk::Format::eR8G8B8A8Unorm;
+
+    return translate_format(base_format);
+}''', '''    if (base_format == SCE_GXM_COLOR_BASE_FORMAT_U4U4U4U4 && (!support_native_rgba4 || use_shader_interlock))
+        return vk::Format::eR8G8B8A8Unorm;
+
+#ifdef VITA3K_UWP
+    vk::ComponentMapping unchanged = vkutil::default_comp_mapping;
+    return vkutil::supported_image_format(translate_format(base_format),
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eColorAttachment
+            | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eInputAttachment,
+        {}, unchanged, false);
+#else
+    return translate_format(base_format);
+#endif
+}''')
+if '#include <vkutil/objects.h>' not in read(gxm_to_vk):
+    text = read(gxm_to_vk)
+    first = text.index('#include')
+    write(gxm_to_vk, text[:first] + '#include <vkutil/objects.h>\n' + text[first:])
 print('Vulkan images in formats the GPU lacks are made in one it has.')
 
 # ── OpenGL: which formats a game's textures are made in ─────────────────────

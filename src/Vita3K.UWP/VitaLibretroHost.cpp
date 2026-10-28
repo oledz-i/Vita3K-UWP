@@ -315,6 +315,7 @@ std::wstring VitaLibretroHost::RecentLog() const {
 void VitaLibretroHost::UnloadGame() {
     std::lock_guard<std::recursive_mutex> lifecycle(lifecycleMutex_);
     StopRunning();
+    if (gameLoaded_ && diag_.startTick) WriteDiagnostics("when the game closed");
     // OpenGL: the core frees its GL objects as it unloads, so its context is
     // made current here (the emulation thread that used it has ended).
     if (glMode_) gl_.MakeCurrent(true);
@@ -342,6 +343,9 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     {
         std::lock_guard<std::mutex> guard(logsMutex_);
         latestCoreLogs_.clear();
+        diag_ = Diagnostics{};
+        diag_.game = readableContentPath;
+        diag_.startTick = GetTickCount64();
     }
     RetroGameInfo game{};
     game.path = readableContentPath.c_str();
@@ -463,6 +467,21 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
     paused_.store(false);
     lastButtons_ = 0;
     gameStartTick_.store(GetTickCount64());
+    {
+        // timing from here; what loading logged is kept
+        std::lock_guard<std::mutex> guard(logsMutex_);
+        diag_.startTick = GetTickCount64();
+        diag_.lastWrite = 0;
+        diag_.firstFrameMs = 0;
+        diag_.frames = 0;
+        diag_.windowFrames = 0;
+        diag_.windowStart = diag_.startTick;
+        diag_.windowGuestStart = GuestFrames();
+        diag_.worstFrameMs = 0.0;
+        diag_.windowWorstMs = 0.0;
+        diag_.lastFrame = {};
+        diag_.minutes.clear();
+    }
     running_.store(true);
     try {
         runThread_ = std::thread([this] {
@@ -556,6 +575,7 @@ void __cdecl VitaLibretroHost::Log(unsigned level, const char* format, ...) {
         }
     }
     host->ObserveLog(message);
+    host->DiagnosticsObserve(message);
     host->latestCoreLogs_.append(message);
     if (host->latestCoreLogs_.size() > 12000) {
         host->latestCoreLogs_.erase(0, host->latestCoreLogs_.size() - 12000);
@@ -647,6 +667,7 @@ bool __cdecl VitaLibretroHost::Environment(unsigned cmd, void* data) {
 void __cdecl VitaLibretroHost::Video(
     const void* data, unsigned width, unsigned height, std::size_t) {
     if (!active_ || data != RETRO_HW_FRAME_BUFFER_VALID) return;
+    active_->DiagnosticsFrame();
     if (active_->glMode_) {
         active_->gl_.OnFrame(width, height);
         if (!active_->framePresented_.exchange(true))
@@ -683,6 +704,7 @@ void __cdecl VitaLibretroHost::PollInput() {
     // Take one coherent controller snapshot for the emulated frame.
     active_->inputConnected_ = XInputGetState(0, &active_->inputState_) == ERROR_SUCCESS;
     if (!active_->inputConnected_) active_->inputState_ = {};
+    active_->UpdateTouchCursor();
     const auto buttons = active_->inputState_.Gamepad.wButtons;
     constexpr WORD combo = XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START;
     const bool held = (buttons & combo) == combo;
@@ -697,6 +719,210 @@ void __cdecl VitaLibretroHost::PollInput() {
         else active_->running_.store(false);
     }
 }
+void VitaLibretroHost::NotePicture(unsigned lit, unsigned total, unsigned level, unsigned long long usedMb, unsigned long long limitMb) {
+    std::lock_guard<std::mutex> guard(logsMutex_);
+    diag_.lit = lit;
+    diag_.total = total;
+    diag_.level = level;
+    if (usedMb) {
+        diag_.usedMb = usedMb;
+        diag_.limitMb = limitMb;
+        if (usedMb > diag_.peakMb) diag_.peakMb = usedMb;
+    }
+}
+
+// Runs with logsMutex_ held: counts, and keeps the lines that say how this
+// console handles the game (each once).
+void VitaLibretroHost::DiagnosticsObserve(const char* message) {
+    if (!message || !diag_.startTick) return;
+    const std::string text = message;
+    const auto has = [&text](const char* needle) { return text.find(needle) != std::string::npos; };
+    if (has("|E|")) ++diag_.errors;
+    if (has("|W|")) ++diag_.warnings;
+    if (has("OpenGL driver (id") || has("GL_OUT_OF_MEMORY") || has("VK_ERROR") || has("HRESULT 0x8")) ++diag_.driverErrors;
+    if (has("OpenGL: waited")) ++diag_.stalls;
+    if (has("System dialog:")) ++diag_.dialogs;
+    if (has("Touch front") || has("Touch rear")) ++diag_.touches;
+    if (has("crashed") || has("CRASH")) ++diag_.crashes;
+    static const char* const keep[] = {
+        "cannot make", "GL texture format", "Programmable blending", "programmable blending", "Framebuffer is not complete",
+        "OUT_OF_MEMORY", "crashed", "memory mapping", "surface sync", "RGBA4444", "Mask bit", "OpenGL - Version",
+        "Vulkan device (RetroArch", "Unknown format", "Unsupported", "System dialog (type", "Touch cursor",
+        "no allocation size", "Render thread stopped", "presentation images", "GL frame 1:", "Present 3:",
+        "Game: '", "Using shader interlock", "texture viewport",
+    };
+    bool wanted = false;
+    for (const char* needle : keep) {
+        if (has(needle)) { wanted = true; break; }
+    }
+    if (!wanted || diag_.notable.size() >= 150) return;
+    // without the timestamp, so one message is kept once
+    std::string line = text;
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    const auto stamp = line.find("] |");
+    std::string key = stamp != std::string::npos ? line.substr(stamp) : line;
+    if (key.size() > 140) key.resize(140);
+    for (const auto& kept : diag_.notable) {
+        const auto keptStamp = kept.find("] |");
+        std::string keptKey = keptStamp != std::string::npos ? kept.substr(keptStamp) : kept;
+        if (keptKey.size() > 140) keptKey.resize(140);
+        if (keptKey == key) return;
+    }
+    if (line.size() > 400) line.resize(400);
+    diag_.notable.push_back(line);
+}
+
+// Core thread, once per frame shown.
+void VitaLibretroHost::DiagnosticsFrame() {
+    LARGE_INTEGER now{}, frequency{};
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    bool write = false;
+    const char* when = "";
+    {
+        std::lock_guard<std::mutex> guard(logsMutex_);
+        if (!diag_.startTick) return;
+        const unsigned long long tick = GetTickCount64();
+        if (diag_.lastFrame.QuadPart && frequency.QuadPart) {
+            const double ms = 1000.0 * static_cast<double>(now.QuadPart - diag_.lastFrame.QuadPart) / static_cast<double>(frequency.QuadPart);
+            // the first second's frames include loading
+            if (tick - diag_.startTick > 1000) {
+                if (ms > diag_.worstFrameMs) diag_.worstFrameMs = ms;
+                if (ms > diag_.windowWorstMs) diag_.windowWorstMs = ms;
+            }
+        }
+        diag_.lastFrame = now;
+        ++diag_.frames;
+        ++diag_.windowFrames;
+        if (diag_.frames == 1) {
+            diag_.firstFrameMs = tick - diag_.startTick;
+            write = true;
+            when = "at the first frame";
+        } else if (tick - diag_.lastWrite >= 60000) {
+            write = true;
+            when = "during play";
+        }
+    }
+    if (write) WriteDiagnostics(when);
+}
+
+void VitaLibretroHost::WriteDiagnostics(const char* when) {
+    if (runtimeLogPath_.empty()) return;
+    const std::uint64_t guest = GuestFrames();
+    std::map<std::string, std::string> options;
+    {
+        std::lock_guard<std::mutex> guard(optionsMutex_);
+        for (const auto& [key, value] : options_)
+            options[key] = value ? value : "";
+    }
+    std::string out;
+    char line[512];
+    {
+        std::lock_guard<std::mutex> guard(logsMutex_);
+        const unsigned long long tick = GetTickCount64();
+        const double windowSeconds = (tick - diag_.windowStart) / 1000.0;
+        if (windowSeconds >= 1.0 && diag_.frames > 1) {
+            std::snprintf(line, sizeof(line),
+                "%6.1f min  shown %5.1f fps  game %5.1f fps  worst frame %6.1f ms  picture %u/%u lit, level %u  memory %llu MB",
+                (tick - diag_.startTick) / 60000.0, diag_.windowFrames / windowSeconds,
+                guest >= diag_.windowGuestStart ? (guest - diag_.windowGuestStart) / windowSeconds : 0.0,
+                diag_.windowWorstMs, diag_.lit, diag_.total, diag_.level, diag_.usedMb);
+            if (diag_.minutes.size() < 240) diag_.minutes.push_back(line);
+        }
+        diag_.windowStart = tick;
+        diag_.windowFrames = 0;
+        diag_.windowWorstMs = 0.0;
+        diag_.windowGuestStart = guest;
+        diag_.lastWrite = tick;
+
+        out += "Vita3K for Xbox - diagnostics (written " + std::string(when) + ")\n";
+        out += "App build: " + (buildLabel_.empty() ? std::string("unknown") : buildLabel_) + "\n";
+        out += "Game: " + diag_.game + "\n";
+        out += std::string("Renderer: ") + (glMode_ ? "OpenGL (" + gl_.Description() + ")" : "Vulkan (Dozen, Vulkan on Direct3D 12)") + "\n";
+        std::snprintf(line, sizeof(line), "Played: %.1f min, %llu frames shown, first frame after %.1f s, worst frame %.1f ms\n",
+            (tick - diag_.startTick) / 60000.0, diag_.frames, diag_.firstFrameMs / 1000.0, diag_.worstFrameMs);
+        out += line;
+        std::snprintf(line, sizeof(line), "Memory: %llu MB now, %llu MB at most, of %llu MB\n", diag_.usedMb, diag_.peakMb, diag_.limitMb);
+        out += line;
+        std::snprintf(line, sizeof(line),
+            "Log counts: %llu errors, %llu warnings, %llu graphics driver errors, %llu OpenGL stalls, %llu system dialog changes, %llu touches, %llu crashes\n",
+            diag_.errors, diag_.warnings, diag_.driverErrors, diag_.stalls, diag_.dialogs, diag_.touches, diag_.crashes);
+        out += line;
+        out += "\nOptions:\n";
+        for (const auto& [key, value] : options) out += "  " + key + " = " + value + "\n";
+        out += "\nEach minute:\n";
+        for (const auto& minute : diag_.minutes) out += "  " + minute + "\n";
+        out += "\nHow this console handles the game (each message once):\n";
+        for (const auto& kept : diag_.notable) out += "  " + kept + "\n";
+    }
+    std::wstring path = runtimeLogPath_;
+    const auto slash = path.find_last_of(L"\\/");
+    path = (slash == std::wstring::npos ? std::wstring() : path.substr(0, slash + 1)) + L"vita3k-diagnostics.txt";
+    if (FILE* file = _wfsopen(path.c_str(), L"wb", _SH_DENYNO)) {
+        std::fwrite(out.data(), 1, out.size(), file);
+        std::fclose(file);
+    }
+}
+
+void VitaLibretroHost::UpdateTouchCursor() {
+    const auto& pad = inputState_.Gamepad;
+    const bool rightThumb = (pad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+    if (rightThumb && !lastRightThumb_) {
+        cursorMode_ = !cursorMode_;
+        Log(1, "Touch cursor %s (R3)\n", cursorMode_ ? "on: right stick moves it, RT touches, LT+RT the rear touchpad" : "off");
+    }
+    lastRightThumb_ = rightThumb;
+
+    LARGE_INTEGER now{}, frequency{};
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    double seconds = lastCursorTick_.QuadPart && frequency.QuadPart
+        ? static_cast<double>(now.QuadPart - lastCursorTick_.QuadPart) / static_cast<double>(frequency.QuadPart)
+        : 0.0;
+    lastCursorTick_ = now;
+    if (seconds < 0.0 || seconds > 0.1) seconds = 1.0 / 60.0;
+
+    bool moved = false;
+    if (cursorMode_) {
+        // Past the dead zone, speed grows with the square of the tilt: fine
+        // aim near the centre, across the screen in about a second at full.
+        const auto axis = [](short value) {
+            const float deadzone = static_cast<float>(XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+            float v = static_cast<float>(value);
+            const float magnitude = v < 0 ? -v : v;
+            if (magnitude <= deadzone) return 0.0f;
+            float t = (magnitude - deadzone) / (32767.0f - deadzone);
+            if (t > 1.0f) t = 1.0f;
+            return (v < 0 ? -1.0f : 1.0f) * t * t;
+        };
+        const float dx = axis(pad.sThumbRX);
+        const float dy = axis(pad.sThumbRY);
+        if (dx != 0.0f || dy != 0.0f) {
+            constexpr float widthsPerSecond = 0.9f;
+            // the same speed in pixels both ways on the Vita's 960x544
+            cursor_.x += dx * widthsPerSecond * static_cast<float>(seconds);
+            cursor_.y -= dy * widthsPerSecond * (960.0f / 544.0f) * static_cast<float>(seconds);
+            cursor_.x = cursor_.x < 0.0f ? 0.0f : (cursor_.x > 1.0f ? 1.0f : cursor_.x);
+            cursor_.y = cursor_.y < 0.0f ? 0.0f : (cursor_.y > 1.0f ? 1.0f : cursor_.y);
+            moved = true;
+        }
+    }
+    const bool touch = pad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+    const bool rearHeld = pad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+    if (touch && !cursor_.pressed) {
+        static unsigned logged = 0;
+        if (logged < 20) {
+            ++logged;
+            Log(1, "Touch %s at %.3f, %.3f\n", rearHeld ? "rear" : "front", cursor_.x, cursor_.y);
+        }
+    }
+    cursor_.pressed = touch;
+    cursor_.rear = touch && rearHeld;
+    const unsigned long long tick = GetTickCount64();
+    if (moved || touch) cursorShownUntil_ = tick + 1500;
+    cursor_.visible = cursorMode_ || tick < cursorShownUntil_;
+}
+
 std::int16_t __cdecl VitaLibretroHost::Input(
     unsigned port, unsigned device, unsigned index, unsigned id) {
     if (!active_ || !active_->inputConnected_ || port != 0) return 0;
@@ -712,6 +938,22 @@ std::int16_t __cdecl VitaLibretroHost::Input(
         if (id == 12) return pad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
         if (id == 13) return pad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
         return id < 16 && (pad.wButtons & buttons[id]) ? 1 : 0;
+    }
+    if ((device & 0xff) == 6) {
+        // RETRO_DEVICE_POINTER: one touch, -0x7FFF..0x7FFF across the picture
+        if (index != 0 || !active_->cursor_.pressed) return 0;
+        const auto& cursor = active_->cursor_;
+        switch (id) {
+        case 0: return static_cast<std::int16_t>(cursor.x * 65534.0f - 32767.0f);
+        case 1: return static_cast<std::int16_t>(cursor.y * 65534.0f - 32767.0f);
+        case 2: return 1;
+        case 3: return 1;
+        default: return 0;
+        }
+    }
+    if ((device & 0xff) == 5 && index == 1 && active_->cursorMode_) {
+        // the right stick moves the touch cursor instead
+        return 0;
     }
     if ((device & 0xff) == 5 && index < 2 && id < 2) {
         const short axis = index == 0 ? (id == 0 ? pad.sThumbLX : pad.sThumbLY)

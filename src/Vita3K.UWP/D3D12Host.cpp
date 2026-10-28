@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "D3D12Host.h"
+#include <algorithm>
+#include <cmath>
 #include <tmmintrin.h>
 #include <windows.ui.xaml.media.dxinterop.h>
 #include <dxgi1_3.h>
@@ -446,6 +448,45 @@ bool D3D12Host::Resize(unsigned width, unsigned height, DXGI_FORMAT format, std:
     return true;
 }
 
+void D3D12Host::SetCursor(bool visible, float x, float y, bool pressed, bool rear) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    cursor_.visible = visible;
+    cursor_.x = x;
+    cursor_.y = y;
+    cursor_.pressed = pressed;
+    cursor_.rear = rear;
+}
+
+void D3D12Host::DrawCursor(std::uint8_t* bgra, unsigned rowPitch, unsigned width, unsigned height, const Cursor& cursor) {
+    // Sized for the frame: about 11 pixels across on the Vita's 960x544.
+    const float radius = (std::max)(5.0f, static_cast<float>(width) / 88.0f);
+    const float cx = cursor.x * static_cast<float>(width - 1);
+    const float cy = cursor.y * static_cast<float>(height - 1);
+    const std::uint32_t fill = cursor.rear ? 0xFFFF9030u : 0xFF30A0FFu; // BGRA: blue / orange
+    const int x0 = (std::max)(0, static_cast<int>(cx - radius - 3.0f));
+    const int x1 = (std::min)(static_cast<int>(width) - 1, static_cast<int>(cx + radius + 3.0f));
+    const int y0 = (std::max)(0, static_cast<int>(cy - radius - 3.0f));
+    const int y1 = (std::min)(static_cast<int>(height) - 1, static_cast<int>(cy + radius + 3.0f));
+    for (int y = y0; y <= y1; ++y) {
+        auto* row = reinterpret_cast<std::uint32_t*>(bgra + static_cast<size_t>(y) * rowPitch);
+        for (int x = x0; x <= x1; ++x) {
+            const float dx = static_cast<float>(x) - cx;
+            const float dy = static_cast<float>(y) - cy;
+            const float d = std::sqrt(dx * dx + dy * dy);
+            if (d <= radius - 2.0f) {
+                if (cursor.pressed)
+                    row[x] = fill;
+                else if (d <= 1.0f)
+                    row[x] = 0xFFFFFFFFu;
+            } else if (d <= radius) {
+                row[x] = 0xFFFFFFFFu;
+            } else if (d <= radius + 1.5f) {
+                row[x] = 0xFF000000u;
+            }
+        }
+    }
+}
+
 bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigned height,
                              unsigned strideBytes, bool sourceRgba, std::wstring& result) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -525,6 +566,7 @@ bool D3D12Host::PresentFrame(const std::uint8_t* pixels, unsigned width, unsigne
             }
         }
     }
+    if (cursor_.visible) DrawCursor(out, rowPitch, width, height, cursor_);
     D3D12_RANGE written = { 0, static_cast<SIZE_T>(bytes) };
     upload->Unmap(0, &written);
 
