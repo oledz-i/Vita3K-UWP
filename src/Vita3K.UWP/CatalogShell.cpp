@@ -351,6 +351,7 @@ CatalogShell::CatalogShell() {
     const auto saved = Pref(L"theme", L"0");
     theme_ = saved->Equals(L"1") ? 1 : saved->Equals(L"2") ? 2 :
              saved->Equals(L"3") ? 3 : saved->Equals(L"4") ? 4 : 0;
+    xmbMode_ = Pref(L"ui.layout", L"cinematic")->Equals(L"xmb");
     const auto savedTrack = Pref(L"music.track", L"1");
     track_ = savedTrack->Equals(L"0") ? 0 : savedTrack->Equals(L"2") ? 2 :
              savedTrack->Equals(L"3") ? 3 : savedTrack->Equals(L"4") ? 4 :
@@ -558,6 +559,19 @@ CatalogShell::CatalogShell() {
                         libretro_.StopRunning();
                         SetStatus(L"Game execution stopped.");
                     }
+                    return;
+                }
+                if (artPicker_ != nullptr) {
+                    if (e->VirtualKey == Windows::System::VirtualKey::GamepadB ||
+                        e->VirtualKey == Windows::System::VirtualKey::Escape) {
+                        PlayCue(2);
+                        CloseArtPicker();
+                        e->Handled = true;
+                    }
+                    return;
+                }
+                if (page_ == 0 && xmb_ != nullptr && xmb_->Visibility == Windows::UI::Xaml::Visibility::Visible) {
+                    if (XmbKey(e->VirtualKey)) e->Handled = true;
                     return;
                 }
                 if (page_ == 0) return;
@@ -900,7 +914,15 @@ void CatalogShell::Home() {
     hero->BorderThickness = Thickness(1);
     auto heroLayout = ref new Grid();
     heroLayout->Background = Gradient(Card(), Alpha(190, Glow().R, Glow().G, Glow().B));
-    if (hasGames && !ArtworkUri(featured)->IsEmpty()) {
+    const auto homeBackdrop = hasGames ? BackdropUri(featured) : ref new Platform::String(L"");
+    if (!homeBackdrop->IsEmpty()) {
+        // the game's wide background, the whole banner
+        auto art = ref new Image();
+        art->Source = ref new BitmapImage(ref new Uri(homeBackdrop));
+        art->Stretch = Stretch::UniformToFill;
+        art->Opacity = 0.9;
+        heroLayout->Children->Append(art);
+    } else if (hasGames && !ArtworkUri(featured)->IsEmpty()) {
         auto art = ref new Image();
         art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(featured)));
         art->Stretch = Stretch::UniformToFill;
@@ -1218,10 +1240,10 @@ void CatalogShell::GameDetails() {
         ChooseCustomArtwork(index);
     });
     actions->Children->Append(image);
-    auto find = Button(L"Find cover online");
+    auto find = Button(L"Choose art online");
     find->Margin = Thickness(12, 0, 0, 0);
     find->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
-        FetchArtwork(index);
+        ShowArtPicker(index);
     });
     actions->Children->Append(find);
     right->Children->Append(actions);
@@ -1247,7 +1269,39 @@ void CatalogShell::GameDetails() {
     right->Children->Append(validation);
 #endif
     layout->Children->Append(right);
-    feature->Child = layout;
+    // Behind the page: the game's SteamGridDB background, or a screenshot
+    // taken while it was played, darkened on the left where the text is.
+    const auto backdrop = BackdropUri(index);
+    if (!backdrop->IsEmpty()) {
+        try {
+            auto picture = ref new ImageBrush();
+            picture->ImageSource = ref new BitmapImage(ref new Uri(backdrop));
+            picture->Stretch = Stretch::UniformToFill;
+            feature->Background = picture;
+            auto shade = ref new LinearGradientBrush();
+            shade->StartPoint = Point(0, 0.5);
+            shade->EndPoint = Point(1, 0.5);
+            const Color base = Bg();
+            const double stops[][2] = { { 0.0, 236 }, { 0.45, 190 }, { 1.0, 70 } };
+            for (const auto& s : stops) {
+                auto stop = ref new GradientStop();
+                stop->Offset = s[0];
+                stop->Color = Alpha(static_cast<unsigned>(s[1]), base.R, base.G, base.B);
+                shade->GradientStops->Append(stop);
+            }
+            auto veil = ref new Border();
+            veil->CornerRadius = Windows::UI::Xaml::CornerRadius(18);
+            veil->Background = shade;
+            veil->Padding = Thickness(30, 24, 28, 24);
+            veil->Child = layout;
+            feature->Padding = Thickness(0);
+            feature->Child = veil;
+        } catch (Platform::Exception^) {
+            feature->Child = layout;
+        }
+    } else {
+        feature->Child = layout;
+    }
     content_->Children->Append(feature);
     AppendGameInfo(index);
     // The controller lands on Play.
@@ -1412,6 +1466,13 @@ void CatalogShell::Render() {
     greeting_ = nullptr;
     musicStatus_ = nullptr;
     libraryResults_ = nullptr;
+    // The PS3-style home takes the whole screen over the usual layout.
+    if (page_ == 0 && xmbMode_) {
+        if (!inGame_) ShowXmb();
+        shownPage_ = page_;
+        return;
+    }
+    if (xmb_ != nullptr && xmb_->Visibility == Windows::UI::Xaml::Visibility::Visible) HideXmb();
     switch(page_) {
     case 1: Library(); break;
     case 2: Settings(); break;
@@ -1489,6 +1550,20 @@ void CatalogShell::Settings() {
     themeScroll->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
     themeScroll->Content = palettes;
     content_->Children->Append(themeScroll);
+
+    Section(L"Home screen", L"The cinematic home, or the PlayStation 3's cross media bar.");
+    auto layouts = ActionRow(200);
+    auto cinematic = Button(L"Cinematic", !xmbMode_);
+    cinematic->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { SaveLayout(false); });
+    layouts->Children->Append(cinematic);
+    auto xmb = Button(L"PS3 XMB", xmbMode_);
+    xmb->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { SaveLayout(true); });
+    layouts->Children->Append(xmb);
+    content_->Children->Append(layouts);
+    auto layoutNote = Text(L"XMB: left and right change category, up and down choose, A opens, Y shows a game's page. "
+        L"Its colour follows the month, as the PS3's did.", 12, false, true);
+    layoutNote->Margin = Thickness(3, 6, 0, 8);
+    content_->Children->Append(layoutNote);
 
     Section(L"Home menu soundtrack", L"Original loopable music, your own audio, or silence.");
     const wchar_t* names[] = {
@@ -1789,6 +1864,13 @@ void CatalogShell::UpdateClock() {
         wchar_t text[32] = {};
         swprintf_s(text, L"%d:%02d %s", hour12, now.wMinute, now.wHour < 12 ? L"AM" : L"PM");
         clock_->Text = ref new Platform::String(text);
+    }
+    if (xmbClock_ != nullptr) {
+        // as the PS3 shows it: month/day, then the time
+        const int hour12 = now.wHour % 12 == 0 ? 12 : now.wHour % 12;
+        wchar_t text[48] = {};
+        swprintf_s(text, L"%d/%d   %d:%02d %s", now.wMonth, now.wDay, hour12, now.wMinute, now.wHour < 12 ? L"AM" : L"PM");
+        xmbClock_->Text = ref new Platform::String(text);
     }
     if (greeting_ != nullptr) {
         const wchar_t* line = now.wHour < 5 ? L"Late-night session." : now.wHour < 12 ? L"Good morning." :
@@ -3364,6 +3446,10 @@ void CatalogShell::AttemptBoot(size_t index) {
 
 void CatalogShell::EnterGameView(Platform::String^ title) {
     inGame_ = true;
+    if (xmb_ != nullptr) {
+        xmb_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+        if (xmbTimer_) xmbTimer_->Stop();
+    }
     gameTitle_ = title;
     quickMenu_ = nullptr;
     quickMenuOpen_ = false;
@@ -3620,7 +3706,7 @@ void CatalogShell::ExitGameView() {
         if (clockTimer_) clockTimer_->Start();
         if (track_ > 0) musicPlayer_->Play();
         SetStatus(L"Back in the library.");
-        ShowPage(1);
+        ShowPage(xmbMode_ ? 0 : 1);
     }, task_continuation_context::use_current());
 }
 
@@ -3850,6 +3936,13 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         ? "Display: D3D12 debug layer on; its errors follow as [d3d12] lines"
         : "Display: D3D12 debug layer not available on this console (or a release build)");
     const std::wstring snapshotPath = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\frame-300.bmp";
+    {
+        // A screenshot of the game for its page, once it is well into play
+        const std::wstring id = TitleIdIn(contentPath->Data());
+        screenshotPath_ = id.empty() ? std::wstring()
+            : std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\Screens\\" + id + L".bmp";
+        screenshotTaken_ = false;
+    }
     libretro_.SetFrameSink([this,snapshotPath](const uint8_t* pixels, unsigned width, unsigned height, bool rgba) {
         std::wstring error;
         const auto cursor = libretro_.Cursor();
@@ -3889,6 +3982,13 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
             if (lit > 0) pictureSeen_ = true;
             lastLevel_ = static_cast<unsigned>(total ? sum / total : 0);
             lastLit_ = lit;
+            if (!screenshotTaken_ && !screenshotPath_.empty() && shown >= 1800 && total && lit * 3 > total * 2) {
+                screenshotTaken_ = true;
+                std::error_code ec;
+                std::filesystem::create_directories(std::filesystem::path(screenshotPath_).parent_path(), ec);
+                if (WriteBmp(screenshotPath_, pixels, width, height, rgba))
+                    libretro_.LogLine("Display: a screenshot was kept for the game's page");
+            }
             {
                 unsigned long long usedMb = 0, limitMb = 0;
                 try {
@@ -4226,6 +4326,27 @@ void CatalogShell::FetchArtwork(size_t index, bool continueBatch) {
                 auto imageUri = ref new Uri(
                     L"https://www.steamgriddb.com/api/v2/grids/game/" +
                     StringOf(std::to_wstring(gameId)) + L"?dimensions=600x900&types=static");
+                PutPref(L"art.sgdb." + gameKey, StringOf(std::to_wstring(gameId)));
+                if (Pref(L"art.hero." + gameKey)->IsEmpty()) {
+                    // and the wide background behind the game's page
+                    auto heroUri = ref new Uri(L"https://www.steamgriddb.com/api/v2/heroes/game/" +
+                        StringOf(std::to_wstring(gameId)) + L"?types=static");
+                    create_task(client->GetStringAsync(heroUri)).then([gameKey,client](task<Platform::String^> heroes) {
+                        try {
+                            auto list = Windows::Data::Json::JsonObject::Parse(heroes.get())->GetNamedArray(L"data");
+                            for (unsigned i = 0; i < list->Size; ++i) {
+                                auto item = list->GetAt(i)->GetObject();
+                                if (!item->HasKey(L"url")) continue;
+                                const auto url = item->GetNamedString(L"url");
+                                const std::wstring raw(url->Data());
+                                if (raw.rfind(L"https://", 0) == 0 && raw.find(L"steamgriddb.com") != std::wstring::npos) {
+                                    PutPref(L"art.hero." + gameKey, url);
+                                    break;
+                                }
+                            }
+                        } catch (Platform::Exception^) {}
+                    });
+                }
                 create_task(client->GetStringAsync(imageUri)).then(
                     [this,index,gameKey,title,continueBatch,client](task<Platform::String^> art) {
                         try {
@@ -4416,4 +4537,748 @@ void CatalogShell::PrepareCues() {
         }
     }, task_continuation_context::use_current());
 }
+
+Platform::String^ CatalogShell::BackdropUri(size_t index) {
+    if (index >= games_.size()) return L"";
+    const auto hero = Pref(L"art.hero." + games_[index].key);
+    if (!hero->IsEmpty()) return hero;
+    const auto id = GameTitleId(index);
+    if (!id.empty()) {
+        std::error_code ec;
+        const std::wstring path = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\Screens\\" + id + L".bmp";
+        if (std::filesystem::exists(path, ec)) return StringOf(L"ms-appdata:///local/Screens/" + id + L".bmp");
+    }
+    return L"";
+}
+
+namespace {
+// SteamGridDB's images are on its own hosts; anything else is not used.
+bool SteamGridDbImage(Platform::String^ url) {
+    if (url == nullptr) return false;
+    const std::wstring raw(url->Data());
+    return raw.rfind(L"https://", 0) == 0 && raw.find(L"steamgriddb.com") != std::wstring::npos;
+}
+std::wstring LowerOf(Platform::String^ s) {
+    std::wstring out = s ? s->Data() : L"";
+    std::transform(out.begin(), out.end(), out.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    return out;
+}
+}
+
+void CatalogShell::CloseArtPicker() {
+    if (artPicker_ == nullptr) return;
+    unsigned at = 0;
+    if (root_->Children->IndexOf(artPicker_, &at)) root_->Children->RemoveAt(at);
+    artPicker_ = nullptr;
+    artResults_ = nullptr;
+    artCovers_ = nullptr;
+    artHeroes_ = nullptr;
+    artNote_ = nullptr;
+    ++artRequest_;
+    // what was picked shows on the page now
+    Render();
+}
+
+void CatalogShell::ShowArtPicker(size_t index) {
+    if (index >= games_.size()) return;
+    if (ApiKey()->IsEmpty()) {
+        SetStatus(L"Save your SteamGridDB API key first: Settings, Artwork.");
+        return;
+    }
+    if (artPicker_ != nullptr) {
+        unsigned at = 0;
+        if (root_->Children->IndexOf(artPicker_, &at)) root_->Children->RemoveAt(at);
+        artPicker_ = nullptr;
+    }
+    PlayCue(1);
+    auto layer = ref new Grid();
+    artPicker_ = layer;
+    layer->Background = Solid(Alpha(244, Bg().R, Bg().G, Bg().B));
+    Grid::SetColumnSpan(layer, 2);
+    Grid::SetRowSpan(layer, 2);
+    Canvas::SetZIndex(layer, 40);
+    auto scroll = ref new ScrollViewer();
+    scroll->VerticalScrollBarVisibility = ScrollBarVisibility::Hidden;
+    scroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Disabled;
+    auto body = Vertical(10);
+    body->Margin = Thickness(90, 46, 90, 40);
+
+    auto eyebrow = Text(L"STEAMGRIDDB", 10, true);
+    eyebrow->CharacterSpacing = 220;
+    eyebrow->Foreground = Solid(Accent());
+    body->Children->Append(eyebrow);
+    auto heading = Text(L"Art for " + games_[index].name, 28, false);
+    heading->FontWeight = FontWeights::Light;
+    body->Children->Append(heading);
+    artNote_ = Text(L"Pick the game, then its cover and the background behind its page. B closes.", 13, false, true);
+    body->Children->Append(artNote_);
+
+    auto searchRow = ref new StackPanel();
+    searchRow->Orientation = Orientation::Horizontal;
+    searchRow->Margin = Thickness(0, 8, 0, 6);
+    auto box = ref new TextBox();
+    box->Text = games_[index].name;
+    box->Width = 520;
+    box->Height = 40;
+    box->FontSize = 16;
+    searchRow->Children->Append(box);
+    auto go = Button(L"Search");
+    go->Margin = Thickness(12, 0, 0, 0);
+    go->Click += ref new RoutedEventHandler([this,index,box](Platform::Object^, RoutedEventArgs^) {
+        ArtPickerSearch(index, box->Text);
+    });
+    searchRow->Children->Append(go);
+    body->Children->Append(searchRow);
+
+    auto label = [this](const wchar_t* text) {
+        auto t = Text(ref new Platform::String(text), 12, true);
+        t->CharacterSpacing = 140;
+        t->Margin = Thickness(0, 14, 0, 4);
+        t->Opacity = 0.8;
+        return t;
+    };
+    body->Children->Append(label(L"GAMES FOUND"));
+    artResults_ = Vertical(6);
+    body->Children->Append(artResults_);
+
+    body->Children->Append(label(L"COVERS"));
+    auto coverScroll = ref new ScrollViewer();
+    coverScroll->HorizontalScrollMode = ScrollMode::Enabled;
+    coverScroll->VerticalScrollMode = ScrollMode::Disabled;
+    coverScroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Hidden;
+    coverScroll->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
+    artCovers_ = ref new StackPanel();
+    artCovers_->Orientation = Orientation::Horizontal;
+    coverScroll->Content = artCovers_;
+    body->Children->Append(coverScroll);
+
+    body->Children->Append(label(L"BACKGROUNDS"));
+    auto heroScroll = ref new ScrollViewer();
+    heroScroll->HorizontalScrollMode = ScrollMode::Enabled;
+    heroScroll->VerticalScrollMode = ScrollMode::Disabled;
+    heroScroll->HorizontalScrollBarVisibility = ScrollBarVisibility::Hidden;
+    heroScroll->VerticalScrollBarVisibility = ScrollBarVisibility::Disabled;
+    artHeroes_ = ref new StackPanel();
+    artHeroes_->Orientation = Orientation::Horizontal;
+    heroScroll->Content = artHeroes_;
+    body->Children->Append(heroScroll);
+
+    auto done = Button(L"Done", true);
+    done->Margin = Thickness(0, 22, 0, 0);
+    done->MinWidth = 160;
+    done->Click += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) {
+        PlayCue(2);
+        CloseArtPicker();
+    });
+    body->Children->Append(done);
+
+    scroll->Content = body;
+    layer->Children->Append(scroll);
+    root_->Children->Append(layer);
+    go->Loaded += ref new RoutedEventHandler([go](Platform::Object^, RoutedEventArgs^) {
+        go->Focus(Windows::UI::Xaml::FocusState::Programmatic);
+    });
+    ArtPickerSearch(index, games_[index].name);
+}
+
+void CatalogShell::ArtPickerSearch(size_t index, Platform::String^ term) {
+    if (artPicker_ == nullptr || index >= games_.size() || term == nullptr || term->IsEmpty()) return;
+    const unsigned request = ++artRequest_;
+    artResults_->Children->Clear();
+    artCovers_->Children->Clear();
+    artHeroes_->Children->Clear();
+    artNote_->Text = L"Searching SteamGridDB for " + term + L"...";
+    auto client = ref new Windows::Web::Http::HttpClient();
+    client->DefaultRequestHeaders->TryAppendWithoutValidation(L"Authorization", L"Bearer " + ApiKey());
+    auto uri = ref new Uri(L"https://www.steamgriddb.com/api/v2/search/autocomplete/" + Uri::EscapeComponent(term));
+    const auto wanted = LowerOf(games_[index].name);
+    create_task(client->GetStringAsync(uri)).then([this,index,request,client,wanted](task<Platform::String^> work) {
+        if (artPicker_ == nullptr || request != artRequest_) return;
+        try {
+            auto list = Windows::Data::Json::JsonObject::Parse(work.get())->GetNamedArray(L"data");
+            if (list->Size == 0) {
+                artNote_->Text = L"Nothing found. Try the game's name another way (Search).";
+                return;
+            }
+            artNote_->Text = L"Pick the right game; its covers and backgrounds load below.";
+            Windows::UI::Xaml::Controls::Button^ first = nullptr;
+            unsigned exactId = 0;
+            Platform::String^ exactName = nullptr;
+            for (unsigned i = 0; i < list->Size && i < 12; ++i) {
+                auto item = list->GetAt(i)->GetObject();
+                auto name = item->GetNamedString(L"name");
+                const unsigned id = static_cast<unsigned>(item->GetNamedNumber(L"id"));
+                std::wstring text = name->Data();
+                if (item->HasKey(L"release_date") &&
+                    item->GetNamedValue(L"release_date")->ValueType == Windows::Data::Json::JsonValueType::Number) {
+                    const double seconds = item->GetNamedNumber(L"release_date");
+                    if (seconds > 0) text += L"   " + std::to_wstring(1970 + static_cast<int>(seconds / 31557600.0));
+                }
+                auto pick = Button(StringOf(text));
+                pick->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
+                pick->MinWidth = 460;
+                pick->Click += ref new RoutedEventHandler([this,index,id,name](Platform::Object^, RoutedEventArgs^) {
+                    PlayCue(1);
+                    ArtPickerLoad(index, id, name);
+                });
+                artResults_->Children->Append(pick);
+                if (!first) first = pick;
+                if (!exactId && LowerOf(name) == wanted) { exactId = id; exactName = name; }
+            }
+            if (first) first->Focus(Windows::UI::Xaml::FocusState::Programmatic);
+            // The game's own name matched: its art comes up straight away.
+            if (exactId) ArtPickerLoad(index, exactId, exactName);
+        } catch (Platform::Exception^ e) {
+            artNote_->Text = L"SteamGridDB search failed: " + e->Message;
+        }
+    }, task_continuation_context::use_current());
+}
+
+void CatalogShell::ArtPickerLoad(size_t index, unsigned gameId, Platform::String^ name) {
+    if (artPicker_ == nullptr || index >= games_.size()) return;
+    const unsigned request = ++artRequest_;
+    const auto key = games_[index].key;
+    const auto idText = StringOf(std::to_wstring(gameId));
+    PutPref(L"art.sgdb." + key, idText);
+    artCovers_->Children->Clear();
+    artHeroes_->Children->Clear();
+    artNote_->Text = L"Loading the art for " + name + L"...";
+    auto client = ref new Windows::Web::Http::HttpClient();
+    client->DefaultRequestHeaders->TryAppendWithoutValidation(L"Authorization", L"Bearer " + ApiKey());
+    auto grids = ref new Uri(L"https://www.steamgriddb.com/api/v2/grids/game/" + idText + L"?dimensions=600x900&types=static");
+    auto heroes = ref new Uri(L"https://www.steamgriddb.com/api/v2/heroes/game/" + idText + L"?types=static");
+
+    // One row of pictures; choosing one keeps its full-size address.
+    auto fill = [this,key](Windows::Data::Json::JsonArray^ list, StackPanel^ row, double width, double height,
+                           bool cover) {
+        unsigned shown = 0;
+        for (unsigned i = 0; i < list->Size && shown < 16; ++i) {
+            auto item = list->GetAt(i)->GetObject();
+            if (!item->HasKey(L"url")) continue;
+            auto url = item->GetNamedString(L"url");
+            auto thumb = item->HasKey(L"thumb") ? item->GetNamedString(L"thumb") : url;
+            if (!SteamGridDbImage(url) || !SteamGridDbImage(thumb)) continue;
+            auto pick = ref new Windows::UI::Xaml::Controls::Button();
+            pick->Padding = Thickness(0);
+            pick->Margin = Thickness(0, 0, 12, 6);
+            pick->BorderThickness = Thickness(2);
+            Skin(pick, 10);
+            auto image = ref new Image();
+            image->Width = width;
+            image->Height = height;
+            image->Stretch = Stretch::UniformToFill;
+            image->Source = ref new BitmapImage(ref new Uri(thumb));
+            pick->Content = image;
+            pick->Click += ref new RoutedEventHandler([this,key,url,cover](Platform::Object^, RoutedEventArgs^) {
+                PlayCue(1);
+                if (cover) {
+                    PutPref(L"art.remote." + key, url);
+                    PutPref(L"art.file." + key, L"");
+                    if (artNote_) artNote_->Text = L"Cover set. Pick a background too, or Done.";
+                } else {
+                    PutPref(L"art.hero." + key, url);
+                    if (artNote_) artNote_->Text = L"Background set. Done shows it behind the game's page.";
+                }
+            });
+            row->Children->Append(pick);
+            ++shown;
+        }
+        return shown;
+    };
+
+    create_task(client->GetStringAsync(grids)).then([this,request,client,heroes,fill,key](task<Platform::String^> work) {
+        if (artPicker_ == nullptr || request != artRequest_) return task_from_result<Platform::String^>(nullptr);
+        try {
+            auto list = Windows::Data::Json::JsonObject::Parse(work.get())->GetNamedArray(L"data");
+            if (fill(list, artCovers_, 120, 180, true) == 0) {
+                auto none = Text(L"No portrait covers for this game.", 13, false, true);
+                artCovers_->Children->Append(none);
+            }
+        } catch (Platform::Exception^) {
+            artCovers_->Children->Append(Text(L"Covers could not be loaded.", 13, false, true));
+        }
+        return create_task(client->GetStringAsync(heroes));
+    }, task_continuation_context::use_current())
+    .then([this,request,fill,key](task<Platform::String^> work) {
+        if (artPicker_ == nullptr || request != artRequest_) return;
+        try {
+            auto text = work.get();
+            if (text == nullptr) return;
+            // first: no background at all
+            auto clear = Button(L"No background");
+            clear->Margin = Thickness(0, 0, 12, 6);
+            clear->Height = 110;
+            clear->Click += ref new RoutedEventHandler([this,key](Platform::Object^, RoutedEventArgs^) {
+                PlayCue(2);
+                PutPref(L"art.hero." + key, L"");
+                if (artNote_) artNote_->Text = L"No background: a screenshot of the game shows once it has been played.";
+            });
+            artHeroes_->Children->Append(clear);
+            auto list = Windows::Data::Json::JsonObject::Parse(text)->GetNamedArray(L"data");
+            if (fill(list, artHeroes_, 340, 110, false) == 0)
+                artHeroes_->Children->Append(Text(L"No backgrounds for this game.", 13, false, true));
+            artNote_->Text = L"Pick a cover and a background. B or Done closes.";
+        } catch (Platform::Exception^) {
+            artHeroes_->Children->Append(Text(L"Backgrounds could not be loaded.", 13, false, true));
+        }
+    }, task_continuation_context::use_current());
+}
+
+
+// ── The PS3-style home (XMB) ────────────────────────────────────────────────
+namespace {
+// The PS3's background takes a colour for each month.
+Color XmbMonthColor(int month) {
+    static const unsigned colors[12][3] = {
+        { 160, 164, 172 }, // January: silver
+        { 190, 152, 46 },  // February: gold
+        { 118, 162, 44 },  // March: lime
+        { 200, 104, 150 }, // April: pink
+        { 40, 136, 66 },   // May: green
+        { 146, 78, 164 },  // June: purple
+        { 32, 146, 156 },  // July: teal
+        { 40, 106, 200 },  // August: blue
+        { 84, 60, 164 },   // September: violet
+        { 180, 106, 40 },  // October: amber
+        { 122, 84, 54 },   // November: brown
+        { 172, 38, 44 },   // December: red
+    };
+    const auto& c = colors[(month >= 1 && month <= 12) ? month - 1 : 0];
+    return RgbColor(c[0], c[1], c[2]);
+}
+Color Shade(Color c, double f) {
+    auto ch = [f](unsigned char v) { return static_cast<unsigned>(std::min(255.0, std::max(0.0, v * f))); };
+    return RgbColor(ch(c.R), ch(c.G), ch(c.B));
+}
+}
+
+void CatalogShell::SaveLayout(bool xmb) {
+    xmbMode_ = xmb;
+    PutPref(L"ui.layout", xmb ? L"xmb" : L"cinematic");
+    PlayCue(5);
+    if (xmb) {
+        SetStatus(L"Home screen: PS3 XMB.");
+        ShowPage(0);
+    } else {
+        if (xmb_ != nullptr) HideXmb();
+        SetStatus(L"Home screen: cinematic.");
+        Render();
+    }
+}
+
+std::vector<XmbCategory> CatalogShell::XmbCategories() {
+    std::vector<XmbCategory> cats;
+    {
+        XmbCategory c;
+        c.name = L"Settings";
+        c.glyph = L"";
+        auto settings = [this]() { ShowPage(2); };
+        c.items.push_back(XmbEntry{ L"Theme Settings", L"Colours, music and the home screen", L"", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"Emulation Settings", L"Renderer, resolution, shaders and the CPU", L"", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"System Software", L"The PS Vita firmware Vita3K runs on", L"", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"Storage", L"Where games, saves and Vita3K's data live", L"", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"Cinematic Home", L"Go back to the cinematic home screen", L"", -1, [this]() { SaveLayout(false); }, nullptr });
+        cats.push_back(std::move(c));
+    }
+    {
+        XmbCategory c;
+        c.name = L"Music";
+        c.glyph = L"";
+        const wchar_t* names[] = { L"No Music", L"Afterglow", L"Neon Arcade", L"Stardust", L"Tidal" };
+        for (int i = 0; i < 5; ++i)
+            c.items.push_back(XmbEntry{ names[i], track_ == i ? L"Now playing" : L"Home menu music", L"", -1,
+                [this, i]() { SetMusic(i); Render(); }, nullptr });
+        c.initial = track_ >= 0 && track_ < 5 ? track_ : 0;
+        cats.push_back(std::move(c));
+    }
+    {
+        XmbCategory c;
+        c.name = L"Game";
+        c.glyph = L"";
+        const auto last = Pref(L"lastPlayed", L"");
+        for (size_t i = 0; i < games_.size(); ++i) {
+            const auto& game = games_[i];
+            std::wstring subtitle = std::wstring(L"PlayStation®Vita  •  ") + (game.sourceType ? game.sourceType->Data() : L"");
+            if (!last->IsEmpty() && game.name == last) {
+                subtitle = L"Last played  •  " + subtitle;
+                c.initial = static_cast<int>(c.items.size());
+            }
+            c.items.push_back(XmbEntry{ game.name ? game.name->Data() : L"Game", subtitle, L"", static_cast<int>(i),
+                [this, i]() { AttemptBoot(i); },
+                [this, i]() { selectedGame_ = static_cast<int>(i); ShowPage(4); } });
+        }
+        c.items.push_back(XmbEntry{ L"Add a Game", L"A VPK, ZIP, PKG or game folder", L"", -1, [this]() { ChooseGameFile(); }, nullptr });
+        c.items.push_back(XmbEntry{ L"Add a Folder of Games", L"Every game in a folder", L"", -1, [this]() { ChooseGameFolder(); }, nullptr });
+        c.items.push_back(XmbEntry{ L"Game Library", L"All games, with search", L"", -1, [this]() { ShowPage(1); }, nullptr });
+        cats.push_back(std::move(c));
+    }
+    {
+        XmbCategory c;
+        c.name = L"Network";
+        c.glyph = L"";
+        c.items.push_back(XmbEntry{ L"Find Covers and Backgrounds", L"SteamGridDB, for every game without art", L"", -1,
+            [this]() { FetchMissingArtwork(0); }, nullptr });
+        c.items.push_back(XmbEntry{ L"Install Updates and DLC", L"New ones in your updates folder", L"", -1,
+            [this]() { InstallAddons(); }, nullptr });
+        cats.push_back(std::move(c));
+    }
+#if !defined(VITA3K_RELEASE_BUILD)
+    {
+        XmbCategory c;
+        c.name = L"Tools";
+        c.glyph = L"";
+        c.items.push_back(XmbEntry{ L"Diagnostics", L"Developer checks", L"", -1, [this]() { ShowPage(3); }, nullptr });
+        cats.push_back(std::move(c));
+    }
+#endif
+    return cats;
+}
+
+void CatalogShell::ShowXmb() {
+    if (!xmbMode_ || inGame_) return;
+    navigation_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    if (statusBar_) statusBar_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    backdrop_.SetActive(false);
+    if (xmb_ == nullptr) {
+        xmb_ = ref new Grid();
+        Grid::SetColumnSpan(xmb_, 2);
+        Grid::SetRowSpan(xmb_, 2);
+        Canvas::SetZIndex(xmb_, 30);
+        xmbWaves_ = ref new Canvas();
+        xmbWaves_->IsHitTestVisible = false;
+        xmb_->Children->Append(xmbWaves_);
+        // three bands and two bright edges, moved by XmbWaves
+        for (int b = 0; b < 3; ++b) {
+            auto band = ref new Polygon();
+            band->Fill = Solid(Alpha(static_cast<unsigned>(30 - b * 7), 255, 255, 255));
+            xmbWaves_->Children->Append(band);
+        }
+        for (int l = 0; l < 2; ++l) {
+            auto edge = ref new Polyline();
+            edge->Stroke = Solid(Alpha(l == 0 ? 90 : 55, 255, 255, 255));
+            edge->StrokeThickness = l == 0 ? 1.4 : 1.0;
+            xmbWaves_->Children->Append(edge);
+        }
+        // a game's own picture, behind the menu while it is chosen
+        auto picture = ref new Image();
+        picture->Stretch = Stretch::UniformToFill;
+        picture->Opacity = 0;
+        picture->IsHitTestVisible = false;
+        picture->Name = L"xmbPicture";
+        xmb_->Children->Append(picture);
+        xmbStage_ = ref new Canvas();
+        xmb_->Children->Append(xmbStage_);
+        xmbClock_ = Text(L"", 17, false);
+        xmbClock_->FontWeight = FontWeights::Light;
+        xmbClock_->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
+        xmbClock_->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
+        xmbClock_->Margin = Thickness(0, 28, 52, 0);
+        xmbClock_->Foreground = Solid(Colors::White);
+        xmb_->Children->Append(xmbClock_);
+        xmb_->SizeChanged += ref new SizeChangedEventHandler([this](Platform::Object^, SizeChangedEventArgs^) {
+            LayoutXmb(0, 0);
+        });
+        root_->Children->Append(xmb_);
+        xmbTimer_ = ref new DispatcherTimer();
+        xmbTimer_->Interval = Millis(33);
+        xmbTimer_->Tick += ref new EventHandler<Platform::Object^>([this](Platform::Object^, Platform::Object^) { XmbWaves(); });
+    }
+    // The month's colour, darker at night, as on the PS3.
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    const double light = (now.wHour >= 7 && now.wHour < 18) ? 1.0 : (now.wHour >= 5 && now.wHour < 21) ? 0.82 : 0.64;
+    const Color base = XmbMonthColor(now.wMonth);
+    auto sky = ref new LinearGradientBrush();
+    sky->StartPoint = Point(0.5, 0);
+    sky->EndPoint = Point(0.5, 1);
+    const double shades[][2] = { { 0.0, 0.34 }, { 0.55, 0.78 }, { 1.0, 0.42 } };
+    for (const auto& s : shades) {
+        auto stop = ref new GradientStop();
+        stop->Offset = s[0];
+        stop->Color = Shade(base, s[1] * light);
+        sky->GradientStops->Append(stop);
+    }
+    xmb_->Background = sky;
+    xmb_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+    xmbTimer_->Start();
+    UpdateClock();
+    LayoutXmb(0, 0);
+}
+
+void CatalogShell::HideXmb() {
+    if (xmb_ == nullptr) return;
+    xmb_->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+    if (xmbTimer_) xmbTimer_->Stop();
+    if (!inGame_) {
+        navigation_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        if (contentScroll_) contentScroll_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        if (statusBar_) statusBar_->Visibility = Windows::UI::Xaml::Visibility::Visible;
+        backdrop_.SetActive(true);
+    }
+}
+
+void CatalogShell::XmbWaves() {
+    if (xmb_ == nullptr || xmbWaves_ == nullptr) return;
+    const double width = xmb_->ActualWidth > 0 ? xmb_->ActualWidth : 960;
+    const double height = xmb_->ActualHeight > 0 ? xmb_->ActualHeight : 540;
+    xmbPhase_ += 0.033;
+    const double pi = 3.14159265358979;
+    const int steps = 48;
+    std::vector<std::vector<Point>> tops(3), bottoms(3);
+    for (int b = 0; b < 3; ++b) {
+        const double centre = height * (0.56 + 0.03 * b);
+        const double a1 = height * (0.075 - 0.015 * b);
+        const double k1 = 2 * pi / (width * (1.15 + 0.3 * b));
+        const double p1 = xmbPhase_ * (0.32 + 0.1 * b) + b * 1.9;
+        const double a2 = height * 0.022;
+        const double k2 = 2 * pi / (width * 0.47);
+        const double p2 = -xmbPhase_ * 0.45 + b * 0.8;
+        for (int s = 0; s <= steps; ++s) {
+            const double x = width * s / steps;
+            const double top = centre + a1 * std::sin(k1 * x + p1) + a2 * std::sin(k2 * x + p2);
+            const double thick = height * (0.05 + 0.032 * std::sin(k1 * 0.7 * x + p1 * 1.3 + b));
+            tops[b].push_back(Point(static_cast<float>(x), static_cast<float>(top)));
+            bottoms[b].push_back(Point(static_cast<float>(x), static_cast<float>(top + thick)));
+        }
+    }
+    auto children = xmbWaves_->Children;
+    for (int b = 0; b < 3 && b < static_cast<int>(children->Size); ++b) {
+        auto band = dynamic_cast<Polygon^>(children->GetAt(b));
+        if (!band) continue;
+        auto points = ref new PointCollection();
+        for (const auto& p : tops[b]) points->Append(p);
+        for (auto it = bottoms[b].rbegin(); it != bottoms[b].rend(); ++it) points->Append(*it);
+        band->Points = points;
+    }
+    for (int l = 0; l < 2 && 3 + l < static_cast<int>(children->Size); ++l) {
+        auto edge = dynamic_cast<Polyline^>(children->GetAt(3 + l));
+        if (!edge) continue;
+        auto points = ref new PointCollection();
+        for (const auto& p : tops[l]) points->Append(p);
+        edge->Points = points;
+    }
+}
+
+void CatalogShell::LayoutXmb(int dx, int dy) {
+    if (xmb_ == nullptr || xmbStage_ == nullptr) return;
+    auto cats = XmbCategories();
+    if (cats.empty()) return;
+    const int count = static_cast<int>(cats.size());
+    if (static_cast<int>(xmbItem_.size()) != count) xmbItem_.assign(count, -1);
+    if (xmbCat_ < 0 || xmbCat_ >= count) xmbCat_ = std::min(2, count - 1);
+    for (int k = 0; k < count; ++k) {
+        const int items = static_cast<int>(cats[k].items.size());
+        if (xmbItem_[k] < 0 || xmbItem_[k] >= items) xmbItem_[k] = std::max(0, std::min(cats[k].initial, items - 1));
+    }
+    const int oldCat = xmbCat_, oldItem = xmbItem_[xmbCat_];
+    xmbCat_ = std::max(0, std::min(count - 1, xmbCat_ + dx));
+    {
+        const int items = static_cast<int>(cats[xmbCat_].items.size());
+        if (dx == 0) xmbItem_[xmbCat_] = std::max(0, std::min(items - 1, xmbItem_[xmbCat_] + dy));
+    }
+    if (xmbCat_ != oldCat || xmbItem_[xmbCat_] != oldItem) PlayCue(0);
+    else if (dx != 0 || dy != 0) return;  // at an end: nothing moves
+
+    const double width = xmb_->ActualWidth > 0 ? xmb_->ActualWidth : 960;
+    const double height = xmb_->ActualHeight > 0 ? xmb_->ActualHeight : 540;
+    const double anchor = width * 0.25;   // the chosen column's centre
+    const double barTop = height * 0.2;   // the category icons
+    const double column = 112;
+    xmbStage_->Children->Clear();
+
+    auto slide = [](UIElement^ element, double fromX, double fromY) {
+        if (fromX == 0 && fromY == 0) return;
+        auto move = ref new TranslateTransform();
+        element->RenderTransform = move;
+        auto story = ref new Storyboard();
+        auto make = [&story, move](Platform::String^ property, double from) {
+            if (from == 0) return;
+            auto animation = ref new DoubleAnimation();
+            animation->From = from;
+            animation->To = 0.0;
+            animation->Duration = DurationHelper::FromTimeSpan(Millis(150));
+            auto ease = ref new CubicEase();
+            ease->EasingMode = EasingMode::EaseOut;
+            animation->EasingFunction = ease;
+            Storyboard::SetTarget(animation, move);
+            Storyboard::SetTargetProperty(animation, property);
+            story->Children->Append(animation);
+        };
+        make(L"X", fromX);
+        make(L"Y", fromY);
+        story->Begin();
+    };
+    const double shiftX = (xmbCat_ - oldCat) * column;
+
+    for (int k = 0; k < count; ++k) {
+        const bool chosen = k == xmbCat_;
+        const double x = anchor + (k - xmbCat_) * column;
+        auto icon = ref new TextBlock();
+        icon->Text = ref new Platform::String(cats[k].glyph.c_str());
+        icon->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
+        icon->FontSize = chosen ? 46 : 34;
+        icon->Foreground = Solid(Colors::White);
+        icon->Opacity = chosen ? 1.0 : 0.55;
+        icon->Width = column;
+        icon->TextAlignment = TextAlignment::Center;
+        Canvas::SetLeft(icon, x - column / 2);
+        Canvas::SetTop(icon, barTop + (chosen ? 0 : 8));
+        xmbStage_->Children->Append(icon);
+        slide(icon, shiftX, 0);
+        if (chosen) {
+            auto name = Text(ref new Platform::String(cats[k].name.c_str()), 15, false);
+            name->Foreground = Solid(Colors::White);
+            name->Width = column + 40;
+            name->TextAlignment = TextAlignment::Center;
+            Canvas::SetLeft(name, x - (column + 40) / 2);
+            Canvas::SetTop(name, barTop + 56);
+            xmbStage_->Children->Append(name);
+        }
+    }
+
+    // The chosen category's items: the chosen one under the icons, those
+    // before it above them, as the XMB lists them.
+    const auto& items = cats[xmbCat_].items;
+    const int chosenItem = xmbItem_[xmbCat_];
+    const double left = anchor - 34;
+    auto row = [&](int i, double top) {
+        const auto& entry = items[i];
+        const bool chosen = i == chosenItem;
+        auto line = ref new StackPanel();
+        line->Orientation = Orientation::Horizontal;
+        const double size = chosen ? 64 : 46;
+        Windows::UI::Xaml::FrameworkElement^ picture = nullptr;
+        if (entry.game >= 0 && static_cast<size_t>(entry.game) < games_.size() && games_[entry.game].icon != nullptr) {
+            const std::wstring key = games_[entry.game].key ? games_[entry.game].key->Data() : L"";
+            auto found = xmbIcons_.find(key);
+            BitmapImage^ bitmap = nullptr;
+            if (found != xmbIcons_.end()) {
+                bitmap = found->second;
+            } else {
+                bitmap = ref new BitmapImage();
+                xmbIcons_[key] = bitmap;
+                create_task(games_[entry.game].icon->OpenAsync(FileAccessMode::Read)).then(
+                    [bitmap](task<IRandomAccessStream^> opened) {
+                        try { bitmap->SetSource(opened.get()); } catch (Platform::Exception^) {}
+                    }, task_continuation_context::use_current());
+            }
+            auto image = ref new Image();
+            image->Source = bitmap;
+            image->Width = size;
+            image->Height = size;
+            image->Stretch = Stretch::Uniform;
+            picture = image;
+        } else {
+            auto glyph = ref new TextBlock();
+            glyph->Text = ref new Platform::String(entry.glyph.c_str());
+            glyph->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
+            glyph->FontSize = chosen ? 34 : 26;
+            glyph->Width = size;
+            glyph->TextAlignment = TextAlignment::Center;
+            glyph->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+            glyph->Foreground = Solid(Colors::White);
+            picture = glyph;
+        }
+        picture->Margin = Thickness(0, 0, 16, 0);
+        picture->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        line->Children->Append(picture);
+        auto words = Vertical();
+        words->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        auto title = Text(ref new Platform::String(entry.title.c_str()), chosen ? 20 : 15, false);
+        title->Foreground = Solid(Colors::White);
+        title->MaxWidth = width - left - 140;
+        title->TextTrimming = TextTrimming::CharacterEllipsis;
+        title->TextWrapping = TextWrapping::NoWrap;
+        words->Children->Append(title);
+        if (chosen && !entry.subtitle.empty()) {
+            auto sub = Text(ref new Platform::String(entry.subtitle.c_str()), 12, false);
+            sub->Foreground = Solid(Alpha(200, 255, 255, 255));
+            sub->Margin = Thickness(0, 3, 0, 0);
+            words->Children->Append(sub);
+        }
+        line->Children->Append(words);
+        line->Opacity = chosen ? 1.0 : 0.62;
+        Canvas::SetLeft(line, left - (size - 46) / 2);
+        Canvas::SetTop(line, top);
+        xmbStage_->Children->Append(line);
+        slide(line, dx != 0 ? shiftX * 0.25 : 0, dy != 0 ? dy * 22.0 : 0);
+        return size;
+    };
+    double y = barTop + 86;
+    for (int i = chosenItem; i < static_cast<int>(items.size()) && y < height + 10; ++i)
+        y += row(i, y) + 14;
+    double above = barTop - 14;
+    for (int i = chosenItem - 1; i >= 0 && above > -60; --i) {
+        above -= 46 + 14;
+        row(i, above);
+    }
+
+    // A chosen game shows its picture behind the menu, after a moment.
+    for (auto child : xmb_->Children) {
+        auto picture = dynamic_cast<Image^>(child);
+        if (!picture || picture->Name == nullptr || !picture->Name->Equals(L"xmbPicture")) continue;
+        const auto& entry = items[chosenItem];
+        const auto uri = entry.game >= 0 ? BackdropUri(static_cast<size_t>(entry.game)) : ref new Platform::String(L"");
+        if (uri->IsEmpty()) {
+            picture->Opacity = 0;
+            picture->Source = nullptr;
+        } else {
+            try {
+                picture->Source = ref new BitmapImage(ref new Uri(uri));
+                auto fade = ref new DoubleAnimation();
+                fade->From = 0.0;
+                fade->To = 0.55;
+                fade->BeginTime = Millis(450);
+                fade->Duration = DurationHelper::FromTimeSpan(Millis(500));
+                auto story = ref new Storyboard();
+                Storyboard::SetTarget(fade, picture);
+                Storyboard::SetTargetProperty(fade, L"Opacity");
+                story->Children->Append(fade);
+                picture->Opacity = 0;
+                story->Begin();
+            } catch (Platform::Exception^) {
+                picture->Opacity = 0;
+            }
+        }
+    }
+}
+
+bool CatalogShell::XmbKey(Windows::System::VirtualKey key) {
+    using Windows::System::VirtualKey;
+    switch (key) {
+    case VirtualKey::GamepadDPadLeft: case VirtualKey::GamepadLeftThumbstickLeft: case VirtualKey::Left:
+        LayoutXmb(-1, 0);
+        return true;
+    case VirtualKey::GamepadDPadRight: case VirtualKey::GamepadLeftThumbstickRight: case VirtualKey::Right:
+        LayoutXmb(1, 0);
+        return true;
+    case VirtualKey::GamepadDPadUp: case VirtualKey::GamepadLeftThumbstickUp: case VirtualKey::Up:
+        LayoutXmb(0, -1);
+        return true;
+    case VirtualKey::GamepadDPadDown: case VirtualKey::GamepadLeftThumbstickDown: case VirtualKey::Down:
+        LayoutXmb(0, 1);
+        return true;
+    case VirtualKey::GamepadA: case VirtualKey::Enter: case VirtualKey::Space:
+    case VirtualKey::GamepadY: case VirtualKey::GamepadMenu: {
+        auto cats = XmbCategories();
+        if (xmbCat_ < 0 || xmbCat_ >= static_cast<int>(cats.size())) return true;
+        const auto& items = cats[xmbCat_].items;
+        const int chosen = xmbItem_.size() > static_cast<size_t>(xmbCat_) ? xmbItem_[xmbCat_] : 0;
+        if (chosen < 0 || chosen >= static_cast<int>(items.size())) return true;
+        const bool options = key == VirtualKey::GamepadY || key == VirtualKey::GamepadMenu;
+        const auto& entry = items[chosen];
+        if (options) {
+            if (entry.options) { PlayCue(1); entry.options(); }
+        } else if (entry.action) {
+            PlayCue(1);
+            entry.action();
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 } // namespace Vita3KUWP

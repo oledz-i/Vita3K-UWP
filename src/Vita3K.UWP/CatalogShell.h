@@ -6,6 +6,8 @@
 #include "LivingBackdrop.h"
 #include "GameInfo.h"
 #include <set>
+#include <map>
+#include <functional>
 #include <collection.h>
 #include <ppltasks.h>
 #include <string>
@@ -24,6 +26,22 @@ struct LibraryGame {
     Windows::Storage::StorageFile^ icon;
     vita3k_uwp::GameFormat format = vita3k_uwp::GameFormat::Unknown;
     Platform::String^ validation = L"Awaiting source validation";
+};
+
+// The PS3-style home (XMB): categories across, their items down.
+struct XmbEntry {
+    std::wstring title;
+    std::wstring subtitle;
+    std::wstring glyph;      // Segoe MDL2 glyph, when there is no picture
+    int game = -1;           // a game of the library (its icon is the picture)
+    std::function<void()> action;
+    std::function<void()> options;
+};
+struct XmbCategory {
+    std::wstring name;
+    std::wstring glyph;
+    std::vector<XmbEntry> items;
+    int initial = 0;
 };
 
 public ref class CatalogShell sealed : Windows::UI::Xaml::Controls::UserControl {
@@ -165,6 +183,41 @@ private:
     void StartCore(Platform::String^ contentPath);
     void RestartInto(Platform::String^ contentPath);
     bool restartRefused_ = false;
+    // SteamGridDB: the game's own art picked by hand (covers and the wide
+    // background behind its page), over the page as a full-screen layer.
+    void ShowArtPicker(size_t index);
+    void CloseArtPicker();
+    void ArtPickerSearch(size_t index, Platform::String^ term);
+    void ArtPickerLoad(size_t index, unsigned gameId, Platform::String^ name);
+    Windows::UI::Xaml::Controls::Grid^ artPicker_ = nullptr;
+    Windows::UI::Xaml::Controls::StackPanel^ artResults_ = nullptr;
+    Windows::UI::Xaml::Controls::StackPanel^ artCovers_ = nullptr;
+    Windows::UI::Xaml::Controls::StackPanel^ artHeroes_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ artNote_ = nullptr;
+    unsigned artRequest_ = 0;
+    // The wide picture behind a game's page: its SteamGridDB background
+    // (hero), or failing that a screenshot taken while it was played.
+    Platform::String^ BackdropUri(size_t index);
+    std::wstring screenshotPath_;
+    bool screenshotTaken_ = false;
+    // PS3-style XMB home (Settings, Appearance, Home screen)
+    bool xmbMode_ = false;
+    int xmbCat_ = -1;
+    std::vector<int> xmbItem_;
+    double xmbPhase_ = 0;
+    Windows::UI::Xaml::Controls::Grid^ xmb_ = nullptr;
+    Windows::UI::Xaml::Controls::Canvas^ xmbWaves_ = nullptr;
+    Windows::UI::Xaml::Controls::Canvas^ xmbStage_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ xmbClock_ = nullptr;
+    Windows::UI::Xaml::DispatcherTimer^ xmbTimer_ = nullptr;
+    std::map<std::wstring, Windows::UI::Xaml::Media::Imaging::BitmapImage^> xmbIcons_;
+    std::vector<XmbCategory> XmbCategories();
+    void ShowXmb();
+    void HideXmb();
+    void LayoutXmb(int dx, int dy);
+    void XmbWaves();
+    bool XmbKey(Windows::System::VirtualKey key);
+    void SaveLayout(bool xmb);
     void EnterGameView(Platform::String^ title);
     void ShowLoadFailure(Platform::String^ detail);
     void ExitGameView();
