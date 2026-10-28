@@ -7,7 +7,9 @@ A native UWP interface made for a controller on a TV. Everything is reachable wi
 **Settings → Appearance → Home screen** switches between:
 
 - **Cinematic** (default): a hero for the game you last played, shelves, and a left rail with Home, Library and Settings.
-- **PS3 XMB**: a cross-bar in the style of the PS3. Categories run along the top (Settings, Music, Game, Network), items run down beneath the selected one, and animated waves sit over a background colour that follows the month (darker at night). A clock shows the date and time. D-pad or stick to move, **A** to select, **B** to back out.
+- **PS3 XMB**: a cross-bar in the style of the PS3. Categories run along the top (Settings, Music, Game, Network), items run down beneath the selected one, and animated waves sit over the background. A clock shows the date and time. D-pad or stick to move, **A** to select, **Y** for a game's page, **B** to back out.
+
+The XMB has eleven colours: Monthly (the PS3's colour of the month, darker at night), Classic Blue (default), Vita Blue, Crimson, Emerald, Royal Purple, Ocean, Rose, Sunset, Silver and Midnight. Pick one under **Settings → Appearance → XMB colour**, or press A on the **Theme** item in the XMB's Settings column to cycle through them.
 
 ## Pages
 
@@ -28,7 +30,7 @@ A native UWP interface made for a controller on a TV. Everything is reachable wi
 
 ## Themes, music and sounds
 
-Five themes (Onyx, Aurora, Ember, Glacier, Orbit). Four original home soundtracks (Afterglow, Neon Arcade, Stardust, Tidal), composed for this project by `scripts/music/compose.py`, or your own file, or off. Original interface cues for focus, select, back and shelf swipes, each with its own volume.
+Five themes (Onyx, Aurora, Ember, Glacier, Orbit). Four original home soundtracks (Afterglow, Neon Arcade, Stardust, Tidal), composed for this project by `scripts/music/compose.py`, or your own file, or off. Original interface cues for focus, select, back and shelf swipes, played through XAudio2 so they never hold up the menu. Music and cues each have their own volume.
 
 ## In a game
 

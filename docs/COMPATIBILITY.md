@@ -4,13 +4,13 @@ Results from hands-on testing on an Xbox Series S in Dev Mode. This is a snapsho
 
 | Game | Vulkan | OpenGL | Notes |
 | --- | --- | --- | --- |
-| Terraria | Plays well | Plays well | Noticeable speed gain in recent builds |
+| Terraria | Stable 60 fps | Plays well | Occasional dropped frame in build 76, addressed by vblank pacing in 78 |
 | Undertale | Runs | Runs | |
 | Persona 4 Golden | Fixed in build 72 (vertex formats), needs confirming | Fixed in build 72 (render-target copy), needs confirming | Audio crackle addressed by the larger audio buffer |
 | Gravity Rush | Plays | Not recommended | The crash after the opening cutscene was guarded in build 72 |
-| Ultra Despair Girls | Good in gameplay | Hitches | Cutscene hitches came from shader compiling; background compiling is now the default |
-| Danganronpa: Trigger Happy Havoc | Interaction bug | Interaction bug | Also open in upstream Vita3K; no known cause |
-| Minecraft: PS Vita Edition | Runs slowly, some garbled text | Crashes | Use Vulkan |
+| Ultra Despair Girls | 30 fps (its own rate) | Hitches | Cutscene stutter (frames held, then skipped) fixed by in-order frame delivery in build 78, needs confirming |
+| Danganronpa: Trigger Happy Havoc | Interaction bug | Interaction bug | Also open in upstream Vita3K. The stuck save screen is addressed in build 78 |
+| Minecraft: PS Vita Edition | Runs slowly, some garbled text | Crashes | Use Vulkan. Its US update (PCSE00491) installs even before the game is played, from build 78 |
 
 Not yet tested: Uncharted: Golden Abyss.
 
