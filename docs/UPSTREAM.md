@@ -1,6 +1,6 @@
 # Vita3K upstream assessment
 
-Reviewed on **2026-10-24** against [Vita3K/Vita3K at fa296cc043742692ea3a51ff0a82e5683b201f72](https://github.com/Vita3K/Vita3K/tree/fa296cc043742692ea3a51ff0a82e5683b201f72). `upstream.lock.json` records the exact baseline. The emulation source is not vendored or linked into the development shell yet.
+Reviewed on **2026-10-24** against [Vita3K/Vita3K at fa296cc043742692ea3a51ff0a82e5683b201f72](https://github.com/Vita3K/Vita3K/tree/fa296cc043742692ea3a51ff0a82e5683b201f72). `upstream.lock.json` records the exact baseline. The integration branch imports and links **one authentic core component**, Vita3K's bitmap memory allocator from `vita3k/mem/{include,src}/allocator.*`. The Dynarmic CPU, kernel, firmware stack and full renderer are not linked yet.
 
 ## Source map and findings
 
@@ -22,7 +22,7 @@ All paths below refer to that pinned revision.
 
 Keep the portable emulation core separate from the UWP host. The host should own activation, suspend/resume, controller interaction, storage permissions and presentation. Preserve upstream history and attribution when importing core code; record the baseline and keep platform patches reviewable. Disable or replace desktop-only updater, frontend and optional integration code where it relies on unavailable APIs.
 
-Do not assume the latest SDL or Qt desktop frontend is compatible with Xbox UWP. Their versions and platform support need explicit investigation. The bootstrap shell intentionally does not pull in the full upstream dependency tree.
+Do not assume the latest SDL or Qt desktop frontend is compatible with Xbox UWP. Their versions and platform support need explicit investigation. The bootstrap intentionally avoids the full upstream dependency tree so far; the small upstream memory allocator is vendored with its original GPL header and verified by a regression test.
 
 ## Feasibility gates before compatibility promises
 
