@@ -1,19 +1,17 @@
-# Install and test on Xbox
+# Install on Xbox
 
 **Alpha.** Several games run on Xbox (see [compatibility](COMPATIBILITY.md)), but expect crashes and rough performance. Send the log (below) when one happens.
 
-## 1. Get the build
+## 1. Get the package
 
-On GitHub, open `oledz-i/Vita3K-UWP` → **Actions** → **Full Vita3K core + Dozen signed APPX (gameplay path)**. Pick the latest successful run on `astra-undertale` and download **`Vita3K-Build-Output-x64-<run number>`**. That is the one to install. The other artifacts are build intermediates and logs.
-
-Unzip it. Inside are the `.appx`, any x64 dependencies under `Dependencies/`, `Development.cer`, `build-info.json` and `SHA256SUMS.txt`.
+Download the latest release from [Releases](https://github.com/oledz-i/Vita3K-UWP/releases) and unzip it. Inside are the `.appx`, its x64 dependencies under `Dependencies/`, and the certificate it's signed with.
 
 ## 2. Deploy through Developer Mode
 
 1. Put the Xbox in Developer Mode ([Microsoft's guide](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/devkit-activation)).
 2. Open the Xbox Device Portal from a PC on the same network: `https://<xbox-ip>:11443`.
 3. **Add** the `.appx`, plus the x64 dependencies if the portal asks. Skip ARM and x86 ones.
-4. Builds from different CI runs carry different test certificates, so a newer build may need the old one uninstalled first. **Uninstalling deletes the app's data**, including whatever Vita3K data you kept in internal storage. Data kept on a USB drive stays.
+4. A newer release may need the old one uninstalled first. **Uninstalling deletes the app's data**, including any Vita3K data kept on internal storage. Data kept on a USB drive stays, which is one more reason to keep it there.
 
 ## 3. Set Vita3K to run as a Game
 
@@ -68,6 +66,6 @@ In the app: **Settings → Firmware → Install firmware files**, and select all
 
 ## 10. When something goes wrong: the log
 
-The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → oledz.Vita3KUWP.Dev_… → LocalState** and download `vita3k-runtime.log`. Send that with the commit from `build-info.json`, the console, the game and its format, and what was on screen when it stopped.
+The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → Vita3KUWP_… → LocalState** and download `vita3k-runtime.log`. Send it along with the game and its format, the renderer, and what was on screen when it stopped.
 
 Do not report this port's problems to upstream Vita3K.
