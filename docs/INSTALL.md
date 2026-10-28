@@ -66,6 +66,6 @@ In the app: **Settings → Firmware → Install firmware files**, and select all
 
 ## 10. When something goes wrong: the log
 
-The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → Vita3KUWP_… → LocalState** and download `vita3k-runtime.log`. Send it along with the app version (shown in Settings), the game and its format, the renderer, and what was on screen when it stopped.
+The core writes `vita3k-runtime.log` as it runs. In the Device Portal, open **File Explorer → LocalAppData → Vita3KUWP_… → LocalState** and download `vita3k-runtime.log`. Send it along with the game and its format, the renderer, and what was on screen when it stopped.
 
 Do not report this port's problems to upstream Vita3K.
