@@ -7,6 +7,7 @@
 #include "GameInfo.h"
 #include <set>
 #include <map>
+#include "CueAudio.h"
 #include <functional>
 #include <collection.h>
 #include <ppltasks.h>
@@ -93,6 +94,7 @@ private:
     Platform::String^ playbackStatus_ = L"Not started";
     // One slot per cue in vita3k_uwp::kInterfaceCueCount.
     Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[6] = {};
+    CueAudio cueAudio_;
     Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[6] = {};
     bool cueReady_[6] = {};
     bool uiSounds_ = true;
@@ -198,6 +200,11 @@ private:
     // The wide picture behind a game's page: its SteamGridDB background
     // (hero), or failing that a screenshot taken while it was played.
     Platform::String^ BackdropUri(size_t index);
+    // Pictures decoded once at the size they are shown, and kept: a full-size
+    // SteamGridDB hero (up to 3840 wide) decoded again on every page build
+    // froze the menus for a moment.
+    std::map<std::wstring, Windows::UI::Xaml::Media::Imaging::BitmapImage^> bitmapCache_;
+    Windows::UI::Xaml::Media::Imaging::BitmapImage^ CachedBitmap(Platform::String^ uri, int decodeWidth);
     std::wstring screenshotPath_;
     bool screenshotTaken_ = false;
     // PS3-style XMB home (Settings, Appearance, Home screen)
@@ -218,6 +225,9 @@ private:
     void XmbWaves();
     bool XmbKey(Windows::System::VirtualKey key);
     void SaveLayout(bool xmb);
+    int xmbTheme_ = 0;
+    void ApplyXmbSky();
+    void SaveXmbTheme(int theme);
     void EnterGameView(Platform::String^ title);
     void ShowLoadFailure(Platform::String^ detail);
     void ExitGameView();

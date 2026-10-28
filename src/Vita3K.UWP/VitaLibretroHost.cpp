@@ -9,9 +9,59 @@
 #include <share.h>
 #include <string>
 #include <chrono>
+#include <dxgi1_2.h>
+#include <wrl/client.h>
 #pragma comment(lib, "xinputuap.lib")
 
 VitaLibretroHost* VitaLibretroHost::active_ = nullptr;
+
+namespace {
+// The TV's vertical blank, when the console lets an app wait for it. The
+// emulation ran on its own 60 Hz timer while the picture went out on the
+// TV's refresh: two clocks a hair apart, so every so often a frame was shown
+// twice and the next one never (a 33 ms frame each minute in the log, and a
+// stutter in 30 fps games). Waiting for the vblank instead keeps the game's
+// frames on the screen's beat.
+struct VBlankClock {
+    Microsoft::WRL::ComPtr<IDXGIOutput> output;
+    int perFrame = 0;  // vblanks per emulated frame; 0: not used
+    double periodMs = 0;
+    bool Open() {
+        Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf())))) return false;
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        for (UINT i = 0; !output && SUCCEEDED(factory->EnumAdapters1(i, adapter.ReleaseAndGetAddressOf())); ++i)
+            adapter->EnumOutputs(0, output.ReleaseAndGetAddressOf());
+        if (!output) return false;
+        using clock = std::chrono::steady_clock;
+        for (int i = 0; i < 2; ++i)
+            if (FAILED(output->WaitForVBlank())) { output.Reset(); return false; }
+        auto last = clock::now();
+        double total = 0, shortest = 1e9;
+        constexpr int samples = 12;
+        for (int i = 0; i < samples; ++i) {
+            if (FAILED(output->WaitForVBlank())) { output.Reset(); return false; }
+            const auto now = clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(now - last).count();
+            last = now;
+            total += ms;
+            shortest = (std::min)(shortest, ms);
+        }
+        periodMs = total / samples;
+        if (shortest < periodMs * 0.6) perFrame = 0;          // not a steady refresh
+        else if (periodMs > 15.4 && periodMs < 18.0) perFrame = 1;  // 60 Hz
+        else if (periodMs > 7.7 && periodMs < 9.0) perFrame = 2;    // 120 Hz
+        else perFrame = 0;
+        if (perFrame == 0) output.Reset();
+        return perFrame != 0;
+    }
+    bool Wait() {
+        for (int i = 0; i < perFrame; ++i)
+            if (FAILED(output->WaitForVBlank())) return false;
+        return true;
+    }
+};
+}
 
 namespace {
 std::wstring FromUtf8(const char* input) {
@@ -519,6 +569,13 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
                     }
                 }
             };
+            VBlankClock vblank;
+            if (vblank.Open())
+                Log(1, "Frame pacing: on the TV's refresh (%.2f ms, %d per frame)\n", vblank.periodMs, vblank.perFrame);
+            else
+                Log(1, "Frame pacing: on a 60 Hz timer (the TV's refresh is not available here, or not 60/120 Hz: %.2f ms)\n", vblank.periodMs);
+            auto lastVblank = clock::now();
+            unsigned catchUp = 0, earlyVblanks = 0, vblankWaits = 0;
             auto next = clock::now();
             try {
                 while (running_.load()) {
@@ -543,6 +600,36 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
                         const unsigned tenths = static_cast<unsigned>(std::chrono::duration_cast<std::chrono::microseconds>(ran).count() / 100);
                         unsigned longest = longestRunTenthsMs_.load(std::memory_order_relaxed);
                         while (tenths > longest && !longestRunTenthsMs_.compare_exchange_weak(longest, tenths)) {}
+                    }
+                    if (vblank.perFrame) {
+                        // Ran past the next refresh: straight on to the next
+                        // frame (a few at most), so the game keeps its speed.
+                        if (clock::now() - lastVblank > period + std::chrono::milliseconds(2) && catchUp < 3) {
+                            ++catchUp;
+                            lastVblank += period;
+                            continue;
+                        }
+                        catchUp = 0;
+                        if (!vblank.Wait()) {
+                            vblank.perFrame = 0;
+                            Log(1, "Frame pacing: the TV's refresh stopped answering; on the timer from here\n");
+                            next = clock::now();
+                            continue;
+                        }
+                        const auto now = clock::now();
+                        // A "refresh" much sooner than a period after the last
+                        // one, again and again, is not a real one.
+                        if (now - lastVblank < period / 2) ++earlyVblanks;
+                        lastVblank = now;
+                        if (++vblankWaits == 600) {
+                            if (earlyVblanks > 60) {
+                                vblank.perFrame = 0;
+                                Log(1, "Frame pacing: the refresh came early %u times in 600; on the timer from here\n", earlyVblanks);
+                                next = clock::now();
+                            }
+                            vblankWaits = earlyVblanks = 0;
+                        }
+                        continue;
                     }
                     next += period;
                     const auto now = clock::now();

@@ -26,6 +26,8 @@
 #include <memory>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <system_error>
 #include <string>
 #include <stdexcept>
@@ -93,6 +95,50 @@ VariableSizedWrapGrid^ ActionRow(double itemWidth) {
     row->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Left;
     return row;
 }
+// The PS3's background takes a colour for each month.
+Color XmbMonthColor(int month) {
+    static const unsigned colors[12][3] = {
+        { 160, 164, 172 }, // January: silver
+        { 190, 152, 46 },  // February: gold
+        { 118, 162, 44 },  // March: lime
+        { 200, 104, 150 }, // April: pink
+        { 40, 136, 66 },   // May: green
+        { 146, 78, 164 },  // June: purple
+        { 32, 146, 156 },  // July: teal
+        { 40, 106, 200 },  // August: blue
+        { 84, 60, 164 },   // September: violet
+        { 180, 106, 40 },  // October: amber
+        { 122, 84, 54 },   // November: brown
+        { 172, 38, 44 },   // December: red
+    };
+    const auto& c = colors[(month >= 1 && month <= 12) ? month - 1 : 0];
+    return RgbColor(c[0], c[1], c[2]);
+}
+Color Shade(Color c, double f) {
+    auto ch = [f](unsigned char v) { return static_cast<unsigned>(std::min(255.0, std::max(0.0, v * f))); };
+    return RgbColor(ch(c.R), ch(c.G), ch(c.B));
+}
+// The XMB's colours: the PS3's monthly one, or one kept all year.
+struct XmbTheme {
+    const wchar_t* name;
+    unsigned char top[3];
+    unsigned char bottom[3];
+    bool monthly;
+};
+const XmbTheme kXmbThemes[] = {
+    { L"Monthly (PS3)", { 0, 0, 0 }, { 0, 0, 0 }, true },
+    { L"Classic Blue", { 6, 22, 70 }, { 34, 104, 196 }, false },
+    { L"Vita Blue", { 2, 16, 44 }, { 0, 112, 204 }, false },
+    { L"Crimson", { 44, 4, 10 }, { 168, 28, 42 }, false },
+    { L"Emerald", { 4, 34, 20 }, { 26, 136, 78 }, false },
+    { L"Royal Purple", { 24, 8, 52 }, { 116, 58, 178 }, false },
+    { L"Ocean", { 2, 30, 40 }, { 20, 146, 166 }, false },
+    { L"Rose", { 56, 14, 36 }, { 204, 104, 146 }, false },
+    { L"Sunset", { 36, 10, 46 }, { 226, 104, 58 }, false },
+    { L"Silver", { 46, 48, 56 }, { 164, 168, 180 }, false },
+    { L"Midnight", { 2, 2, 6 }, { 24, 26, 36 }, false },
+};
+constexpr int kXmbThemeCount = static_cast<int>(sizeof(kXmbThemes) / sizeof(kXmbThemes[0]));
 Platform::String^ StringOf(const std::wstring& value) {
     return ref new Platform::String(value.c_str());
 }
@@ -352,6 +398,8 @@ CatalogShell::CatalogShell() {
     theme_ = saved->Equals(L"1") ? 1 : saved->Equals(L"2") ? 2 :
              saved->Equals(L"3") ? 3 : saved->Equals(L"4") ? 4 : 0;
     xmbMode_ = Pref(L"ui.layout", L"cinematic")->Equals(L"xmb");
+    xmbTheme_ = _wtoi(Pref(L"xmb.theme", L"1")->Data());
+    if (xmbTheme_ < 0 || xmbTheme_ >= kXmbThemeCount) xmbTheme_ = 0;
     const auto savedTrack = Pref(L"music.track", L"1");
     track_ = savedTrack->Equals(L"0") ? 0 : savedTrack->Equals(L"2") ? 2 :
              savedTrack->Equals(L"3") ? 3 : savedTrack->Equals(L"4") ? 4 :
@@ -746,7 +794,7 @@ void CatalogShell::ConfigureCover(Border^ cover, size_t index) {
     if (!url->IsEmpty()) {
         try {
             auto brush = ref new ImageBrush();
-            brush->ImageSource = ref new BitmapImage(ref new Uri(url));
+            brush->ImageSource = CachedBitmap(url, 300);
             brush->Stretch = Stretch::UniformToFill;
             cover->Background = brush;
         } catch (Platform::Exception^) {
@@ -766,6 +814,20 @@ void CatalogShell::ConfigureCover(Border^ cover, size_t index) {
                 catch (Platform::Exception^) {}
             }, task_continuation_context::use_current());
     }
+}
+
+BitmapImage^ CatalogShell::CachedBitmap(Platform::String^ uri, int decodeWidth) {
+    const std::wstring key = std::wstring(uri->Data()) + L"|" + std::to_wstring(decodeWidth);
+    auto found = bitmapCache_.find(key);
+    if (found != bitmapCache_.end()) return found->second;
+    if (bitmapCache_.size() > 96) bitmapCache_.clear();
+    auto bitmap = ref new BitmapImage();
+    // set before the source, so that only this size is ever decoded
+    bitmap->DecodePixelWidth = decodeWidth;
+    bitmap->DecodePixelType = DecodePixelType::Logical;
+    bitmap->UriSource = ref new Uri(uri);
+    bitmapCache_[key] = bitmap;
+    return bitmap;
 }
 
 Button^ CatalogShell::MakeTile(size_t index) {
@@ -918,13 +980,13 @@ void CatalogShell::Home() {
     if (!homeBackdrop->IsEmpty()) {
         // the game's wide background, the whole banner
         auto art = ref new Image();
-        art->Source = ref new BitmapImage(ref new Uri(homeBackdrop));
+        art->Source = CachedBitmap(homeBackdrop, 1280);
         art->Stretch = Stretch::UniformToFill;
         art->Opacity = 0.9;
         heroLayout->Children->Append(art);
     } else if (hasGames && !ArtworkUri(featured)->IsEmpty()) {
         auto art = ref new Image();
-        art->Source = ref new BitmapImage(ref new Uri(ArtworkUri(featured)));
+        art->Source = CachedBitmap(ArtworkUri(featured), 520);
         art->Stretch = Stretch::UniformToFill;
         art->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Right;
         art->Width = 520;
@@ -1226,10 +1288,27 @@ void CatalogShell::GameDetails() {
     auto actions = ref new StackPanel();
     actions->Orientation = Orientation::Horizontal;
     actions->Margin = Thickness(0, 22, 0, 8);
-    auto play = Button(L"▶  Play", true);
+    auto play = Button(L"Play", true);
     play->MinWidth = 168;
     play->Height = 52;
     play->FontSize = 18;
+    {
+        // The console's own play symbol (Segoe MDL2), not a text arrow
+        auto content = ref new StackPanel();
+        content->Orientation = Orientation::Horizontal;
+        auto glyph = ref new TextBlock();
+        glyph->Text = L"\uE768";
+        glyph->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
+        glyph->FontSize = 16;
+        glyph->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        glyph->Margin = Thickness(0, 1, 10, 0);
+        content->Children->Append(glyph);
+        auto label = ref new TextBlock();
+        label->Text = L"Play";
+        label->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
+        content->Children->Append(label);
+        play->Content = content;
+    }
     play->Click += ref new RoutedEventHandler([this,index](Platform::Object^, RoutedEventArgs^) {
         AttemptBoot(index);
     });
@@ -1275,7 +1354,7 @@ void CatalogShell::GameDetails() {
     if (!backdrop->IsEmpty()) {
         try {
             auto picture = ref new ImageBrush();
-            picture->ImageSource = ref new BitmapImage(ref new Uri(backdrop));
+            picture->ImageSource = CachedBitmap(backdrop, 1280);
             picture->Stretch = Stretch::UniformToFill;
             feature->Background = picture;
             auto shade = ref new LinearGradientBrush();
@@ -1361,7 +1440,7 @@ void CatalogShell::AppendGameInfo(size_t index) {
     body->Children->Append(eyebrow);
 
     if (!have) {
-        auto waiting = Text(infoFetching_.count(key) ? L"Looking this game up online…" : L"Nothing found online for this game yet.", 14, false, true);
+        auto waiting = Text(infoFetching_.count(key) ? L"Looking this game up online\u2026" : L"Nothing found online for this game yet.", 14, false, true);
         waiting->Margin = Thickness(0, 10, 0, 0);
         body->Children->Append(waiting);
     } else if (info.Empty()) {
@@ -1447,7 +1526,7 @@ void CatalogShell::AppendGameInfo(size_t index) {
     source->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
     source->Opacity = 0.75;
     footer->Children->Append(source);
-    auto refresh = Button(infoFetching_.count(key) ? L"Looking up…" : L"Refresh info");
+    auto refresh = Button(infoFetching_.count(key) ? L"Looking up\u2026" : L"Refresh info");
     refresh->Margin = Thickness(16, 0, 0, 0);
     refresh->IsEnabled = !infoFetching_.count(key);
     refresh->Click += ref new RoutedEventHandler([this, index](Platform::Object^, RoutedEventArgs^) {
@@ -1561,9 +1640,45 @@ void CatalogShell::Settings() {
     layouts->Children->Append(xmb);
     content_->Children->Append(layouts);
     auto layoutNote = Text(L"XMB: left and right change category, up and down choose, A opens, Y shows a game's page. "
-        L"Its colour follows the month, as the PS3's did.", 12, false, true);
+        L"Pick its colour below.", 12, false, true);
     layoutNote->Margin = Thickness(3, 6, 0, 8);
     content_->Children->Append(layoutNote);
+    Section(L"XMB colour", L"The PS3's colour of the month, or one of your own all year.");
+    auto xmbColours = ref new VariableSizedWrapGrid();
+    xmbColours->Orientation = Orientation::Horizontal;
+    xmbColours->ItemWidth = 156;
+    xmbColours->ItemHeight = 70;
+    for (int i = 0; i < kXmbThemeCount; ++i) {
+        const XmbTheme& theme = kXmbThemes[i];
+        auto choice = ref new Windows::UI::Xaml::Controls::Button();
+        choice->Margin = Thickness(0, 0, 10, 10);
+        choice->Padding = Thickness(0);
+        choice->HorizontalContentAlignment = Windows::UI::Xaml::HorizontalAlignment::Stretch;
+        choice->VerticalContentAlignment = Windows::UI::Xaml::VerticalAlignment::Stretch;
+        Skin(choice, 12, i == xmbTheme_);
+        auto swatch = ref new Border();
+        swatch->CornerRadius = Windows::UI::Xaml::CornerRadius(11);
+        swatch->Padding = Thickness(12, 8, 12, 8);
+        if (theme.monthly) {
+            SYSTEMTIME now{};
+            GetLocalTime(&now);
+            const Color month = XmbMonthColor(now.wMonth);
+            swatch->Background = Gradient(Shade(month, 0.4), month);
+        } else {
+            swatch->Background = Gradient(RgbColor(theme.top[0], theme.top[1], theme.top[2]),
+                                          RgbColor(theme.bottom[0], theme.bottom[1], theme.bottom[2]));
+        }
+        auto label = Text(ref new Platform::String(theme.name), 13, true);
+        label->Foreground = Solid(Colors::White);
+        label->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Bottom;
+        swatch->Child = label;
+        choice->Content = swatch;
+        if (i == xmbTheme_) choice->BorderBrush = Solid(Colors::White);
+        choice->GotFocus += ref new RoutedEventHandler([this](Platform::Object^, RoutedEventArgs^) { PlayCue(0); });
+        choice->Click += ref new RoutedEventHandler([this, i](Platform::Object^, RoutedEventArgs^) { SaveXmbTheme(i); });
+        xmbColours->Children->Append(choice);
+    }
+    content_->Children->Append(xmbColours);
 
     Section(L"Home menu soundtrack", L"Original loopable music, your own audio, or silence.");
     const wchar_t* names[] = {
@@ -2152,7 +2267,8 @@ void CatalogShell::SetupCard() {
         badge->CornerRadius = Windows::UI::Xaml::CornerRadius(15);
         badge->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Top;
         badge->Background = Solid(done ? RgbColor(52, 168, 104) : current ? Accent() : Alpha(40, 255, 255, 255));
-        auto mark = Text(done ? L"✓" : ref new Platform::String(std::to_wstring(number).c_str()), 14, true);
+        auto mark = Text(done ? L"\uE73E" : ref new Platform::String(std::to_wstring(number).c_str()), 14, true);
+        if (done) mark->FontFamily = ref new Windows::UI::Xaml::Media::FontFamily(L"Segoe MDL2 Assets");
         mark->HorizontalAlignment = Windows::UI::Xaml::HorizontalAlignment::Center;
         mark->VerticalAlignment = Windows::UI::Xaml::VerticalAlignment::Center;
         if (current && !done) mark->Foreground = Solid(Colors::Black);
@@ -2854,16 +2970,90 @@ std::wstring AddonSignature(const std::filesystem::path& item) {
     const auto stamp = fs::last_write_time(probe, ec).time_since_epoch().count();
     return item.wstring() + L"|" + std::to_wstring(size) + L"|" + std::to_wstring(stamp);
 }
+// An update's PKG decrypts with its game's license. A game dump keeps that
+// as sce_sys/package/work.bin, but Vita3K only has its own copy once the game
+// has been installed, so an update installed first (a fresh data folder, or
+// the update dropped in before the game was ever played) was refused for "no
+// license". The game's work.bin is copied in where Vita3K looks for it.
+bool ProvideUpdateLicense(VitaLibretroHost& host, const std::filesystem::path& pkg, const std::vector<std::wstring>& gameDirs) {
+    namespace fs = std::filesystem;
+    std::wstring ext = pkg.extension().wstring();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    if (ext != L".pkg") return false;
+    std::string contentId;
+    {
+        std::ifstream in(pkg, std::ios::binary);
+        char header[0x60] = {};
+        if (!in.read(header, sizeof(header))) return false;
+        contentId.assign(header + 0x30, strnlen(header + 0x30, 0x30));
+    }
+    if (contentId.size() < 16) return false;
+    const std::string titleId = contentId.substr(7, 9);
+    const fs::path licenseDir = fs::path(FirmwareRoot()) / L"ux0" / L"license" / WidenUtf8(titleId);
+    std::error_code ec;
+    const fs::path target = licenseDir / WidenUtf8(contentId + ".rif");
+    if (fs::exists(target, ec)) return true;
+    // The game's folder: one of the library's, or one named after the title
+    // ID next to the updates folder or a level up (ROMS/PSVita/games/PCSE00491)
+    std::vector<fs::path> candidates;
+    const std::wstring wideTitle = WidenUtf8(titleId);
+    for (const auto& dir : gameDirs) {
+        if (dir.empty()) continue;
+        const fs::path p(dir);
+        candidates.push_back(p);
+        candidates.push_back(p / wideTitle);
+    }
+    for (const fs::path& base : { pkg.parent_path(), pkg.parent_path().parent_path(), pkg.parent_path().parent_path().parent_path() }) {
+        if (base.empty()) continue;
+        candidates.push_back(base / wideTitle);
+        for (fs::directory_iterator it(base, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code e;
+            if (it->is_directory(e)) candidates.push_back(it->path() / wideTitle);
+        }
+        ec.clear();
+    }
+    for (const auto& dir : candidates) {
+        const fs::path workBin = dir / L"sce_sys" / L"package" / L"work.bin";
+        std::error_code e;
+        if (!fs::exists(workBin, e)) continue;
+        std::string bytes;
+        {
+            std::ifstream in(workBin, std::ios::binary);
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        if (bytes.size() < 0x40) continue;
+        // a license names its content at 0x10: it must be this title's
+        const std::string licensed(bytes.data() + 0x10, strnlen(bytes.data() + 0x10, 0x30));
+        if (licensed.size() < 16 || licensed.substr(7, 9) != titleId) continue;
+        fs::create_directories(licenseDir, e);
+        std::ofstream out(target, std::ios::binary | std::ios::trunc);
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!out) continue;
+        out.close();
+        // under the game's own name too, as Vita3K files it when installing the game
+        if (licensed != contentId) {
+            std::ofstream copy(licenseDir / WidenUtf8(licensed + ".rif"), std::ios::binary | std::ios::trunc);
+            copy.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
+        host.LogLine("Updates and DLC: " + titleId + "'s license taken from " + NarrowUtf8(workBin.wstring()) + " for " + NarrowUtf8(pkg.filename().wstring()));
+        return true;
+    }
+    host.LogLine("Updates and DLC: no license for " + titleId + " found yet (its game's folder has sce_sys/package/work.bin; play the game once, or keep it in the games folder)");
+    return false;
+}
+
 // Installs the items not installed before (for one title, when titleId is set:
 // those whose name says it). Returns a line for each one tried.
 std::wstring InstallPendingAddons(VitaLibretroHost& host, const std::string& system, const std::wstring& root,
-                                  const std::wstring& titleId, int& installed, int& failed) {
+                                  const std::wstring& titleId, int& installed, int& failed,
+                                  const std::vector<std::wstring>& gameDirs = {}) {
     std::wstring summary;
     for (const auto& item : AddonItems(root)) {
         const std::wstring name = item.filename().wstring();
         if (!titleId.empty() && item.wstring().find(titleId) == std::wstring::npos) continue;
         const auto key = L"addon.done." + StableKey(ref new Platform::String(AddonSignature(item).c_str()));
         if (!Pref(key, L"")->IsEmpty()) continue;
+        ProvideUpdateLicense(host, item, gameDirs);
         std::string id, category;
         std::wstring detail;
         host.LogLine("Updates and DLC: installing " + NarrowUtf8(item.wstring()));
@@ -2912,9 +3102,14 @@ void CatalogShell::InstallAddons() {
     addonsBusy_ = true;
     SetStatus(L"Looking for new updates and DLC...");
     const std::string system = NarrowUtf8(DataRoot());
-    create_task([this, root, system]() {
+    std::vector<std::wstring> gameDirs;
+    for (const auto& game : games_) {
+        if (game.directory != nullptr) gameDirs.push_back(game.directory->Path->Data());
+        else if (game.file != nullptr) gameDirs.push_back(std::filesystem::path(game.file->Path->Data()).parent_path().wstring());
+    }
+    create_task([this, root, system, gameDirs]() {
         int installed = 0, failed = 0;
-        std::wstring summary = InstallPendingAddons(libretro_, system, root, std::wstring(), installed, failed);
+        std::wstring summary = InstallPendingAddons(libretro_, system, root, std::wstring(), installed, failed, gameDirs);
         if (installed == 0 && failed == 0) summary = L"No new updates or DLC in the folder.";
         return summary;
     }).then([this](task<std::wstring> done) {
@@ -3093,7 +3288,7 @@ void CatalogShell::RefreshFirmwareStatus() {
         const bool installed = HasFiles(root + L"\\" + part.partition);
         auto version = Pref(ref new Platform::String(part.versionKey), L"");
         firmwareStatus_[i]->Text = installed
-            ? (version->IsEmpty() ? ref new Platform::String(L"Installed") : L"Installed  ·  " + version)
+            ? (version->IsEmpty() ? ref new Platform::String(L"Installed") : L"Installed  \u00B7  " + version)
             : ref new Platform::String(L"Not installed");
         const Color color = installed ? RgbColor(111, 227, 154)
             : part.required ? Accent() : RgbColor(240, 199, 94);
@@ -4048,7 +4243,8 @@ void CatalogShell::StartCore(Platform::String^ contentPath) {
         // Its updates and DLC dropped in the updates folder since it last ran
         if (!addonsRoot.empty() && !titleId.empty()) {
             int installed = 0, failed = 0;
-            InstallPendingAddons(libretro_, system, addonsRoot, titleId, installed, failed);
+            InstallPendingAddons(libretro_, system, addonsRoot, titleId, installed, failed,
+                std::vector<std::wstring>{ WidenUtf8(content) });
         }
         {
             std::string build = "0.1.?";
@@ -4216,6 +4412,7 @@ void CatalogShell::ChooseCustomArtwork(size_t index) {
                     try {
                         auto file = copied.get();
                         PutPref(L"art.file." + key, file->Name);
+                        bitmapCache_.clear();
                         SetStatus(L"Custom artwork saved for " + file->Name);
                         Render();
                     } catch (Platform::Exception^ e) {
@@ -4497,12 +4694,22 @@ void CatalogShell::SaveCueSettings() {
 void CatalogShell::PlayCue(unsigned kind) {
     if (!bootstrapped_ || !uiSounds_ || uiSoundVolume_ <= 0) return;
     kind %= vita3k_uwp::kInterfaceCueCount;
+    if (cueAudio_.Ready()) {
+        cueAudio_.Play(kind, static_cast<float>(uiSoundVolume_));
+        return;
+    }
     if (!cueReady_[kind] || cuePlayers_[kind] == nullptr) return;
     // Dedicated player per cue means focus and confirm don't cut one another off.
     cuePlayers_[kind]->Stop();
     cuePlayers_[kind]->Play();
 }
 void CatalogShell::PrepareCues() {
+    {
+        std::vector<std::vector<std::uint8_t>> wavs;
+        for (unsigned i = 0; i < vita3k_uwp::kInterfaceCueCount; ++i) wavs.push_back(vita3k_uwp::GenerateInterfaceCue(i));
+        if (cueAudio_.Start(wavs, 32000)) return;
+        libretro_.LogLine("Interface sounds: XAudio2 unavailable, using media elements");
+    }
     // Small UI sounds also use durable file-backed sources. MediaOpened is
     // the readiness gate; a generated byte buffer alone is not proof of audio.
     create_task(ApplicationData::Current->LocalFolder->CreateFolderAsync(
@@ -4826,30 +5033,49 @@ void CatalogShell::ArtPickerLoad(size_t index, unsigned gameId, Platform::String
 
 
 // ── The PS3-style home (XMB) ────────────────────────────────────────────────
-namespace {
-// The PS3's background takes a colour for each month.
-Color XmbMonthColor(int month) {
-    static const unsigned colors[12][3] = {
-        { 160, 164, 172 }, // January: silver
-        { 190, 152, 46 },  // February: gold
-        { 118, 162, 44 },  // March: lime
-        { 200, 104, 150 }, // April: pink
-        { 40, 136, 66 },   // May: green
-        { 146, 78, 164 },  // June: purple
-        { 32, 146, 156 },  // July: teal
-        { 40, 106, 200 },  // August: blue
-        { 84, 60, 164 },   // September: violet
-        { 180, 106, 40 },  // October: amber
-        { 122, 84, 54 },   // November: brown
-        { 172, 38, 44 },   // December: red
+
+void CatalogShell::ApplyXmbSky() {
+    if (xmb_ == nullptr) return;
+    const XmbTheme& theme = kXmbThemes[(xmbTheme_ >= 0 && xmbTheme_ < kXmbThemeCount) ? xmbTheme_ : 0];
+    auto sky = ref new LinearGradientBrush();
+    sky->StartPoint = Point(0.5, 0);
+    sky->EndPoint = Point(0.5, 1);
+    auto stop = [&sky](double offset, Color color) {
+        auto s = ref new GradientStop();
+        s->Offset = offset;
+        s->Color = color;
+        sky->GradientStops->Append(s);
     };
-    const auto& c = colors[(month >= 1 && month <= 12) ? month - 1 : 0];
-    return RgbColor(c[0], c[1], c[2]);
+    if (theme.monthly) {
+        // The month's colour, darker at night, as on the PS3.
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+        const double light = (now.wHour >= 7 && now.wHour < 18) ? 1.0 : (now.wHour >= 5 && now.wHour < 21) ? 0.82 : 0.64;
+        const Color base = XmbMonthColor(now.wMonth);
+        stop(0.0, Shade(base, 0.34 * light));
+        stop(0.55, Shade(base, 0.78 * light));
+        stop(1.0, Shade(base, 0.42 * light));
+    } else {
+        const Color top = RgbColor(theme.top[0], theme.top[1], theme.top[2]);
+        const Color bottom = RgbColor(theme.bottom[0], theme.bottom[1], theme.bottom[2]);
+        stop(0.0, top);
+        stop(0.58, bottom);
+        stop(1.0, Shade(bottom, 0.5));
+    }
+    xmb_->Background = sky;
 }
-Color Shade(Color c, double f) {
-    auto ch = [f](unsigned char v) { return static_cast<unsigned>(std::min(255.0, std::max(0.0, v * f))); };
-    return RgbColor(ch(c.R), ch(c.G), ch(c.B));
-}
+
+void CatalogShell::SaveXmbTheme(int theme) {
+    xmbTheme_ = ((theme % kXmbThemeCount) + kXmbThemeCount) % kXmbThemeCount;
+    PutPref(L"xmb.theme", StringOf(std::to_wstring(xmbTheme_)));
+    PlayCue(5);
+    if (xmb_ != nullptr && xmb_->Visibility == Windows::UI::Xaml::Visibility::Visible) {
+        ApplyXmbSky();
+        LayoutXmb(0, 0);
+    } else if (page_ == 2) {
+        Render();
+    }
+    SetStatus(ref new Platform::String((std::wstring(L"XMB colour: ") + kXmbThemes[xmbTheme_].name + L".").c_str()));
 }
 
 void CatalogShell::SaveLayout(bool xmb) {
@@ -4871,22 +5097,24 @@ std::vector<XmbCategory> CatalogShell::XmbCategories() {
     {
         XmbCategory c;
         c.name = L"Settings";
-        c.glyph = L"";
+        c.glyph = L"\uE713";
         auto settings = [this]() { ShowPage(2); };
-        c.items.push_back(XmbEntry{ L"Theme Settings", L"Colours, music and the home screen", L"", -1, settings, nullptr });
-        c.items.push_back(XmbEntry{ L"Emulation Settings", L"Renderer, resolution, shaders and the CPU", L"", -1, settings, nullptr });
-        c.items.push_back(XmbEntry{ L"System Software", L"The PS Vita firmware Vita3K runs on", L"", -1, settings, nullptr });
-        c.items.push_back(XmbEntry{ L"Storage", L"Where games, saves and Vita3K's data live", L"", -1, settings, nullptr });
-        c.items.push_back(XmbEntry{ L"Cinematic Home", L"Go back to the cinematic home screen", L"", -1, [this]() { SaveLayout(false); }, nullptr });
+        c.items.push_back(XmbEntry{ std::wstring(L"Theme: ") + kXmbThemes[xmbTheme_ % kXmbThemeCount].name,
+            L"Press A for the next colour", L"\uE790", -1, [this]() { SaveXmbTheme(xmbTheme_ + 1); }, nullptr });
+        c.items.push_back(XmbEntry{ L"App Settings", L"Themes, music, sounds and the home screen", L"\uE771", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"Emulation Settings", L"Renderer, resolution, shaders and the CPU", L"\uE7FC", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"System Software", L"The PS Vita firmware Vita3K runs on", L"\uE896", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"Storage", L"Where games, saves and Vita3K's data live", L"\uEDA2", -1, settings, nullptr });
+        c.items.push_back(XmbEntry{ L"Cinematic Home", L"Go back to the cinematic home screen", L"\uE80F", -1, [this]() { SaveLayout(false); }, nullptr });
         cats.push_back(std::move(c));
     }
     {
         XmbCategory c;
         c.name = L"Music";
-        c.glyph = L"";
+        c.glyph = L"\uE8D6";
         const wchar_t* names[] = { L"No Music", L"Afterglow", L"Neon Arcade", L"Stardust", L"Tidal" };
         for (int i = 0; i < 5; ++i)
-            c.items.push_back(XmbEntry{ names[i], track_ == i ? L"Now playing" : L"Home menu music", L"", -1,
+            c.items.push_back(XmbEntry{ names[i], track_ == i ? L"Now playing" : L"Home menu music", L"\uE8D6", -1,
                 [this, i]() { SetMusic(i); Render(); }, nullptr });
         c.initial = track_ >= 0 && track_ < 5 ? track_ : 0;
         cats.push_back(std::move(c));
@@ -4894,31 +5122,31 @@ std::vector<XmbCategory> CatalogShell::XmbCategories() {
     {
         XmbCategory c;
         c.name = L"Game";
-        c.glyph = L"";
+        c.glyph = L"\uE7FC";
         const auto last = Pref(L"lastPlayed", L"");
         for (size_t i = 0; i < games_.size(); ++i) {
             const auto& game = games_[i];
-            std::wstring subtitle = std::wstring(L"PlayStation®Vita  •  ") + (game.sourceType ? game.sourceType->Data() : L"");
+            std::wstring subtitle = std::wstring(L"PlayStation\u00AEVita  \u2022  ") + (game.sourceType ? game.sourceType->Data() : L"");
             if (!last->IsEmpty() && game.name == last) {
-                subtitle = L"Last played  •  " + subtitle;
+                subtitle = L"Last played  \u2022  " + subtitle;
                 c.initial = static_cast<int>(c.items.size());
             }
-            c.items.push_back(XmbEntry{ game.name ? game.name->Data() : L"Game", subtitle, L"", static_cast<int>(i),
+            c.items.push_back(XmbEntry{ game.name ? game.name->Data() : L"Game", subtitle, L"\uE7FC", static_cast<int>(i),
                 [this, i]() { AttemptBoot(i); },
                 [this, i]() { selectedGame_ = static_cast<int>(i); ShowPage(4); } });
         }
-        c.items.push_back(XmbEntry{ L"Add a Game", L"A VPK, ZIP, PKG or game folder", L"", -1, [this]() { ChooseGameFile(); }, nullptr });
-        c.items.push_back(XmbEntry{ L"Add a Folder of Games", L"Every game in a folder", L"", -1, [this]() { ChooseGameFolder(); }, nullptr });
-        c.items.push_back(XmbEntry{ L"Game Library", L"All games, with search", L"", -1, [this]() { ShowPage(1); }, nullptr });
+        c.items.push_back(XmbEntry{ L"Add a Game", L"A VPK, ZIP, PKG or game folder", L"\uE710", -1, [this]() { ChooseGameFile(); }, nullptr });
+        c.items.push_back(XmbEntry{ L"Add a Folder of Games", L"Every game in a folder", L"\uE8F4", -1, [this]() { ChooseGameFolder(); }, nullptr });
+        c.items.push_back(XmbEntry{ L"Game Library", L"All games, with search", L"\uE8F1", -1, [this]() { ShowPage(1); }, nullptr });
         cats.push_back(std::move(c));
     }
     {
         XmbCategory c;
         c.name = L"Network";
-        c.glyph = L"";
-        c.items.push_back(XmbEntry{ L"Find Covers and Backgrounds", L"SteamGridDB, for every game without art", L"", -1,
+        c.glyph = L"\uE774";
+        c.items.push_back(XmbEntry{ L"Find Covers and Backgrounds", L"SteamGridDB, for every game without art", L"\uEB9F", -1,
             [this]() { FetchMissingArtwork(0); }, nullptr });
-        c.items.push_back(XmbEntry{ L"Install Updates and DLC", L"New ones in your updates folder", L"", -1,
+        c.items.push_back(XmbEntry{ L"Install Updates and DLC", L"New ones in your updates folder", L"\uE896", -1,
             [this]() { InstallAddons(); }, nullptr });
         cats.push_back(std::move(c));
     }
@@ -4926,8 +5154,8 @@ std::vector<XmbCategory> CatalogShell::XmbCategories() {
     {
         XmbCategory c;
         c.name = L"Tools";
-        c.glyph = L"";
-        c.items.push_back(XmbEntry{ L"Diagnostics", L"Developer checks", L"", -1, [this]() { ShowPage(3); }, nullptr });
+        c.glyph = L"\uE90F";
+        c.items.push_back(XmbEntry{ L"Diagnostics", L"Developer checks", L"\uE90F", -1, [this]() { ShowPage(3); }, nullptr });
         cats.push_back(std::move(c));
     }
 #endif
@@ -4984,22 +5212,7 @@ void CatalogShell::ShowXmb() {
         xmbTimer_->Interval = Millis(33);
         xmbTimer_->Tick += ref new EventHandler<Platform::Object^>([this](Platform::Object^, Platform::Object^) { XmbWaves(); });
     }
-    // The month's colour, darker at night, as on the PS3.
-    SYSTEMTIME now{};
-    GetLocalTime(&now);
-    const double light = (now.wHour >= 7 && now.wHour < 18) ? 1.0 : (now.wHour >= 5 && now.wHour < 21) ? 0.82 : 0.64;
-    const Color base = XmbMonthColor(now.wMonth);
-    auto sky = ref new LinearGradientBrush();
-    sky->StartPoint = Point(0.5, 0);
-    sky->EndPoint = Point(0.5, 1);
-    const double shades[][2] = { { 0.0, 0.34 }, { 0.55, 0.78 }, { 1.0, 0.42 } };
-    for (const auto& s : shades) {
-        auto stop = ref new GradientStop();
-        stop->Offset = s[0];
-        stop->Color = Shade(base, s[1] * light);
-        sky->GradientStops->Append(stop);
-    }
-    xmb_->Background = sky;
+    ApplyXmbSky();
     xmb_->Visibility = Windows::UI::Xaml::Visibility::Visible;
     xmbTimer_->Start();
     UpdateClock();
@@ -5225,7 +5438,7 @@ void CatalogShell::LayoutXmb(int dx, int dy) {
             picture->Source = nullptr;
         } else {
             try {
-                picture->Source = ref new BitmapImage(ref new Uri(uri));
+                picture->Source = CachedBitmap(uri, 1280);
                 auto fade = ref new DoubleAnimation();
                 fade->From = 0.0;
                 fade->To = 0.55;

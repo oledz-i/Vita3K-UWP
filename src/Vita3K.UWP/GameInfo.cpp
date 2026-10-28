@@ -78,7 +78,7 @@ std::wstring PrettyDate(const std::wstring& iso) {
 std::vector<std::wstring> SearchNames(const std::wstring& title) {
     std::wstring clean;
     for (wchar_t c : title) {
-        if (c == L'™' || c == L'®' || c == L'©') continue;
+        if (c == L'\u2122' || c == L'\u00AE' || c == L'\u00A9') continue;
         clean.push_back(c == L'\n' || c == L'\r' || c == L'\t' ? L' ' : c);
     }
     std::wstring squeezed;
@@ -89,7 +89,7 @@ std::vector<std::wstring> SearchNames(const std::wstring& title) {
     while (!squeezed.empty() && squeezed.back() == L' ') squeezed.pop_back();
     std::vector<std::wstring> names;
     if (!squeezed.empty()) names.push_back(squeezed);
-    for (const wchar_t* cut : { L":", L" - ", L" – " }) {
+    for (const wchar_t* cut : { L":", L" - ", L" \u2013 " }) {
         const auto at = squeezed.find(cut);
         if (at != std::wstring::npos && at > 2) {
             auto head = squeezed.substr(0, at);
@@ -264,7 +264,7 @@ void SaveGameInfo(const std::wstring& cacheKey, const GameInfo& info) {
     try {
         auto o = ref new JsonObject();
         auto put = [&](const wchar_t* key, std::wstring value, size_t most) {
-            if (value.size() > most) value = value.substr(0, most - 1) + L"…";
+            if (value.size() > most) value = value.substr(0, most - 1) + L"\u2026";
             o->SetNamedValue(ref new Platform::String(key), JsonValue::CreateStringValue(ref new Platform::String(value.c_str())));
         };
         // A setting holds at most 8 KB: the description is the part kept short.

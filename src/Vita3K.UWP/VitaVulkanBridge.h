@@ -75,6 +75,7 @@ private:
     uint32_t index_ = 0;
     uint64_t serial_ = 0;
     uint64_t shownSerial_ = 0;
+    uint32_t backlogTicks_ = 0;
     std::string readbackInfo_;
     bool gpuStalled_ = false;
     void ReleaseReadback();

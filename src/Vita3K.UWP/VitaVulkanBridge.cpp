@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <algorithm>
 #include "VitaVulkanBridge.h"
 #include <stdexcept>
 #include <cstring>
@@ -141,8 +142,11 @@ void VitaVulkanBridge::Wait(void* p) {
     auto& self = *static_cast<VitaVulkanBridge*>(p);
     if (!self.device_) return;
     std::string error;
-    self.WaitSlot(self.slots_[self.index_], error);
-    self.DeliverReady();
+    // Not shown yet and about to be overwritten: it goes out now (rare: only
+    // when the GPU fell three frames behind).
+    Slot& slot = self.slots_[self.index_];
+    self.WaitSlot(slot, error);
+    if (slot.ready && slot.serial > self.shownSerial_) self.DeliverReady();
 }
 bool VitaVulkanBridge::WaitSlot(Slot& slot, std::string& error) {
     if (!slot.pending) return !gpuStalled_;
@@ -163,25 +167,50 @@ bool VitaVulkanBridge::WaitSlot(Slot& slot, std::string& error) {
     return true;
 }
 void VitaVulkanBridge::DeliverReady() {
+    // One frame a tick, in the order they were made, a tick behind. Showing
+    // whichever copy had finished most recently (as before) skipped a frame
+    // whenever the GPU was a little late with one, then showed nothing new
+    // the tick after: a 30 fps game (two ticks a frame) came out as 1-3
+    // instead of 2-2, the judder seen in Ultra Despair Girls' cutscenes.
     if (!device_ || !sink) return;
     auto status = DeviceProc<PFN_vkGetFenceStatus>("vkGetFenceStatus");
-    Slot* newest = nullptr;
+    Slot* order[kSlots] = {};
+    uint32_t unshown = 0;
     for (auto& slot : slots_) {
         if (slot.pending && status(device_, slot.fence) == VK_SUCCESS) {
             slot.pending = false;
             slot.ready = true;
         }
-        if (slot.ready && slot.serial > shownSerial_ && (!newest || slot.serial > newest->serial))
-            newest = &slot;
+        if ((slot.pending || slot.ready) && slot.serial > shownSerial_) order[unshown++] = &slot;
     }
-    if (!newest) return;
-    if (!newest->coherent) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory = newest->memory; range.size = VK_WHOLE_SIZE;
+    if (unshown == 0) return;
+    std::sort(order, order + unshown, [](const Slot* x, const Slot* y) { return x->serial < y->serial; });
+    Slot* pick = order[0];
+    if (pick->pending) {
+        // Usually it is a millisecond or two from done: worth a short wait to
+        // keep the cadence, never a long one.
+        const VkResult waited = DeviceProc<PFN_vkWaitForFences>("vkWaitForFences")(device_, 1, &pick->fence, VK_TRUE, 4000000ull);
+        if (waited != VK_SUCCESS) { backlogTicks_ = 0; return; }
+        pick->pending = false;
+        pick->ready = true;
+    }
+    // Two or more finished and waiting for a while: a hitch left the picture
+    // a tick further behind than it needs to be. Catch up once.
+    uint32_t finished = 0;
+    for (uint32_t i = 0; i < unshown; ++i)
+        if (order[i]->ready || (order[i]->pending && status(device_, order[i]->fence) == VK_SUCCESS)) ++finished;
+    backlogTicks_ = finished >= 2 ? backlogTicks_ + 1 : 0;
+    if (backlogTicks_ > 30 && unshown >= 2) {
+        Slot* next = order[1];
+        if (next->pending && status(device_, next->fence) == VK_SUCCESS) { next->pending = false; next->ready = true; }
+        if (next->ready) { pick = next; backlogTicks_ = 0; }
+    }
+    if (!pick->coherent) {
+        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory = pick->memory; range.size = VK_WHOLE_SIZE;
         DeviceProc<PFN_vkInvalidateMappedMemoryRanges>("vkInvalidateMappedMemoryRanges")(device_, 1, &range);
     }
-    sink(static_cast<const uint8_t*>(newest->mapped), newest->width, newest->height, newest->rgba);
-    shownSerial_ = newest->serial;
-    // Older finished frames are not shown: the picture moves on.
+    sink(static_cast<const uint8_t*>(pick->mapped), pick->width, pick->height, pick->rgba);
+    shownSerial_ = pick->serial;
     for (auto& slot : slots_)
         if (slot.ready && slot.serial <= shownSerial_) slot.ready = false;
 }
