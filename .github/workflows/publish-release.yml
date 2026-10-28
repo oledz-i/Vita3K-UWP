@@ -55,7 +55,7 @@ jobs:
           main=$(find package -type f -name '*.appx' ! -path '*Dependencies*' | head -n 1)
           [ -n "$main" ] || { echo "No Vita3K .appx in the run's package"; exit 1; }
           cp "$main" "release/$(basename "$main")"
-          deps=$(find package -type f -path '*Dependencies*' \( -name '*.appx' -o -name '*.msix' \) | grep -i 'x64' || true)
+          deps=$(find package -type f -path '*Dependencies*' \( -name '*x64*.appx' -o -name '*x64*.msix' \) || true)
           [ -n "$deps" ] || { echo "No x64 dependency in the run's package"; exit 1; }
           for d in $deps; do cp "$d" "release/$(basename "$d")"; done
           ls -la release
@@ -64,6 +64,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          if gh release view "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # The release exists already: make its files match release/ exactly.
+            gh release upload "${{ inputs.tag }}" release/* --clobber --repo "$GITHUB_REPOSITORY"
+            for a in $(gh release view "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); do
+              [ -f "release/$a" ] || gh release delete-asset "${{ inputs.tag }}" "$a" -y --repo "$GITHUB_REPOSITORY"
+            done
+            gh release edit "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --title "${{ inputs.title }}" --notes-file "${{ inputs.notes }}"
+            exit 0
+          fi
           flags=()
           if [ "${{ inputs.prerelease }}" = "true" ]; then flags+=(--prerelease); fi
           gh release create "${{ inputs.tag }}" release/* \
