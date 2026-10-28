@@ -8,7 +8,7 @@
 #include <vector>
 #include <string>
 
-// One synchronous offscreen image at a time. No Win32 window or Vulkan WSI.
+// Offscreen images read back to the CPU in a ring. No Win32 window or Vulkan WSI.
 class VitaVulkanBridge {
 public:
     using FrameSink = std::function<void(const uint8_t*, unsigned, unsigned, bool)>;
@@ -50,19 +50,41 @@ private:
     std::vector<VkSemaphore> waits_;
     std::vector<VkCommandBuffer> pending_;
     VkSemaphore signal_ = VK_NULL_HANDLE;
-    // Readback buffer and fence kept between frames; rebuilt when the frame grows.
-    VkBuffer readback_ = VK_NULL_HANDLE;
-    VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
-    VkDeviceSize readbackSize_ = 0;
-    bool readbackCoherent_ = true;
+    // Frames are read back through a ring of slots, one per sync index: a
+    // frame's copy is submitted with its own fence and handed to the sink when
+    // that fence has signalled, at the latest when its slot comes round again.
+    // The emulation thread used to wait for the whole GPU queue to drain twice
+    // a frame (vkQueueWaitIdle in wait_sync_index, then the readback fence),
+    // which tied the game's vblank to the GPU's speed.
+    static constexpr uint32_t kSlots = 3;
+    struct Slot {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize size = 0;
+        void* mapped = nullptr;
+        bool coherent = true;
+        VkFence fence = VK_NULL_HANDLE;
+        VkCommandBuffer command = VK_NULL_HANDLE;
+        bool pending = false;   // submitted, not yet known to be done
+        bool ready = false;     // done, not yet handed to the sink
+        unsigned width = 0, height = 0;
+        bool rgba = true;
+        uint64_t serial = 0;
+    };
+    Slot slots_[kSlots];
+    uint32_t index_ = 0;
+    uint64_t serial_ = 0;
+    uint64_t shownSerial_ = 0;
     std::string readbackInfo_;
-    void* readbackMapped_ = nullptr;
-    VkFence fence_ = VK_NULL_HANDLE;
     bool gpuStalled_ = false;
     void ReleaseReadback();
+    // Waits (bounded) for one slot's copy; false when the GPU stopped.
+    bool WaitSlot(Slot& slot, std::string& error);
+    // Hands the newest finished frame to the sink; never waits.
+    void DeliverReady();
     static void SetImage(void*, const retro_vulkan_image*, uint32_t, const VkSemaphore*, uint32_t);
-    static uint32_t SyncIndex(void*) { return 0; }
-    static uint32_t SyncMask(void*) { return 1; }
+    static uint32_t SyncIndex(void* p) { return static_cast<VitaVulkanBridge*>(p)->index_; }
+    static uint32_t SyncMask(void*) { return (1u << kSlots) - 1u; }
     static void Commands(void*, uint32_t, const VkCommandBuffer*);
     static void Wait(void*);
     static void Lock(void* p) { static_cast<VitaVulkanBridge*>(p)->queueMutex_.lock(); }

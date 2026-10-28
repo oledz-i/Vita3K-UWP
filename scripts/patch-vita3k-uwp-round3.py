@@ -1672,3 +1672,187 @@ replace(lr, '''        // A frame no surface was rendered into (the game wrote i
         // A frame no surface was rendered into (the game wrote it with the
         // CPU, as some do for their first screen): uploaded from memory into a''')
 print('OpenGL frames say what they were shown from.')
+
+# ── Vulkan on Direct3D 12: no SCALED vertex formats ─────────────────────────
+# Dozen says it can read R8G8B8A8_USCALED vertices (it turns that one into
+# UINT and converts in the shader), so Vita3K used SCALED formats for every
+# attribute; but for the 1-, 2- and 3-component ones (R16G16_SSCALED, ...)
+# Dozen's input layout got DXGI_FORMAT_UNKNOWN and the Xbox refused the whole
+# pipeline (E_INVALIDARG): Persona 4 Golden ran behind a black screen on
+# Vulkan. Vita3K's path for GPUs without SCALED vertex formats reads them as
+# integers and converts in the shader; on Direct3D 12 it is taken always. The
+# shader cache's feature mask holds this, so old shaders are rebuilt.
+pipeline_cache = 'vita3k/renderer/src/vulkan/pipeline_cache.cpp'
+replace(pipeline_cache, '''        support_scaled_vertex_attribute = static_cast<bool>(scaled_property.bufferFeatures & vk::FormatFeatureFlagBits::eVertexBuffer);
+''', '''        support_scaled_vertex_attribute = static_cast<bool>(scaled_property.bufferFeatures & vk::FormatFeatureFlagBits::eVertexBuffer);
+#ifdef VITA3K_UWP
+        if (support_scaled_vertex_attribute)
+            LOG_INFO("Vulkan on Direct3D 12: SCALED vertex attributes are read as integers and converted in the shader");
+        support_scaled_vertex_attribute = false;
+#endif
+''')
+print('Vulkan: SCALED vertex attributes converted in the shader (Dozen refused pipelines with them).')
+
+# ── Vulkan: pipelines compiled in the background, known ones too ────────────
+# With background compilation on, Vita3K still compiled a pipeline it knew
+# from an earlier session (its shaders cached) on the render thread. On the
+# Xbox there is no driver cache across sessions, so that compile took the
+# console's compiler 30-750 ms each time, and every scene's first frames
+# froze (cutscenes and new effects hitched, sound with them). Those go to the
+# worker threads as well.
+replace(pipeline_cache, '''    const bool compile_pipeline_async = !maskupdate && !context.shader_hints.masked_framebuffer_fetch && !already_in_cache && consider_for_async && use_async_compilation;''', '''#ifdef VITA3K_UWP
+    const bool compile_pipeline_async = !maskupdate && !context.shader_hints.masked_framebuffer_fetch && consider_for_async && use_async_compilation;
+#else
+    const bool compile_pipeline_async = !maskupdate && !context.shader_hints.masked_framebuffer_fetch && !already_in_cache && consider_for_async && use_async_compilation;
+#endif''')
+print('Vulkan: known pipelines compile in the background too.')
+
+# ── System dialogs: what the game calls while one is open ───────────────────
+# Danganronpa and Gravity Rush stopped at their save screens: the slot was
+# chosen (the dialog's sub-status went to finished) and then the game never
+# called anything that moved the dialog on, and holding Select to end it did
+# not bring the game back either. While a dialog is open, and for 30 s after,
+# each guest thread's first call of each function is logged, and each
+# thread's latest call is kept; holding Select over a dialog writes those out,
+# which says where each game thread is waiting.
+module_parent = 'vita3k/modules/module_parent.cpp'
+replace(module_parent, '''#include <unordered_set>
+''', '''#include <unordered_set>
+
+#ifdef VITA3K_UWP
+#include <dialog/state.h>
+
+#include <atomic>
+#include <chrono>
+#include <map>
+#include <mutex>
+#include <set>
+
+namespace {
+std::mutex uwp_trace_mutex;
+std::set<std::pair<SceUID, uint32_t>> uwp_trace_seen;
+std::map<SceUID, std::pair<uint32_t, int64_t>> uwp_trace_last;
+int uwp_trace_logged = 0;
+std::atomic<int64_t> uwp_trace_until{ 0 };
+
+int64_t uwp_trace_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void uwp_dialog_trace(EmuEnvState &emuenv, uint32_t nid, SceUID thread_id) {
+    const bool open = emuenv.common_dialog.type != NO_DIALOG;
+    const int64_t now = uwp_trace_now_ms();
+    if (open)
+        uwp_trace_until.store(now + 30000, std::memory_order_relaxed);
+    else if (now > uwp_trace_until.load(std::memory_order_relaxed))
+        return;
+    std::lock_guard<std::mutex> lock(uwp_trace_mutex);
+    uwp_trace_last[thread_id] = { nid, now };
+    if (uwp_trace_logged < 400 && uwp_trace_seen.insert({ thread_id, nid }).second) {
+        uwp_trace_logged++;
+        LOG_INFO("Dialog trace: thread {} called {}{}", thread_id, import_name(nid), open ? "" : " (dialog closed)");
+    }
+}
+} // namespace
+
+// Each guest thread's latest call, with how long ago it was: holding Select
+// over a stuck dialog writes this, which tells where the game waits.
+void uwp_dialog_trace_dump(EmuEnvState &emuenv) {
+    std::map<SceUID, std::pair<uint32_t, int64_t>> last;
+    {
+        std::lock_guard<std::mutex> lock(uwp_trace_mutex);
+        last = uwp_trace_last;
+    }
+    const int64_t now = uwp_trace_now_ms();
+    LOG_WARN("Dialog trace: {} guest thread(s) made calls while the dialog was open", last.size());
+    for (const auto &[thread_id, call] : last) {
+        std::string name;
+        if (const auto thread = emuenv.kernel.get_thread(thread_id))
+            name = thread->name;
+        LOG_WARN("Dialog trace: thread {} ({}) last called {} {} ms ago", thread_id, name, import_name(call.first), now - call.second);
+    }
+}
+#endif
+''')
+replace(module_parent, '''void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread_id) {
+    // HLE - call our C++ function''', '''void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread_id) {
+#ifdef VITA3K_UWP
+    uwp_dialog_trace(emuenv, nid, thread_id);
+#endif
+    // HLE - call our C++ function''')
+replace(lr, '''            if (select_frames == 90) {
+                LOG_WARN("System dialog (type {}) cancelled: Select held", static_cast<int>(dialog.type));''', '''            if (select_frames == 90) {
+                LOG_WARN("System dialog (type {}) cancelled: Select held", static_cast<int>(dialog.type));
+                uwp_dialog_trace_dump(emuenv);''')
+replace(lr, '''RETRO_API void retro_unload_game(void) {''', '''#ifdef VITA3K_UWP
+void uwp_dialog_trace_dump(EmuEnvState &emuenv);
+#endif
+
+RETRO_API void retro_unload_game(void) {''')
+print('System dialogs: the guest calls made while one is open are logged.')
+
+# ── Vulkan: a pipeline that cannot be made skips its draws ──────────────────
+# Background compilation was off on the Xbox because a pipeline that failed
+# (Dozen returns an error for one the console refuses) threw out of the
+# worker thread, leaving it "compiling" for good: the game ran behind a black
+# screen. A failed pipeline is now remembered as failed and its draws skipped,
+# from the workers and the render thread alike, and never destroyed as if it
+# were a real one.
+replace(pipeline_cache, '''        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        *request->pipeline = pipeline;''', '''#ifdef VITA3K_UWP
+        vk::Pipeline pipeline;
+        try {
+            pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        } catch (const std::exception &e) {
+            static std::atomic<int> failures{ 0 };
+            if (failures.fetch_add(1) < 16)
+                LOG_ERROR("Pipeline could not be made, its draws are skipped: {}", e.what());
+            pipeline = nullptr;
+        }
+        if (!pipeline)
+            pipeline = std::bit_cast<vk::Pipeline, uint64_t>(~1ULL);
+#else
+        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+#endif
+        *request->pipeline = pipeline;''')
+replace(pipeline_cache, '''            if (it->second == pipeline_compiling)
+                // pipeline is still compiling
+                return nullptr;''', '''            if (it->second == pipeline_compiling)
+                // pipeline is still compiling
+                return nullptr;
+#ifdef VITA3K_UWP
+            else if (it->second == std::bit_cast<vk::Pipeline, uint64_t>(~1ULL))
+                // it could not be made: its draws are skipped
+                return nullptr;
+#endif''')
+replace(pipeline_cache, '''        // can't wait, compile it right now
+        vk::Pipeline result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);''', '''        // can't wait, compile it right now
+#ifdef VITA3K_UWP
+        vk::Pipeline result;
+        try {
+            result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
+        } catch (const std::exception &e) {
+            static std::atomic<int> failures{ 0 };
+            if (failures.fetch_add(1) < 16)
+                LOG_ERROR("Pipeline could not be made, its draws are skipped: {}", e.what());
+            result = nullptr;
+        }
+        if (!result) {
+            it->second = std::bit_cast<vk::Pipeline, uint64_t>(~1ULL);
+            return nullptr;
+        }
+#else
+        vk::Pipeline result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
+#endif''')
+replace(pipeline_cache, '''    for (auto &[hash, pipeline] : pipelines)
+        state.device.destroy(pipeline);
+    pipelines.clear();''', '''    for (auto &[hash, pipeline] : pipelines) {
+#ifdef VITA3K_UWP
+        // a failed one or one still compiling is no pipeline at all
+        if (!pipeline || pipeline == std::bit_cast<vk::Pipeline, uint64_t>(~1ULL) || pipeline == std::bit_cast<vk::Pipeline, uint64_t>(~0ULL))
+            continue;
+#endif
+        state.device.destroy(pipeline);
+    }
+    pipelines.clear();''')
+print('Vulkan: a pipeline that cannot be made skips its draws instead of stopping a compile thread.')

@@ -586,6 +586,14 @@ CatalogShell::CatalogShell() {
             else PlayBundledMusic(track_);
         }
         ScanGames();
+        // Restarted to start a game on a fresh emulator (RestartInto)
+        auto pending = Pref(L"pendingBoot", L"");
+        if (pending->Length()) {
+            PutPref(L"pendingBoot", L"");
+            booting_ = true;
+            SetStatus(L"Starting " + Pref(L"lastPlayed", L"your game") + L"...");
+            StartCore(pending);
+        }
     });
 }
 void CatalogShell::BuildNavigation() {
@@ -3769,17 +3777,48 @@ static bool WriteBmp(const std::wstring& path, const uint8_t* pixels, unsigned w
     return ok;
 }
 
+// A second game in one app session crashed in what the first left behind
+// (Minecraft, then Terraria: an access violation inside Dozen at the next
+// game's first frames). The app restarts itself and starts the game the
+// player chose, on a fresh emulator; the console allows a foreground app
+// to do this. If it refuses, the game starts in this session as before.
+void CatalogShell::RestartInto(Platform::String^ contentPath) {
+    PutPref(L"pendingBoot", contentPath);
+    SetStatus(L"Restarting Vita3K so this game starts on a fresh emulator...");
+    libretro_.LogLine("Restarting the app to start the next game on a fresh emulator");
+    create_task(Windows::ApplicationModel::Core::CoreApplication::RequestRestartAsync(L"boot"))
+    .then([this,contentPath](task<Windows::ApplicationModel::Core::AppRestartFailureReason> work) {
+        auto reason = Windows::ApplicationModel::Core::AppRestartFailureReason::Other;
+        try { reason = work.get(); } catch (...) {}
+        if (reason == Windows::ApplicationModel::Core::AppRestartFailureReason::RestartPending) return;
+        PutPref(L"pendingBoot", L"");
+        libretro_.LogLine("The console did not restart the app (reason " + std::to_string(static_cast<int>(reason)) +
+            "); the game starts in this session");
+        restartRefused_ = true;
+        StartCore(contentPath);
+    }, task_continuation_context::use_current());
+}
+
 void CatalogShell::StartCore(Platform::String^ contentPath) {
+    if (libretro_.GameHasRun() && !restartRefused_) {
+        RestartInto(contentPath);
+        return;
+    }
     const std::string system = NarrowUtf8(DataRoot());
     const std::string content = Utf8Of(contentPath);
     Platform::String^ title = L"Starting your game";
+    bool titled = false;
     for (const auto& game : games_) {
         const std::wstring path = contentPath->Data();
         if ((game.directory && path == game.directory->Path->Data()) || (game.file && path == game.file->Path->Data())) {
             title = game.name;
+            titled = true;
             break;
         }
     }
+    // Started right after a restart, before the library is read: the name
+    // the player chose it by
+    if (!titled && Pref(L"lastPlayed", L"")->Length()) title = Pref(L"lastPlayed", L"");
     libretro_.StopRunning();
     renderer_.Shutdown();
     EnterGameView(title);

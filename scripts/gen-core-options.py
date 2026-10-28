@@ -32,16 +32,17 @@ xbox_notes = {
     'vita3k_memory_mapping': 'On Xbox the Vulkan layer may not support the higher methods. Keep Double Buffer unless testing.',
     'vita3k_cpu_opt': 'Off is far slower and only useful to tell a JIT problem from a game problem.',
     'vita3k_pkg_mode': 'Run without installing needs sparse-file support; the core falls back to installing when it is missing.',
-    'vita3k_async_pipeline': 'Off by default on Xbox: with it on, the Vulkan layer can leave the screen black while shaders compile.',
+    'vita3k_async_pipeline': 'On by default on Xbox: the console compiles each new shader for up to 0.7 s, which froze the game (and its sound) at every new effect. On, an object can be missing for a moment instead. Off: every new shader waits.',
 }
 # Defaults that differ from the core's on Xbox, each with its reason.
 xbox_defaults = {
-    # With it on, a draw whose pipeline is still compiling is skipped. Dozen
-    # compiles each pipeline twice over (SPIR-V to DXIL, then D3D12), and a
-    # worker that stalls leaves the pipeline "compiling" for good: the game
-    # runs, plays audio and takes input behind a black screen. Off, the draw
-    # waits for its pipeline: a stutter the first time, but a picture.
-    'vita3k_async_pipeline': 'disabled',
+    # On (the core's default, kept): Vulkan pipelines compile on worker
+    # threads. It was off because a pipeline the console refused threw out of
+    # a worker and left it "compiling" for good (a black screen); the core now
+    # remembers such a pipeline as failed and skips its draws (round 3 patch).
+    # On the Xbox each new pipeline takes the driver 30-750 ms, so with it off
+    # every new effect froze the game and its sound.
+    'vita3k_async_pipeline': 'enabled',
 }
 category_names = {'install': 'Content', 'gpu': 'Graphics', 'cpu': 'CPU and JIT'}
 label_overrides = {

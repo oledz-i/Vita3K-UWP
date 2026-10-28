@@ -163,6 +163,8 @@ private:
     void InspectLaunch(size_t index);
     void AttemptBoot(size_t index);
     void StartCore(Platform::String^ contentPath);
+    void RestartInto(Platform::String^ contentPath);
+    bool restartRefused_ = false;
     void EnterGameView(Platform::String^ title);
     void ShowLoadFailure(Platform::String^ detail);
     void ExitGameView();

@@ -32,6 +32,11 @@ public:
     bool Initialize(const std::string& systemFolder, std::wstring& detail);
     bool CoreLoaded() const { return module_ != nullptr; }
     bool Initialized() const { return initialized_; }
+    // A game was started in this app session. The core's renderer, Dozen's
+    // driver state and Vita3K's statics outlive retro_unload_game, and the
+    // next game crashed in them (Minecraft, then Terraria): another game
+    // starts in a restarted app instead.
+    bool GameHasRun() const { return gameHasRun_; }
     bool RequestedUnsupportedGraphics() const { return unsupportedVideo_; }
     bool GameLoaded() const { return gameLoaded_; }
     // Frames the game itself has finished since the core loaded (0 when the
@@ -197,10 +202,13 @@ private:
         unsigned long long errors = 0, warnings = 0, driverErrors = 0, stalls = 0, dialogs = 0, touches = 0, crashes = 0;
         unsigned lit = 0, total = 0, level = 0;
         unsigned long long usedMb = 0, limitMb = 0, peakMb = 0;
+        unsigned audioUnderruns = 0, audioDropped = 0;
         std::vector<std::string> notable;
         std::vector<std::string> minutes;
     } diag_;
     std::string buildLabel_;
+    std::atomic<unsigned> slowRuns_{0};
+    std::atomic<unsigned> longestRunTenthsMs_{0};
     void DiagnosticsObserve(const char* message);
     void DiagnosticsFrame();
     void WriteDiagnostics(const char* when);
@@ -215,6 +223,7 @@ private:
     std::string systemDir_;
     bool initialized_ = false;
     bool gameLoaded_ = false;
+    bool gameHasRun_ = false;
     unsigned long long framesExecuted_ = 0;
     mutable std::mutex logsMutex_;
     std::string latestCoreLogs_;

@@ -134,9 +134,55 @@ void VitaVulkanBridge::Commands(void* p, uint32_t n, const VkCommandBuffer* comm
     self.pending_.clear(); if (n && commands) self.pending_.assign(commands, commands + n);
 }
 void VitaVulkanBridge::Wait(void* p) {
+    // The core is about to reuse this sync index's image: only the copy made
+    // from it last time round has to be done, not the whole queue.
     auto& self = *static_cast<VitaVulkanBridge*>(p);
     std::lock_guard<std::mutex> lock(self.queueMutex_);
-    if (self.device_) self.DeviceProc<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(self.queue_);
+    if (!self.device_) return;
+    std::string error;
+    self.WaitSlot(self.slots_[self.index_], error);
+    self.DeliverReady();
+}
+bool VitaVulkanBridge::WaitSlot(Slot& slot, std::string& error) {
+    if (!slot.pending) return !gpuStalled_;
+    if (gpuStalled_) return false;
+    // Never wait forever: a hung GPU frame becomes a logged error, not a frozen app.
+    const VkResult waited = DeviceProc<PFN_vkWaitForFences>("vkWaitForFences")(device_, 1, &slot.fence, VK_TRUE, 2000000000ull);
+    if (waited == VK_TIMEOUT) {
+        gpuStalled_ = true; // its command buffer may still be in use: leave it
+        error = "GPU did not finish a frame within 2 seconds";
+        return false;
+    }
+    if (waited != VK_SUCCESS) {
+        error = "Wait for readback: VkResult " + std::to_string(waited);
+        return false;
+    }
+    slot.pending = false;
+    slot.ready = true;
+    return true;
+}
+void VitaVulkanBridge::DeliverReady() {
+    if (!device_ || !sink) return;
+    auto status = DeviceProc<PFN_vkGetFenceStatus>("vkGetFenceStatus");
+    Slot* newest = nullptr;
+    for (auto& slot : slots_) {
+        if (slot.pending && status(device_, slot.fence) == VK_SUCCESS) {
+            slot.pending = false;
+            slot.ready = true;
+        }
+        if (slot.ready && slot.serial > shownSerial_ && (!newest || slot.serial > newest->serial))
+            newest = &slot;
+    }
+    if (!newest) return;
+    if (!newest->coherent) {
+        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory = newest->memory; range.size = VK_WHOLE_SIZE;
+        DeviceProc<PFN_vkInvalidateMappedMemoryRanges>("vkInvalidateMappedMemoryRanges")(device_, 1, &range);
+    }
+    sink(static_cast<const uint8_t*>(newest->mapped), newest->width, newest->height, newest->rgba);
+    shownSerial_ = newest->serial;
+    // Older finished frames are not shown: the picture moves on.
+    for (auto& slot : slots_)
+        if (slot.ready && slot.serial <= shownSerial_) slot.ready = false;
 }
 bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& error) {
     if (!device_ || !haveImage_ || !sink) return false;
@@ -146,16 +192,24 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
     if (!rgba && format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB) { error = "Unsupported core image format"; return false; }
     std::lock_guard<std::mutex> lock(queueMutex_);
     if (gpuStalled_) { error = "GPU stopped responding earlier; restart the game"; return false; }
-    VkCommandBuffer command = VK_NULL_HANDLE;
+    Slot& slot = slots_[index_];
     bool submitted = false;
     try {
 #define FN(name) DeviceProc<PFN_##name>(#name)
+        // The core normally waited for this slot already (wait_sync_index).
+        if (slot.pending && !WaitSlot(slot, error)) {
+            waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
+            return false;
+        }
         const VkDeviceSize size = VkDeviceSize(width) * height * 4;
-        if (size > readbackSize_) {
-            ReleaseReadback();
+        if (size > slot.size) {
+            if (slot.mapped) FN(vkUnmapMemory)(device_, slot.memory);
+            if (slot.buffer) FN(vkDestroyBuffer)(device_, slot.buffer, nullptr);
+            if (slot.memory) FN(vkFreeMemory)(device_, slot.memory, nullptr);
+            slot.mapped = nullptr; slot.buffer = VK_NULL_HANDLE; slot.memory = VK_NULL_HANDLE; slot.size = 0; slot.ready = false;
             VkBufferCreateInfo bc{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; bc.size = size; bc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            Check(FN(vkCreateBuffer)(device_, &bc, nullptr, &readback_), "Create readback buffer");
-            VkMemoryRequirements requirements{}; FN(vkGetBufferMemoryRequirements)(device_, readback_, &requirements);
+            Check(FN(vkCreateBuffer)(device_, &bc, nullptr, &slot.buffer), "Create readback buffer");
+            VkMemoryRequirements requirements{}; FN(vkGetBufferMemoryRequirements)(device_, slot.buffer, &requirements);
             VkPhysicalDeviceMemoryProperties properties{};
             InstanceProc<PFN_vkGetPhysicalDeviceMemoryProperties>("vkGetPhysicalDeviceMemoryProperties")(gpu_, &properties);
             // GPU-to-CPU copies belong in cached host memory (D3D12's readback
@@ -173,25 +227,29 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
                 if (type != properties.memoryTypeCount) break;
             }
             if (type == properties.memoryTypeCount) throw std::runtime_error("No host-visible readback memory");
-            readbackCoherent_ = (properties.memoryTypes[type].propertyFlags & coherent) != 0;
+            slot.coherent = (properties.memoryTypes[type].propertyFlags & coherent) != 0;
             const auto flags = properties.memoryTypes[type].propertyFlags;
             readbackInfo_ = "readback memory type " + std::to_string(type) + " of " + std::to_string(properties.memoryTypeCount) +
                 ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? ", device-local" : "") + ((flags & cached) ? ", cached" : ", uncached") +
                 ((flags & coherent) ? ", coherent" : ", not coherent") + "; image format " + std::to_string(format) +
-                ", layout " + std::to_string(image_.image_layout);
+                ", layout " + std::to_string(image_.image_layout) + "; " + std::to_string(kSlots) + " frames in flight";
             VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize = requirements.size; allocate.memoryTypeIndex = type;
-            Check(FN(vkAllocateMemory)(device_, &allocate, nullptr, &readbackMemory_), "Allocate readback memory");
-            Check(FN(vkBindBufferMemory)(device_, readback_, readbackMemory_, 0), "Bind readback buffer");
-            Check(FN(vkMapMemory)(device_, readbackMemory_, 0, VK_WHOLE_SIZE, 0, &readbackMapped_), "Map readback");
-            readbackSize_ = size;
+            Check(FN(vkAllocateMemory)(device_, &allocate, nullptr, &slot.memory), "Allocate readback memory");
+            Check(FN(vkBindBufferMemory)(device_, slot.buffer, slot.memory, 0), "Bind readback buffer");
+            Check(FN(vkMapMemory)(device_, slot.memory, 0, VK_WHOLE_SIZE, 0, &slot.mapped), "Map readback");
+            slot.size = size;
         }
-        if (!fence_) {
+        if (!slot.fence) {
             VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-            Check(FN(vkCreateFence)(device_, &fc, nullptr, &fence_), "Create readback fence");
+            Check(FN(vkCreateFence)(device_, &fc, nullptr, &slot.fence), "Create readback fence");
         }
-        Check(FN(vkResetFences)(device_, 1, &fence_), "Reset readback fence");
-        VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; ca.commandPool = pool_; ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ca.commandBufferCount = 1;
-        Check(FN(vkAllocateCommandBuffers)(device_, &ca, &command), "Allocate readback command");
+        Check(FN(vkResetFences)(device_, 1, &slot.fence), "Reset readback fence");
+        if (!slot.command) {
+            VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; ca.commandPool = pool_; ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ca.commandBufferCount = 1;
+            Check(FN(vkAllocateCommandBuffers)(device_, &ca, &slot.command), "Allocate readback command");
+        }
+        VkCommandBuffer command = slot.command;
+        Check(FN(vkResetCommandBuffer)(command, 0), "Reset readback command");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(FN(vkBeginCommandBuffer)(command, &begin), "Begin readback");
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -203,41 +261,36 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
         barrier.subresourceRange.levelCount = 1; barrier.subresourceRange.layerCount = 1;
         FN(vkCmdPipelineBarrier)(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         VkBufferImageCopy copy{}; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, barrier.subresourceRange.baseMipLevel, barrier.subresourceRange.baseArrayLayer, 1}; copy.imageExtent = {width, height, 1};
-        FN(vkCmdCopyImageToBuffer)(command, barrier.image, barrier.newLayout, readback_, 1, &copy);
+        FN(vkCmdCopyImageToBuffer)(command, barrier.image, barrier.newLayout, slot.buffer, 1, &copy);
+        // Back to the core's layout; later work on the queue (the core's next
+        // frame drawing into this image) waits for the copy's reads here.
         auto layout = barrier.oldLayout; barrier.oldLayout = barrier.newLayout; barrier.newLayout = layout;
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-        VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER}; host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT; host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; host.buffer = readback_; host.size = VK_WHOLE_SIZE;
+        VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER}; host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT; host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; host.buffer = slot.buffer; host.size = VK_WHOLE_SIZE;
         FN(vkCmdPipelineBarrier)(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 1, &barrier);
         Check(FN(vkEndCommandBuffer)(command), "End readback");
         pending_.push_back(command);
         std::vector<VkPipelineStageFlags> stages(waits_.size(), VK_PIPELINE_STAGE_TRANSFER_BIT);
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.waitSemaphoreCount = static_cast<uint32_t>(waits_.size()); submit.pWaitSemaphores = waits_.data(); submit.pWaitDstStageMask = stages.data(); submit.commandBufferCount = static_cast<uint32_t>(pending_.size()); submit.pCommandBuffers = pending_.data();
         if (signal_) { submit.signalSemaphoreCount = 1; submit.pSignalSemaphores = &signal_; }
-        Check(FN(vkQueueSubmit)(queue_, 1, &submit, fence_), "Submit readback"); submitted = true;
-        // Never wait forever: a hung GPU frame becomes a logged error, not a frozen app.
-        const VkResult waited = FN(vkWaitForFences)(device_, 1, &fence_, VK_TRUE, 2000000000ull);
-        if (waited == VK_TIMEOUT) {
-            gpuStalled_ = true; // the command buffer may still be in use: leave it
-            waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
-            error = "GPU did not finish a frame within 2 seconds";
-            return false;
-        }
-        Check(waited, "Wait for readback");
-        if (!readbackCoherent_) {
-            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory = readbackMemory_; range.size = VK_WHOLE_SIZE;
-            Check(FN(vkInvalidateMappedMemoryRanges)(device_, 1, &range), "Invalidate readback");
-        }
-        sink(static_cast<const uint8_t*>(readbackMapped_), width, height, rgba);
-        FN(vkFreeCommandBuffers)(device_, pool_, 1, &command);
+        Check(FN(vkQueueSubmit)(queue_, 1, &submit, slot.fence), "Submit readback"); submitted = true;
+        slot.pending = true;
+        slot.ready = false;
+        slot.width = width; slot.height = height; slot.rgba = rgba;
+        slot.serial = ++serial_;
         waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
+        index_ = (index_ + 1) % kSlots;
+        // Whatever has finished by now (usually the previous frame) is shown;
+        // nothing here waits for the GPU.
+        DeliverReady();
         return true;
     } catch (const std::exception& e) {
         error = e.what();
         if (submitted) {
-            // Bounded: if the GPU is gone, do not hang here either.
-            if (FN(vkWaitForFences)(device_, 1, &fence_, VK_TRUE, 2000000000ull) != VK_SUCCESS) gpuStalled_ = true;
+            slot.pending = true;
+            std::string ignored;
+            WaitSlot(slot, ignored);
         }
-        if (command && !gpuStalled_) FN(vkFreeCommandBuffers)(device_, pool_, 1, &command);
         pending_.clear(); waits_.clear(); signal_ = VK_NULL_HANDLE; haveImage_ = false;
         return false;
     }
@@ -245,10 +298,14 @@ bool VitaVulkanBridge::Present(unsigned width, unsigned height, std::string& err
 }
 void VitaVulkanBridge::ReleaseReadback() {
     if (!device_) return;
-    if (readbackMapped_) DeviceProc<PFN_vkUnmapMemory>("vkUnmapMemory")(device_, readbackMemory_);
-    if (readback_) DeviceProc<PFN_vkDestroyBuffer>("vkDestroyBuffer")(device_, readback_, nullptr);
-    if (readbackMemory_) DeviceProc<PFN_vkFreeMemory>("vkFreeMemory")(device_, readbackMemory_, nullptr);
-    readbackMapped_ = nullptr; readback_ = VK_NULL_HANDLE; readbackMemory_ = VK_NULL_HANDLE; readbackSize_ = 0;
+    for (auto& slot : slots_) {
+        if (slot.mapped) DeviceProc<PFN_vkUnmapMemory>("vkUnmapMemory")(device_, slot.memory);
+        if (slot.buffer) DeviceProc<PFN_vkDestroyBuffer>("vkDestroyBuffer")(device_, slot.buffer, nullptr);
+        if (slot.memory) DeviceProc<PFN_vkFreeMemory>("vkFreeMemory")(device_, slot.memory, nullptr);
+        if (slot.fence) DeviceProc<PFN_vkDestroyFence>("vkDestroyFence")(device_, slot.fence, nullptr);
+        if (slot.command && pool_) DeviceProc<PFN_vkFreeCommandBuffers>("vkFreeCommandBuffers")(device_, pool_, 1, &slot.command);
+        slot = Slot{};
+    }
 }
 void VitaVulkanBridge::Shutdown() {
     try {
@@ -256,9 +313,7 @@ void VitaVulkanBridge::Shutdown() {
         if (device_ && !gpuStalled_) DeviceProc<PFN_vkDeviceWaitIdle>("vkDeviceWaitIdle")(device_);
         if (reset_ && callback_.context_destroy) callback_.context_destroy();
         reset_ = false;
-        ReleaseReadback();
-        if (device_ && fence_) DeviceProc<PFN_vkDestroyFence>("vkDestroyFence")(device_, fence_, nullptr);
-        fence_ = VK_NULL_HANDLE;
+        if (!gpuStalled_) ReleaseReadback();
         gpuStalled_ = false;
         if (device_ && pool_) DeviceProc<PFN_vkDestroyCommandPool>("vkDestroyCommandPool")(device_, pool_, nullptr);
         pool_ = VK_NULL_HANDLE;
@@ -267,6 +322,8 @@ void VitaVulkanBridge::Shutdown() {
         device_ = VK_NULL_HANDLE;
         if (instance_) InstanceProc<PFN_vkDestroyInstance>("vkDestroyInstance")(instance_, nullptr);
     } catch (...) {}
+    for (auto& slot : slots_) slot = Slot{};
+    index_ = 0; serial_ = 0; shownSerial_ = 0;
     device_ = VK_NULL_HANDLE; instance_ = VK_NULL_HANDLE; queue_ = VK_NULL_HANDLE; haveImage_ = false;
     negotiation_ = nullptr; callback_ = {}; waits_.clear(); pending_.clear(); signal_ = VK_NULL_HANDLE;
     if (icd_) {

@@ -355,6 +355,7 @@ bool VitaLibretroHost::LoadGame(const std::string& readableContentPath, std::wst
     game.size = 0;
     game.meta = nullptr;
     Log(1, "Loading staged content: %s\n", game.path);
+    gameHasRun_ = true; // even a failed load leaves the core's state behind
     {
         CoreFault fault;
         bool loaded = false;
@@ -485,21 +486,49 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
     running_.store(true);
     try {
         runThread_ = std::thread([this] {
-            // The pinned core reports 60 Hz. Pace frames without running the
-            // guest on the XAML dispatcher or spinning to catch up after stalls.
+            // The pinned core reports 60 Hz, and each retro_run is one vblank
+            // of the game's: their rate is the game's speed. Frames run on a
+            // fixed schedule. Sleeping a period after each frame's start lost
+            // whatever a frame ran over, and Windows' sleeps overshoot by up to
+            // a timer tick: games ran at 50-57 vblanks a second instead of 60
+            // (slow, with audio running dry). A late frame is now made up by
+            // the next ones (at most a few), and the wait ends on a
+            // high-resolution timer, the last moment spent yielding.
+            using clock = std::chrono::steady_clock;
             constexpr auto period = std::chrono::microseconds(16667);
             if (glMode_ && !StartOpenGLOnThisThread()) {
                 running_.store(false);
                 return;
             }
+            HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+            if (!timer) timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+            const auto waitUntil = [timer](clock::time_point target) {
+                for (;;) {
+                    const auto left = target - clock::now();
+                    if (left <= clock::duration::zero()) return;
+                    if (timer && left > std::chrono::microseconds(1500)) {
+                        LARGE_INTEGER due{};
+                        // relative, in 100 ns units; wake about a millisecond early
+                        due.QuadPart = -static_cast<LONGLONG>(std::chrono::duration_cast<std::chrono::nanoseconds>(left - std::chrono::microseconds(1000)).count() / 100);
+                        if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE))
+                            WaitForSingleObjectEx(timer, 50, FALSE);
+                        else
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    } else {
+                        std::this_thread::yield();
+                    }
+                }
+            };
+            auto next = clock::now();
             try {
                 while (running_.load()) {
-                    const auto start = std::chrono::steady_clock::now();
                     if (paused_.load()) {
                         // No retro_run, so no vblank: the game waits where it is.
-                        std::this_thread::sleep_until(start + period);
+                        next = clock::now() + period;
+                        waitUntil(next);
                         continue;
                     }
+                    const auto started = clock::now();
                     CoreFault fault;
                     if (!GuardedRun(runFrame_, &fault)) {
                         Log(3, "%s", DescribeFault("retro_run", fault, module_).c_str());
@@ -508,12 +537,25 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
                         break;
                     }
                     ++framesExecuted_;
-                    std::this_thread::sleep_until(start + period);
+                    const auto ran = clock::now() - started;
+                    if (ran > period) {
+                        slowRuns_.fetch_add(1, std::memory_order_relaxed);
+                        const unsigned tenths = static_cast<unsigned>(std::chrono::duration_cast<std::chrono::microseconds>(ran).count() / 100);
+                        unsigned longest = longestRunTenthsMs_.load(std::memory_order_relaxed);
+                        while (tenths > longest && !longestRunTenthsMs_.compare_exchange_weak(longest, tenths)) {}
+                    }
+                    next += period;
+                    const auto now = clock::now();
+                    // Far behind (a load, a shader compile): start the schedule
+                    // again instead of racing through the missed vblanks.
+                    if (now - next > 4 * period) next = now;
+                    waitUntil(next);
                 }
             } catch (...) {
                 Log(3, "Core frame execution threw an exception; session stopped.\n");
                 running_.store(false);
             }
+            if (timer) CloseHandle(timer);
             // The context goes with the thread; UnloadGame binds it again.
             if (glMode_) gl_.MakeCurrent(false);
         });
@@ -816,19 +858,30 @@ void VitaLibretroHost::WriteDiagnostics(const char* when) {
             options[key] = value ? value : "";
     }
     std::string out;
+    std::string minuteLine;
     char line[512];
+    // The emulation loop's frames that took longer than a vblank, the longest,
+    // and the audio's dry spells and dropped blocks, since the last write.
+    const unsigned slowRuns = slowRuns_.exchange(0);
+    const double longestRunMs = longestRunTenthsMs_.exchange(0) / 10.0;
+    const unsigned underruns = audio_.Underruns(), dropped = audio_.Dropped();
     {
         std::lock_guard<std::mutex> guard(logsMutex_);
         const unsigned long long tick = GetTickCount64();
         const double windowSeconds = (tick - diag_.windowStart) / 1000.0;
         if (windowSeconds >= 1.0 && diag_.frames > 1) {
             std::snprintf(line, sizeof(line),
-                "%6.1f min  shown %5.1f fps  game %5.1f fps  worst frame %6.1f ms  picture %u/%u lit, level %u  memory %llu MB",
+                "%6.1f min  shown %5.1f fps  game %5.1f fps  worst frame %6.1f ms  slow emulation frames %u (longest %.1f ms)  "
+                "audio dry %u, dropped %u  picture %u/%u lit, level %u  memory %llu MB",
                 (tick - diag_.startTick) / 60000.0, diag_.windowFrames / windowSeconds,
                 guest >= diag_.windowGuestStart ? (guest - diag_.windowGuestStart) / windowSeconds : 0.0,
-                diag_.windowWorstMs, diag_.lit, diag_.total, diag_.level, diag_.usedMb);
+                diag_.windowWorstMs, slowRuns, longestRunMs, underruns - diag_.audioUnderruns, dropped - diag_.audioDropped,
+                diag_.lit, diag_.total, diag_.level, diag_.usedMb);
             if (diag_.minutes.size() < 240) diag_.minutes.push_back(line);
+            minuteLine = line;
         }
+        diag_.audioUnderruns = underruns;
+        diag_.audioDropped = dropped;
         diag_.windowStart = tick;
         diag_.windowFrames = 0;
         diag_.windowWorstMs = 0.0;
@@ -862,6 +915,9 @@ void VitaLibretroHost::WriteDiagnostics(const char* when) {
         std::fwrite(out.data(), 1, out.size(), file);
         std::fclose(file);
     }
+    // The minute's figures go to the running log too, so one log holds every
+    // game's (the report above is rewritten for each game).
+    if (!minuteLine.empty()) LogLine("Performance:" + minuteLine);
 }
 
 void VitaLibretroHost::UpdateTouchCursor() {

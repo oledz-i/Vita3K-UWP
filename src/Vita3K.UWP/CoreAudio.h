@@ -17,6 +17,26 @@ class CoreAudio final : private IXAudio2VoiceCallback {
     IXAudio2SourceVoice* source_ = nullptr;
     std::mutex mutex_;
     std::set<Block*> pending_;
+    std::size_t queuedFrames_ = 0;
+    bool started_ = false;
+    unsigned underruns_ = 0, dropped_ = 0;
+    static constexpr std::size_t kMaxQueuedFrames = 48000 / 4;  // 250 ms
+    static constexpr std::size_t kRefillFrames = 48000 / 25;     // 40 ms
+    void SubmitLocked(std::vector<std::int16_t>&& samples) {
+        auto block = new Block(std::move(samples));
+        const std::size_t frames = block->size() / 2;
+        XAUDIO2_BUFFER buffer{};
+        buffer.AudioBytes = static_cast<UINT32>(frames * 4);
+        buffer.pAudioData = reinterpret_cast<const BYTE*>(block->data());
+        buffer.pContext = block;
+        pending_.insert(block);
+        queuedFrames_ += frames;
+        if (FAILED(source_->SubmitSourceBuffer(&buffer))) {
+            pending_.erase(block);
+            queuedFrames_ -= frames;
+            delete block;
+        }
+    }
 public:
     ~CoreAudio() { Stop(); }
     bool Start() {
@@ -38,30 +58,41 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto block : pending_) delete block;
         pending_.clear();
+        queuedFrames_ = 0;
+        started_ = false;
     }
     std::size_t Push(const std::int16_t* data, std::size_t frames) {
         if (!source_ || !data || frames == 0 || frames > 48000) return 0;
-        auto block = new Block(data, data + frames * 2);
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (pending_.size() >= 4) { delete block; return 0; }
-            pending_.insert(block);
-        }
-        XAUDIO2_BUFFER buffer{};
-        buffer.AudioBytes = static_cast<UINT32>(frames * 4);
-        buffer.pAudioData = reinterpret_cast<const BYTE*>(block->data());
-        buffer.pContext = block;
-        if (FAILED(source_->SubmitSourceBuffer(&buffer))) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            pending_.erase(block); delete block; return 0;
+            // Far ahead already (a burst after a stall): this block is dropped
+            // rather than letting the delay grow. Four blocks used to be the
+            // limit, and a frame's audio arriving in two parts after a hitch
+            // was thrown away: heard as crackle.
+            if (queuedFrames_ > kMaxQueuedFrames) { ++dropped_; return 0; }
+            // The voice ran dry (the emulation stalled): a little silence goes
+            // first, so the next small delay does not run it dry again; a
+            // gap once instead of a crackle every few frames.
+            if (pending_.empty()) {
+                if (started_) ++underruns_;
+                SubmitLocked(std::vector<std::int16_t>(kRefillFrames * 2, 0));
+            }
+            started_ = true;
+            SubmitLocked(std::vector<std::int16_t>(data, data + frames * 2));
         }
         return frames;
     }
+    // Times the voice ran dry, and blocks dropped for being too far ahead.
+    unsigned Underruns() const { return underruns_; }
+    unsigned Dropped() const { return dropped_; }
 private:
     void STDMETHODCALLTYPE OnBufferEnd(void* context) override {
         std::lock_guard<std::mutex> lock(mutex_);
         auto block = static_cast<Block*>(context);
-        if (pending_.erase(block)) delete block;
+        if (pending_.erase(block)) {
+            queuedFrames_ -= block->size() / 2;
+            delete block;
+        }
     }
     void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
     void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
