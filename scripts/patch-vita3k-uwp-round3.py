@@ -1165,7 +1165,20 @@ static GLuint uwp_color_attachment_copy(GLuint attachment) {
         if (copy->texture)
             glDeleteTextures(1, &copy->texture);
         glCreateTextures(GL_TEXTURE_2D, 1, &copy->texture);
-        glTextureStorage2D(copy->texture, 1, static_cast<GLenum>(format), width, height);
+        // Storage takes a sized format: render targets made with an unsized
+        // one (GL_RGBA, Persona 4 Golden's) got a copy with no storage at all,
+        // and their programmable blending read nothing (parts of the picture
+        // black or missing)
+        GLenum storage = static_cast<GLenum>(format);
+        switch (storage) {
+        case GL_RGBA: storage = GL_RGBA8; break;
+        case GL_RGB: storage = GL_RGB8; break;
+        case GL_RG: storage = GL_RG8; break;
+        case GL_RED: storage = GL_R8; break;
+        case GL_BGRA: storage = GL_RGBA8; break;
+        default: break;
+        }
+        glTextureStorage2D(copy->texture, 1, storage, width, height);
         copy->format = format;
         copy->width = width;
         copy->height = height;
