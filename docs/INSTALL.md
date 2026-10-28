@@ -40,15 +40,15 @@ Games are read from the drive where they are; nothing is copied to internal stor
 
 ## 6. Firmware
 
-Vita3K needs Sony's PS Vita firmware. This project ships none of it. Download it on a PC:
+Vita3K needs PS Vita firmware, which you provide yourself. This project doesn't include it or link to it.
 
-| Part | Needed | Where |
-| --- | --- | --- |
-| System firmware | Required | Sony's PS Vita system software page. It downloads as `PSP2UPDAT.PUP`; older copies are named `PSVUPDAT.PUP`. **They are the same file**, the system update. |
-| Preinstalled package | Recommended | A separate, smaller Sony download, linked by the Vita3K libretro core: <https://bit.ly/4hlePsX> |
-| Fonts | Recommended (some text is missing without it) | A separate Sony download: <https://bit.ly/48ouDaa> |
+| Part | Needed |
+| --- | --- |
+| System firmware | Required |
+| Preinstalled package | Recommended |
+| Fonts | Recommended (some text is missing without it) |
 
-The preinstalled package and fonts download under the same `PSP2UPDAT.PUP` name too, so keep them in separate folders or rename them. The names don't matter to the app.
+Firmware files are `.PUP` files and often share the same name, so keep them in separate folders or rename them. The names don't matter to the app.
 
 In the app: **Settings → Firmware → Install firmware files**, and select all the `.PUP` files at once (or **Install from a folder**). The app looks inside each package, works out which part it is, and installs it **immediately** with a progress bar. The three tiles then show what is installed and its version. If you pick the same update twice, the summary says so.
 

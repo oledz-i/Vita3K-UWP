@@ -35,7 +35,7 @@ It's an **alpha**. Plenty of games boot and play, some play well, and some don't
 - **Real games, two renderers.** Vulkan (through Mesa's Dozen) and OpenGL (through Mesa), both running on the Xbox's Direct3D 12. Some games prefer one over the other, so you can switch.
 - **Games known to play:** Terraria (a steady 60 fps), Undertale, Danganronpa: Trigger Happy Havoc and Ultra Despair Girls. Gravity Rush, Persona 4 Golden and Minecraft: PS Vita Edition run, with some rough edges. Details per game are on the [compatibility page](docs/COMPATIBILITY.md).
 - **Your games, your way.** VPKs, ZIPs, PKGs with their licenses, or plain game folders, from internal storage or a USB drive. Updates and DLC install from a folder you point the app at.
-- **Firmware in one go.** Pick Sony's firmware files under whatever names they have. The app works out which is which and installs them.
+- **Firmware in one go.** Pick your firmware files under whatever names they have. The app works out which is which and installs them.
 - **Saves, trophies and the system dialogs**: save screens, messages and the on-screen keyboard.
 
 ## The extras
@@ -61,7 +61,7 @@ You'll need an Xbox Series X or S in [Developer Mode](https://learn.microsoft.co
 2. Install it through the Xbox Device Portal and set it to run as a **Game**, not an App, so it gets enough memory.
 3. Open it, pick where Vita3K keeps its data, install the firmware and choose your games folder.
 
-The [install guide](docs/INSTALL.md) walks through each step, including where to get the firmware.
+The [install guide](docs/INSTALL.md) walks through each step.
 
 ## Helping out
 
