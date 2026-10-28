@@ -9,7 +9,7 @@ Results from hands-on testing on an Xbox Series S in Dev Mode. This is a snapsho
 | Persona 4 Golden | Fixed in build 72 (vertex formats), needs confirming | Fixed in build 72 (render-target copy), needs confirming | Audio crackle addressed by the larger audio buffer |
 | Gravity Rush | Plays | Not recommended | The crash after the opening cutscene was guarded in build 72 |
 | Ultra Despair Girls | 30 fps (its own rate) | Hitches | Cutscene stutter (frames held, then skipped) fixed by in-order frame delivery in build 78, needs confirming |
-| Danganronpa: Trigger Happy Havoc | Interaction bug | Interaction bug | Also open in upstream Vita3K. The stuck save screen is addressed in build 78 |
+| Danganronpa: Trigger Happy Havoc | Interaction bug | **Plays** (with surface sync on) | The interaction bug (open in upstream Vita3K) is gone on OpenGL with surface sync; the app sets both for this game. Stuck save screen addressed in build 78 |
 | Minecraft: PS Vita Edition | Runs slowly, some garbled text | Crashes | Use Vulkan. Its US update (PCSE00491) installs even before the game is played, from build 78 |
 
 Not yet tested: Uncharted: Golden Abyss.

@@ -2721,13 +2721,16 @@ struct TitleOverride {
     const char* key;
     const char* value;
     const char* renderer; // only with this renderer (nullptr: any)
+    bool always = false;  // even over the player's own setting
 };
 const TitleOverride kTitleOverrides[] = {
-    // Danganronpa: Trigger Happy Havoc (Vita3K/compatibility#94): the
-    // prologue's classroom conversation only goes on with surface sync off.
-    // On Vulkan here surface sync does nothing (Dozen gives no memory
-    // mapping); on OpenGL it works, and item checks need it, so it stays on.
-    { L"PCSE00261", "vita3k_surface_sync", "disabled", "Vulkan" },
+    // Danganronpa: Trigger Happy Havoc (Vita3K/compatibility#94): the game
+    // stops responding when you examine things or talk to people, unless it
+    // runs on OpenGL with surface sync on. Tested on the console: that pair
+    // fixes it, any other doesn't. Settings are app-wide here, so this game
+    // always gets the pair.
+    { L"PCSE00261", "vita3k_backend_renderer", "OpenGL", nullptr, true },
+    { L"PCSE00261", "vita3k_surface_sync", "enabled", nullptr, true },
 };
 // The title ID (four letters, five digits) in a game's folder or file name.
 std::wstring TitleIdIn(const std::wstring& path) {
@@ -2751,13 +2754,16 @@ void CatalogShell::ApplyCoreOptions(const std::wstring& contentPath) {
     for (std::size_t i = 0; i < vita3k_uwp::kCoreOptionCount; ++i)
         if (std::strcmp(vita3k_uwp::kCoreOptions[i].key, "vita3k_backend_renderer") == 0)
             renderer = SavedCoreOption(vita3k_uwp::kCoreOptions[i]);
+    for (const auto& o : kTitleOverrides)
+        if (o.always && titleId == o.titleId && std::strcmp(o.key, "vita3k_backend_renderer") == 0)
+            renderer = o.value;
     for (std::size_t i = 0; i < vita3k_uwp::kCoreOptionCount; ++i) {
         const auto& option = vita3k_uwp::kCoreOptions[i];
         std::string value = SavedCoreOption(option);
         const bool chosen = Pref(CoreOptionPrefKey(option), L"")->Length() != 0;
-        if (!chosen && !titleId.empty()) {
+        if (!titleId.empty()) {
             for (const auto& o : kTitleOverrides) {
-                if (titleId == o.titleId && std::strcmp(option.key, o.key) == 0 && (!o.renderer || renderer == o.renderer)) {
+                if ((!chosen || o.always) && titleId == o.titleId && std::strcmp(option.key, o.key) == 0 && (!o.renderer || renderer == o.renderer)) {
                     value = o.value;
                     libretro_.LogLine(std::string("Game setting for ") + NarrowUtf8(titleId) + ": " + o.key + " = " + o.value);
                 }

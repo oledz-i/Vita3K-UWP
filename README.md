@@ -46,6 +46,7 @@
 ### What changed recently
 
 - **Frame pacing.** Frames reach the screen in order, one per refresh, and the emulator waits for the TV's refresh when the console allows it. This fixes the stutter in 30 fps games (Ultra Despair Girls' cutscenes) and the occasional dropped frame at 60 (Terraria).
+- **Danganronpa: Trigger Happy Havoc is playable.** Its interaction bug (open in upstream Vita3K) goes away on OpenGL with surface sync on, and the app now picks that pair for it automatically.
 - **Save dialog.** Once a save slot is picked, the dialog steps aside and the controller goes back to the game, so games that ask their own question at that point (Danganronpa) no longer get stuck on the save screen.
 - **Updates and DLC.** An update can be installed before its game has ever been played: the app takes the game's license from its folder.
 - **Frontend.** All symbols and XMB icons draw correctly (they were garbled by a text-encoding bug). The XMB has eleven colours, and Classic Blue is the default. Interface sounds play through XAudio2, and pictures are decoded once at their display size, removing short pauses in the menus.
@@ -55,7 +56,6 @@
 ### Known issues
 
 - **Minecraft** runs on Vulkan only; it crashes on OpenGL. Some text is garbled and it runs slowly.
-- **Danganronpa** has an interaction bug that is also open in upstream Vita3K, with no known cause yet.
 - New shaders still take the console up to a couple of seconds to compile. Until one is ready, what it draws is missing for a moment (no freeze).
 - Some games work on only one renderer. If one misbehaves, switch renderers in the game's settings.
 
