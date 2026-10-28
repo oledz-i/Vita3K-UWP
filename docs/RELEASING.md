@@ -29,4 +29,4 @@ Pushes to a branch always build the development flavor.
    `"tools_page_included": false`.
 2. Install it on the console and check that the rail shows Home, Library and
    Settings only.
-3. Mark it clearly as pre-alpha in the release notes until games run.
+3. Mark it clearly as alpha in the release notes, with the known issues from the README (Minecraft on OpenGL, Danganronpa interaction bug, stuck save dialog).

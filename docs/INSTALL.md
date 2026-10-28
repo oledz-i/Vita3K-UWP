@@ -1,6 +1,6 @@
 # Install and test on Xbox
 
-**Pre-alpha.** The package contains the full Vita3K core, but no game has been confirmed to boot on Xbox yet. Expect crashes, and send the log (below) when one happens.
+**Alpha.** Several games run on Xbox (see [compatibility](COMPATIBILITY.md)), but expect crashes and rough performance. Send the log (below) when one happens.
 
 ## 1. Get the build
 
@@ -60,11 +60,11 @@ In the app: **Settings → Firmware → Install firmware files**, and select all
 
 ## 8. Play
 
-**Settings → Storage → Choose games folder**: a folder of games, or one game's own folder. Folders need `eboot.bin` and `sce_sys` directly inside. Then pick the game in the Library and press **Play**. The game takes the whole screen; a loading screen shows what Vita3K is doing (installing and decrypting with a percentage the first time, then preparing graphics and starting) until the game shows its first picture. Press **View + Menu** together to quit back to the library.
+**Settings → Storage → Choose games folder**: a folder of games, or one game's own folder. Folders need `eboot.bin` and `sce_sys` directly inside. Then pick the game in the Library and press **Play**. The game takes the whole screen; a loading screen shows what Vita3K is doing (installing and decrypting with a percentage the first time, then preparing graphics and starting) until the game shows its first picture. Press **View + Menu** together to quit back to the library. Starting a second game after quitting restarts the app first, then boots it.
 
 ## 9. Emulator settings
 
-**Settings → Emulation** starts with the renderer (Vulkan, running on Direct3D 12) and the screen mode (Fit or Stretch), then Vita3K's own options: graphics (internal resolution, filtering, shader compiling), the **JIT recompiler (Dynarmic)**, content, system, audio and network. They are saved on the console and take effect when a game starts.
+**Settings → Emulation** starts with the renderer (Vulkan or OpenGL, both running on Direct3D 12; if a game misbehaves, try the other) and the screen mode (Fit or Stretch), then Vita3K's own options: graphics (internal resolution, filtering, shader compiling), the **JIT recompiler (Dynarmic)**, content, system, audio and network. They are saved on the console and take effect when a game starts.
 
 ## 10. When something goes wrong: the log
 
