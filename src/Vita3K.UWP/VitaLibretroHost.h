@@ -173,6 +173,7 @@ private:
     std::string redirectReport_;
     FILE* logFile_ = nullptr;
     unsigned long long lastLogFlush_ = 0;
+    std::atomic<unsigned long long> gameStartTick_{0};
     bool verboseLog_ = false;
     std::wstring logFilePath_;
     // Loading progress worked out from the core's log, for the loading screen.

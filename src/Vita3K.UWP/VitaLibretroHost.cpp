@@ -462,6 +462,7 @@ bool VitaLibretroHost::StartRunning(std::wstring& detail) {
     }
     paused_.store(false);
     lastButtons_ = 0;
+    gameStartTick_.store(GetTickCount64());
     running_.store(true);
     try {
         runThread_ = std::thread([this] {
@@ -544,7 +545,11 @@ void __cdecl VitaLibretroHost::Log(unsigned level, const char* format, ...) {
             // opened (hundreds a second in some games). Warnings and errors
             // still go out at once; the rest at least every quarter second.
             const unsigned long long now = GetTickCount64();
-            if (level >= 2 || now - host->lastLogFlush_ >= 250) {
+            // The first minute of a game is written line by line: if the game
+            // is ended outright (a GPU fault on the console, say), the log
+            // still holds its very last lines.
+            const unsigned long long started = host->gameStartTick_.load();
+            if (level >= 2 || now - host->lastLogFlush_ >= 250 || (started && now - started < 60000)) {
                 std::fflush(host->logFile_);
                 host->lastLogFlush_ = now;
             }

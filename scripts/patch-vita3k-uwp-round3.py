@@ -1037,3 +1037,109 @@ replace('vita3k/glutil/include/glutil/object_array.h', '''        this->deleter 
                 return false;
         return true;''')
 print('GL object creation ignores errors left by earlier calls.')
+
+# ── 4-bit-per-channel textures on Dozen ─────────────────────────────────────
+# The Vita's U4U4U4U4 textures are created as VK_FORMAT_R4G4B4A4_UNORM_PACK16.
+# Dozen maps that to DXGI_FORMAT_A4B4G4R4_UNORM only when the GPU has it; the
+# Xbox does not, so the image got DXGI_FORMAT_UNKNOWN, had no allocation size
+# and stopped the render thread (Gravity Rush, a 256x128 texture). Dozen does
+# support B4G4R4A4 for sampling and copies: the same 16 bits with red and blue
+# swapped. Such textures are made B4G4R4A4 and the view swaps R and B back,
+# so the bytes upload unchanged and the shader sees the right channels.
+texture = 'vita3k/renderer/src/vulkan/texture.cpp'
+text = read(texture)
+start = text.index('void VKTextureCache::configure_texture(const SceGxmTexture &gxm_texture) {')
+end = text.index('\n}\n', start)
+body = text[start:end]
+old_gamma = '''    if (gxm_texture.gamma_mode)
+        vk_format = linear_to_srgb(vk_format);
+'''
+assert body.count(old_gamma) == 1, 'configure_texture gamma anchor'
+body = body.replace(old_gamma, old_gamma + '''
+    vk::ComponentMapping view_swizzle = swizzle;
+    if (vk_format == vk::Format::eR4G4B4A4UnormPack16) {
+        static int rgba4_support = -1;
+        if (rgba4_support < 0) {
+            const vk::FormatProperties props = state.physical_device.getFormatProperties(vk::Format::eR4G4B4A4UnormPack16);
+            rgba4_support = (props.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage) ? 1 : 0;
+            if (!rgba4_support)
+                LOG_INFO("R4G4B4A4 textures are not supported by the GPU; stored as B4G4R4A4 with red and blue swapped back");
+        }
+        if (!rgba4_support) {
+            vk_format = vk::Format::eB4G4R4A4UnormPack16;
+            const auto swap_rb = [](vk::ComponentSwizzle c, vk::ComponentSwizzle self) {
+                if (c == vk::ComponentSwizzle::eIdentity)
+                    c = self;
+                if (c == vk::ComponentSwizzle::eR)
+                    return vk::ComponentSwizzle::eB;
+                if (c == vk::ComponentSwizzle::eB)
+                    return vk::ComponentSwizzle::eR;
+                return c;
+            };
+            view_swizzle = vk::ComponentMapping{
+                swap_rb(swizzle.r, vk::ComponentSwizzle::eR),
+                swap_rb(swizzle.g, vk::ComponentSwizzle::eG),
+                swap_rb(swizzle.b, vk::ComponentSwizzle::eB),
+                swap_rb(swizzle.a, vk::ComponentSwizzle::eA),
+            };
+        }
+    }
+''')
+assert body.count('        .components = swizzle,\n') == 1, 'configure_texture view anchor'
+body = body.replace('        .components = swizzle,\n', '        .components = view_swizzle,\n')
+write(texture, text[:start] + body + text[end:])
+print('U4U4U4U4 textures use B4G4R4A4 with an R/B swapped view when R4G4B4A4 is missing.')
+
+# ── OpenGL on Direct3D 12: no render target bound as a storage image ────────
+# With GL_ARB_texture_barrier (which Mesa's D3D12 driver advertises) Vita3K's
+# GL renderer binds the render target as a read-write image in every shader
+# that reads the frame's colour, and the mask bit adds another read-write
+# RGBA8 image to every draw. Direct3D 12 cannot have one texture as render
+# target and UAV at once, and the Xbox lacks typed UAV loads for some
+# formats: the app was ended at the game's first draws (Danganronpa).
+# Vita3K's path for GPUs without these (its Android build) is used instead:
+# no programmable blending through the render target, mask bit off.
+gl_renderer = 'vita3k/renderer/src/gl/renderer.cpp'
+replace(gl_renderer, '''    return gl_state.init();
+}''', '''#ifdef VITA3K_UWP
+    gl_state.features.support_texture_barrier = false;
+    gl_state.features.support_shader_interlock = false;
+    gl_state.features.use_mask_bit = false;
+    LOG_INFO("OpenGL on Direct3D 12: render-target reads and the mask bit are off (Direct3D 12 cannot use a render target as a storage image)");
+#endif
+    return gl_state.init();
+}''')
+# Shaders cached by earlier builds were made with those features on.
+replace(gl_renderer, '''    shader_version = fmt::format("v{}", shader::CURRENT_VERSION);''', '''#ifdef VITA3K_UWP
+    shader_version = fmt::format("v{}-d3d12gl", shader::CURRENT_VERSION);
+#else
+    shader_version = fmt::format("v{}", shader::CURRENT_VERSION);
+#endif''')
+print('OpenGL on D3D12: no storage-image render targets, own shader cache version.')
+
+# Say why a framebuffer is incomplete, with its attachments' formats.
+replace('vita3k/renderer/src/gl/surface_cache.cpp', '''    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        LOG_ERROR("Framebuffer is not completed. Proceed anyway...");''', '''    if (const GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER); fb_status != GL_FRAMEBUFFER_COMPLETE) {
+        static int reported = 0;
+        if (reported < 8) {
+            reported++;
+            GLint color_format = 0, color_w = 0, color_h = 0, ds_format = 0, ds_w = 0, ds_h = 0;
+            if (color_handle) {
+                glBindTexture(GL_TEXTURE_2D, color_handle);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &color_format);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &color_w);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &color_h);
+            }
+            if (ds_handle) {
+                glBindTexture(GL_TEXTURE_2D, ds_handle);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &ds_format);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &ds_w);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &ds_h);
+            }
+            glBindTexture(GL_TEXTURE_2D, 0);
+            LOG_ERROR("Framebuffer is not complete (status 0x{:X}): color texture {} format 0x{:X} {}x{} (Vita color format 0x{:X}), depth/stencil texture {} format 0x{:X} {}x{}. Proceeding anyway",
+                fb_status, color_handle, color_format, color_w, color_h, color ? static_cast<uint32_t>(gxm::get_base_format(color->colorFormat)) : 0u,
+                ds_handle, ds_format, ds_w, ds_h);
+        }
+    }''')
+print('Incomplete GL framebuffers are described in the log.')

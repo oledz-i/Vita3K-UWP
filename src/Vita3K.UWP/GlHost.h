@@ -59,6 +59,9 @@ public:
 
 private:
     struct Fn;
+    static void __stdcall DebugMessage(unsigned source, unsigned type, unsigned id, unsigned severity, int length,
+                                       const char* message, const void* user);
+    unsigned debugMessages_ = 0;
     bool LoadFunctions(std::string& error);
     void CreateTargets(unsigned width, unsigned height);
     void DestroyTargets();

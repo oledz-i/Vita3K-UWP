@@ -87,6 +87,8 @@ struct GlHost::Fn {
     void*(GLAPI_* MapBufferRange)(GLenum, GLintptr, GLsizeiptr, GLbitfield) = nullptr;
     GLboolean(GLAPI_* UnmapBuffer)(GLenum) = nullptr;
     GLsync(GLAPI_* FenceSync)(GLenum, GLbitfield) = nullptr;
+    void(GLAPI_* Enable)(GLenum) = nullptr;
+    void(GLAPI_* DebugMessageCallback)(void(GLAPI_*)(GLenum, GLenum, GLuint, GLenum, GLsizei, const char*, const void*), const void*) = nullptr;
     GLenum(GLAPI_* ClientWaitSync)(GLsync, GLbitfield, GLuint64) = nullptr;
     void(GLAPI_* DeleteSync)(GLsync) = nullptr;
 };
@@ -139,6 +141,24 @@ bool GlHost::Load(std::string& error) {
     return true;
 }
 
+void __stdcall GlHost::DebugMessage(unsigned source, unsigned type, unsigned id, unsigned severity, int length,
+                                    const char* message, const void* user) {
+    (void)source;
+    (void)length;
+    auto* self = static_cast<GlHost*>(const_cast<void*>(user));
+    if (!self || !message) return;
+    // Errors (0x824C), undefined behaviour (0x824E) and high-severity
+    // messages (0x9146); performance notes and the rest are left out.
+    if (type != 0x824C && type != 0x824E && severity != 0x9146) return;
+    if (self->debugMessages_ >= 80) return;
+    if (++self->debugMessages_ == 80) {
+        self->Write(2, "OpenGL: further driver messages are not logged");
+        return;
+    }
+    char head[64];
+    std::snprintf(head, sizeof(head), "OpenGL driver (id %u): ", id);
+    self->Write(type == 0x824C ? 3 : 2, std::string(head) + message);
+}
 GlHost::Proc __cdecl GlHost::ProcAddress(const char* symbol) {
     GlHost* self = s_active;
     if (!self || !self->module_ || !symbol) return nullptr;
@@ -220,6 +240,16 @@ bool GlHost::CreateContext(bool depth, bool stencil, std::string& error) {
     f.GetIntegerv(GL_MINOR_VERSION, &minor);
     Write(1, "OpenGL context: " + str(GL_VENDOR) + " / " + description_ + " (version " + std::to_string(major) + "." +
                  std::to_string(minor) + ")");
+    // Mesa's own messages for failed GL calls ("glTexImage2D(invalid format)"
+    // and the like) go to the log: they name the call a GL error came from.
+    f.Enable = reinterpret_cast<decltype(f.Enable)>(ProcAddress("glEnable"));
+    f.DebugMessageCallback = reinterpret_cast<decltype(f.DebugMessageCallback)>(ProcAddress("glDebugMessageCallback"));
+    if (f.Enable && f.DebugMessageCallback) {
+        f.DebugMessageCallback(&GlHost::DebugMessage, this);
+        f.Enable(0x92E0); // GL_DEBUG_OUTPUT
+        f.Enable(0x8242); // GL_DEBUG_OUTPUT_SYNCHRONOUS: reported on the call that caused it
+        Write(1, "OpenGL: driver error messages go to this log");
+    }
     if (major < 4 || (major == 4 && minor < 3))
         Write(2, "OpenGL is below 4.3 on this driver; some Vita shaders may not compile");
     wantDepth_ = depth;
