@@ -1928,3 +1928,178 @@ replace(installer, '''        lr_msg("Installed. Start the game's own PKG or VPK
         result.success = true;
         return result;''')
 print('PKG: an update or DLC installed before its game reports success.')
+
+# ── Performance: where the time goes, and a faster CPU ──────────────────────
+# Minecraft ran at 7 to 8 frames a second with the emulation loop idle, so the
+# time goes into the game's own threads or the renderer's. Each minute the log
+# now says how busy each of them was (and how often guest memory traps fired),
+# so the next step is aimed rather than guessed.
+(source / 'vita3k/util/include/util/uwp_profile.h').write_text('''// SPDX-License-Identifier: GPL-2.0-or-later
+// Xbox port: which host threads are busy, reported once a minute
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+
+namespace uwp_profile {
+// Guest memory accesses that trapped (protected pages: texture and buffer tracking)
+inline std::atomic<uint64_t> memory_traps{ 0 };
+#if defined(VITA3K_UWP) && defined(BUILD_LIBRETRO)
+// Notes the calling host thread under a name; defined in libretro_vita3k.cpp
+void register_thread(const char *name);
+#else
+inline void register_thread(const char *) {}
+#endif
+} // namespace uwp_profile
+''', encoding='utf-8')
+
+mem_cpp = 'vita3k/mem/src/mem.cpp'
+replace(mem_cpp, '#include <util/log.h>\n', '#include <util/log.h>\n#include <util/uwp_profile.h>\n')
+replace(mem_cpp, '''bool handle_access_violation(MemState &state, uint8_t *addr, bool write) noexcept {
+''', '''bool handle_access_violation(MemState &state, uint8_t *addr, bool write) noexcept {
+    uwp_profile::memory_traps.fetch_add(1, std::memory_order_relaxed);
+''')
+
+thread_cpp = 'vita3k/kernel/src/thread.cpp'
+replace(thread_cpp, '#include <util/log.h>\n', '#include <util/log.h>\n#include <util/uwp_profile.h>\n')
+replace(thread_cpp, '''    } cpu_state_guard;
+    set_current_cpu_state(cpu.get());
+''', '''    } cpu_state_guard;
+    set_current_cpu_state(cpu.get());
+    if (top_level)
+        uwp_profile::register_thread(("game: " + name).c_str());
+''')
+
+replace(pipeline_cache, '''void PipelineCache::compiler_thread(MemState &mem) {
+    moodycamel::ConsumerToken consumer_token(pipeline_compile_queue);
+''', '''void PipelineCache::compiler_thread(MemState &mem) {
+    uwp_profile::register_thread("shader compiler");
+    moodycamel::ConsumerToken consumer_token(pipeline_compile_queue);
+''')
+replace(pipeline_cache, '#include <renderer/vulkan/pipeline_cache.h>\n', '#include <renderer/vulkan/pipeline_cache.h>\n#include <util/uwp_profile.h>\n')
+
+replace(lr, '''        libretro.render_thread = std::make_unique<std::thread>([]() {
+            EmuEnvState &emuenv = *libretro.emuenv;''', '''        libretro.render_thread = std::make_unique<std::thread>([]() {
+            uwp_profile::register_thread("renderer");
+            EmuEnvState &emuenv = *libretro.emuenv;''')
+replace(lr, '#include <util/fs.h>\n', '''#include <util/fs.h>
+#include <util/uwp_profile.h>
+''', count=1)
+replace(lr, '''RETRO_API void retro_run(void) {
+    if (!libretro.game_loaded || !libretro.emuenv)
+        return;
+''', '''#ifdef VITA3K_UWP
+namespace uwp_profile {
+namespace {
+struct ProfiledThread {
+    std::string name;
+    HANDLE handle;
+    uint64_t last;
+};
+std::mutex g_profile_mutex;
+std::vector<ProfiledThread> g_profiled;
+std::chrono::steady_clock::time_point g_profile_since = std::chrono::steady_clock::now();
+uint64_t g_profile_traps = 0;
+uint64_t busy_100ns(HANDLE handle) {
+    FILETIME created, exited, kernel_time, user_time;
+    if (!GetThreadTimes(handle, &created, &exited, &kernel_time, &user_time))
+        return 0;
+    const auto value = [](const FILETIME &t) { return (static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
+    return value(kernel_time) + value(user_time);
+}
+} // namespace
+
+void register_thread(const char *name) {
+    HANDLE handle = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &handle,
+            THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0))
+        return;
+    std::lock_guard<std::mutex> lock(g_profile_mutex);
+    if (g_profiled.size() >= 256) {
+        CloseHandle(handle);
+        return;
+    }
+    g_profiled.push_back({ name ? name : "?", handle, busy_100ns(handle) });
+}
+
+// How busy each thread was since the last report, as a share of one core
+static void report() {
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - g_profile_since).count();
+    if (seconds < 1.0)
+        return;
+    g_profile_since = now;
+    std::vector<std::pair<double, std::string>> busy;
+    double total = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_profile_mutex);
+        std::map<std::string, double> by_name;
+        for (auto it = g_profiled.begin(); it != g_profiled.end();) {
+            const uint64_t t = busy_100ns(it->handle);
+            const double share = t > it->last ? (t - it->last) / (seconds * 1e5) : 0.0; // percent of a core
+            it->last = t;
+            by_name[it->name] += share;
+            total += share;
+            if (WaitForSingleObject(it->handle, 0) == WAIT_OBJECT_0) {
+                CloseHandle(it->handle);
+                it = g_profiled.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (const auto &[name, share] : by_name)
+            busy.emplace_back(share, name);
+    }
+    std::sort(busy.begin(), busy.end(), std::greater<>());
+    std::string line;
+    for (const auto &[share, name] : busy) {
+        if (share < 2.0 || line.size() > 400)
+            break;
+        line += fmt::format("{}{} {:.0f}%", line.empty() ? "" : ", ", name, share);
+    }
+    const uint64_t traps = memory_traps.load(std::memory_order_relaxed);
+    LOG_INFO("Thread load (100% = one core busy all the time): {} (all {:.0f}%); guest memory traps {:.0f}/s",
+        line.empty() ? "nothing busy" : line, total, (traps - g_profile_traps) / seconds);
+    g_profile_traps = traps;
+}
+} // namespace uwp_profile
+#endif
+
+RETRO_API void retro_run(void) {
+    if (!libretro.game_loaded || !libretro.emuenv)
+        return;
+#ifdef VITA3K_UWP
+    {
+        static bool registered = false;
+        if (!registered) {
+            registered = true;
+            uwp_profile::register_thread("emulation loop");
+        }
+        static uint64_t profile_ticks = 0;
+        if (++profile_ticks % 3600 == 0)
+            uwp_profile::report();
+    }
+#endif
+''')
+print('Profile: each minute, how busy the game, renderer and compiler threads were.')
+
+# The CPU itself. Atomics (the LDREX/STREX pairs behind every lock and
+# reference count) went through a C++ callback each; with fastmem they run as
+# host instructions, as in other Dynarmic emulators. NEON no longer switches
+# the host's floating-point mode around every instruction, and NaN results
+# are not rewritten to the ARM default one by one: the two "unsafe" settings
+# other emulators ship on by default, at no cost to games seen so far.
+dyn = 'vita3k/cpu/src/dynarmic_cpu.cpp'
+replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimizations : Dynarmic::no_optimizations;''', '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimizations : Dynarmic::no_optimizations;
+#ifdef VITA3K_UWP
+    if (cpu_opt) {
+        config.unsafe_optimizations = true;
+        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreStandardFPCRValue;
+        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN;
+        if (config.fastmem_pointer) {
+            config.fastmem_exclusive_access = true;
+            config.recompile_on_exclusive_fastmem_failure = true;
+        }
+    }
+#endif''')
+print('CPU: exclusive accesses through fastmem, and the two usual unsafe FP settings.')
