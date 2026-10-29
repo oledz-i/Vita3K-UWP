@@ -2104,6 +2104,12 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
         config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_ReducedErrorFP;
         // No Vita game runs big-endian; skip the check on every memory access.
         config.always_little_endian = true;
+        // Hint instructions (PLD preloads, YIELD, SEV, WFE) each ended the JIT
+        // block and called back into the emulator, which did nothing for them.
+        // Vita libc's memcpy and every spin lock are full of them; as plain
+        // no-ops they cost nothing. (WFI becomes a no-op too, so a game idling
+        // on it spins instead of sleeping.)
+        config.hook_hint_instructions = false;
         // Fast mode (opt-in): LDREX/STREX no longer consult the shared monitor.
         // Quicker locks and reference counts; a game that relies on exact
         // exclusive-access behaviour can hang or misbehave.
@@ -2117,33 +2123,38 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
 #endif''')
 print('CPU: exclusive accesses through fastmem, and the two usual unsafe FP settings.')
 
-# Uncharted: Golden Abyss ships a launcher. Its eboot.bin is a few hundred
+# Uncharted: Golden Abyss ships a launcher. Its eboot.bin is a few thousand
 # bytes that start the game proper (uncharted.self) with sceAppMgrLoadExec.
 # The desktop app answers that call by restarting the title with the new
 # executable; this core never reads the request (nothing here takes the
 # launch request), so the launcher sat in a loop on its last splash frame on
-# both renderers. A launcher whose target is in the title's folder is skipped
-# and the target is loaded straight away, which is where the launcher ends up.
+# both renderers. A launcher is told by its size, and the known target is
+# loaded in its place; if that fails the launcher loads as before.
 loader = 'vita3k/libretro/libretro_game_loader.cpp'
-replace(loader, '''    emuenv.self_path = !emuenv.cfg.self_path.empty() ? emuenv.cfg.self_path : EBOOT_PATH;
-''', '''    emuenv.self_path = !emuenv.cfg.self_path.empty() ? emuenv.cfg.self_path : EBOOT_PATH;
+replace(loader, """    main_module_id = load_module(emuenv, "app0:" + emuenv.self_path);
+    if (main_module_id >= 0) {""", """    main_module_id = -1;
 #ifdef VITA3K_UWP
     if (emuenv.cfg.self_path.empty()) {
         // Launchers known to hand over to another executable with sceAppMgrLoadExec.
         static constexpr const char *launcher_targets[] = { "uncharted.self" };
-        const fs::path app_dir = emuenv.vita_fs_path / "ux0/app" / emuenv.io.app_path;
-        std::error_code size_ec, exists_ec;
-        const auto eboot_size = fs::file_size(app_dir / EBOOT_PATH, size_ec);
-        for (const char *target : launcher_targets) {
-            if (!size_ec && eboot_size < 0x2000 && fs::exists(app_dir / target, exists_ec)) {
-                LOG_INFO("eboot.bin is a launcher ({} bytes); starting {} directly", eboot_size, target);
-                emuenv.self_path = target;
-                break;
+        vfs::FileBuffer eboot;
+        if (vfs::read_app_file(eboot, emuenv.vita_fs_path, emuenv.io.app_path, EBOOT_PATH) && eboot.size() < 0x10000) {
+            for (const char *target : launcher_targets) {
+                LOG_INFO("eboot.bin is a launcher ({} bytes); trying {} directly", eboot.size(), target);
+                main_module_id = load_module(emuenv, std::string("app0:") + target);
+                if (main_module_id >= 0) {
+                    emuenv.self_path = target;
+                    LOG_INFO("Started {} in place of the launcher", target);
+                    break;
+                }
+                LOG_WARN("{} did not load; using the launcher", target);
             }
         }
     }
+    if (main_module_id < 0)
 #endif
-''')
+    main_module_id = load_module(emuenv, "app0:" + emuenv.self_path);
+    if (main_module_id >= 0) {""")
 print('Launchers: Uncharted starts uncharted.self directly instead of idling in its launcher.')
 
 # Every import call (millions a second in a busy game) read the clock to see

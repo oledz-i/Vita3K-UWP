@@ -55,7 +55,7 @@ label_overrides = {
 }
 info_overrides = {
     'vita3k_backend_renderer': 'Vulkan: the tested path (Mesa Dozen). OpenGL (experimental): Mesa\'s OpenGL on D3D12; surface sync works only here, which some games need (Danganronpa item checks). Takes effect when a game starts.',
-    'vita3k_cpu_opt': 'Fast skips the emulator\'s exclusive-access bookkeeping: locks and reference counts run quicker, which helps threaded games like Minecraft. It can make a game hang or misbehave, so keep a backup of its saves. On: the Vita\'s ARM code is recompiled to x64 as it runs, which is what makes games playable. Off: far slower; only for telling a JIT problem from a game problem.',
+    'vita3k_cpu_opt': 'On: the Vita\'s ARM code is recompiled to x64 as it runs, which is what makes games playable. Off: far slower; only for telling a JIT problem from a game problem.',
 }
 
 
@@ -77,8 +77,6 @@ for key in shown:
     if key in xbox_notes and key not in info_overrides:
         info = (info + ' ' + xbox_notes[key]).strip()
     vals = list(o['values'])
-    if key == 'vita3k_cpu_opt':
-        vals.append(['fast', 'Fast (experimental: quicker locks, can hang some games)'])
     values = ', '.join('{ "%s", %s }' % (v[0], cstr(label_of(v[0], v[1]))) for v in vals)
     category = category_names.get(o['cat'], cats.get(o['cat'], o['cat']))
     rows.append('    { "%s", %s, %s, %s, "%s", %d, { %s } },' % (
