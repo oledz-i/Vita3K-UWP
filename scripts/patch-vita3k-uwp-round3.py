@@ -2096,6 +2096,11 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
         config.unsafe_optimizations = true;
         config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreStandardFPCRValue;
         config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN;
+        // Reciprocal and reciprocal-square-root estimates (the heart of vector
+        // normalisation) may be a little more exact than the ARM table.
+        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_ReducedErrorFP;
+        // No Vita game runs big-endian; skip the check on every memory access.
+        config.always_little_endian = true;
         if (config.fastmem_pointer) {
             config.fastmem_exclusive_access = true;
             config.recompile_on_exclusive_fastmem_failure = true;
@@ -2103,3 +2108,57 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
     }
 #endif''')
 print('CPU: exclusive accesses through fastmem, and the two usual unsafe FP settings.')
+
+# Uncharted: Golden Abyss ships a launcher. Its eboot.bin is a few hundred
+# bytes that start the game proper (uncharted.self) with sceAppMgrLoadExec.
+# The desktop app answers that call by restarting the title with the new
+# executable; this core never reads the request (nothing here takes the
+# launch request), so the launcher sat in a loop on its last splash frame on
+# both renderers. A launcher whose target is in the title's folder is skipped
+# and the target is loaded straight away, which is where the launcher ends up.
+loader = 'vita3k/libretro/libretro_game_loader.cpp'
+replace(loader, '''    emuenv.self_path = !emuenv.cfg.self_path.empty() ? emuenv.cfg.self_path : EBOOT_PATH;
+''', '''    emuenv.self_path = !emuenv.cfg.self_path.empty() ? emuenv.cfg.self_path : EBOOT_PATH;
+#ifdef VITA3K_UWP
+    if (emuenv.cfg.self_path.empty()) {
+        // Launchers known to hand over to another executable with sceAppMgrLoadExec.
+        static constexpr const char *launcher_targets[] = { "uncharted.self" };
+        const fs::path app_dir = emuenv.vita_fs_path / "ux0/app" / emuenv.io.app_path;
+        std::error_code size_ec, exists_ec;
+        const auto eboot_size = fs::file_size(app_dir / EBOOT_PATH, size_ec);
+        for (const char *target : launcher_targets) {
+            if (!size_ec && eboot_size < 0x2000 && fs::exists(app_dir / target, exists_ec)) {
+                LOG_INFO("eboot.bin is a launcher ({} bytes); starting {} directly", eboot_size, target);
+                emuenv.self_path = target;
+                break;
+            }
+        }
+    }
+#endif
+''')
+print('Launchers: Uncharted starts uncharted.self directly instead of idling in its launcher.')
+
+# Every import call (millions a second in a busy game) read the clock to see
+# whether a dialog had been open lately. Now the clock is only read while a
+# dialog is open or the 30-second window after one is still running.
+replace(module_parent, '''std::atomic<int64_t> uwp_trace_until{ 0 };
+''', '''std::atomic<int64_t> uwp_trace_until{ 0 };
+std::atomic<bool> uwp_trace_armed{ false };
+''')
+replace(module_parent, '''    const bool open = emuenv.common_dialog.type != NO_DIALOG;
+    const int64_t now = uwp_trace_now_ms();
+    if (open)
+        uwp_trace_until.store(now + 30000, std::memory_order_relaxed);
+    else if (now > uwp_trace_until.load(std::memory_order_relaxed))
+        return;''', '''    const bool open = emuenv.common_dialog.type != NO_DIALOG;
+    if (!open && !uwp_trace_armed.load(std::memory_order_relaxed))
+        return;
+    const int64_t now = uwp_trace_now_ms();
+    if (open) {
+        uwp_trace_until.store(now + 30000, std::memory_order_relaxed);
+        uwp_trace_armed.store(true, std::memory_order_relaxed);
+    } else if (now > uwp_trace_until.load(std::memory_order_relaxed)) {
+        uwp_trace_armed.store(false, std::memory_order_relaxed);
+        return;
+    }''')
+print('Speed: imports no longer read the clock unless a dialog was open lately; ARM reciprocal estimates and endianness checks are cheaper.')
