@@ -8,6 +8,8 @@
 
 <p align="center"><b>PS Vita games on your Xbox Series X|S.</b><br>A port of the Vita3K emulator with a frontend built for the couch.</p>
 
+<p align="center"><a href="https://ko-fi.com/Oledz"><img src="https://img.shields.io/badge/Support%20on-Ko--fi-ff5e5b?logo=ko-fi&logoColor=white" alt="Support on Ko-fi"></a></p>
+
 <p align="center"><a href="docs/INSTALL.md">Install</a> · <a href="docs/COMPATIBILITY.md">Compatibility</a> · <a href="docs/UI.md">The frontend</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 
 <p align="center"><img src="docs/assets/screens/home.png" alt="Home screen" width="100%"></p>
@@ -67,6 +69,10 @@ The [install guide](docs/INSTALL.md) walks through each step.
 ## Helping out
 
 Bug reports are most useful with the game, its title ID, the renderer you used and `vita3k-runtime.log`; the install guide shows where to find the log. Please report problems **here**, not to the Vita3K team: this port's bugs aren't theirs. Building it yourself is covered in [BUILDING.md](docs/BUILDING.md), and how to contribute in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Support the project
+
+Vita3K for Xbox is free and I work on it in my spare time. If it's useful to you and you'd like to chip in, you can [buy me a coffee on Ko-fi](https://ko-fi.com/Oledz). It's entirely optional, and the app stays the same either way. Bug reports and good logs help just as much.
 
 ## Credits
 
