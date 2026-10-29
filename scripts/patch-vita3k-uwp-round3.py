@@ -1944,6 +1944,8 @@ print('PKG: an update or DLC installed before its game reports success.')
 namespace uwp_profile {
 // Guest memory accesses that trapped (protected pages: texture and buffer tracking)
 inline std::atomic<uint64_t> memory_traps{ 0 };
+// "Fast" CPU mode: exclusive accesses skip the global monitor (set from the CPU option)
+inline std::atomic<bool> fast_atomics{ false };
 #if defined(VITA3K_UWP) && defined(BUILD_LIBRETRO)
 // Notes the calling host thread under a name; defined in libretro_vita3k.cpp
 void register_thread(const char *name);
@@ -2090,6 +2092,7 @@ print('Profile: each minute, how busy the game, renderer and compiler threads we
 # are not rewritten to the ARM default one by one: the two "unsafe" settings
 # other emulators ship on by default, at no cost to games seen so far.
 dyn = 'vita3k/cpu/src/dynarmic_cpu.cpp'
+replace(dyn, '#include <util/log.h>\n', '#include <util/log.h>\n#include <util/uwp_profile.h>\n')
 replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimizations : Dynarmic::no_optimizations;''', '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimizations : Dynarmic::no_optimizations;
 #ifdef VITA3K_UWP
     if (cpu_opt) {
@@ -2101,6 +2104,11 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
         config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_ReducedErrorFP;
         // No Vita game runs big-endian; skip the check on every memory access.
         config.always_little_endian = true;
+        // Fast mode (opt-in): LDREX/STREX no longer consult the shared monitor.
+        // Quicker locks and reference counts; a game that relies on exact
+        // exclusive-access behaviour can hang or misbehave.
+        if (uwp_profile::fast_atomics.load(std::memory_order_relaxed))
+            config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreGlobalMonitor;
         if (config.fastmem_pointer) {
             config.fastmem_exclusive_access = true;
             config.recompile_on_exclusive_fastmem_failure = true;
@@ -2162,3 +2170,19 @@ replace(module_parent, '''    const bool open = emuenv.common_dialog.type != NO_
         return;
     }''')
 print('Speed: imports no longer read the clock unless a dialog was open lately; ARM reciprocal estimates and endianness checks are cheaper.')
+
+# The CPU option gets a third value, "fast", for the atomics shortcut above.
+replace('vita3k/libretro/libretro_vita3k.cpp', '''    read_core_option("vita3k_cpu_opt", "enabled", [](const char *value) {
+        libretro.cfg->current_config.cpu_opt = parse_enabled_option(value, true);
+    });''', '''    read_core_option("vita3k_cpu_opt", "enabled", [](const char *value) {
+#ifdef VITA3K_UWP
+        const bool fast = normalize_option_token(value) == "fast";
+        uwp_profile::fast_atomics.store(fast, std::memory_order_relaxed);
+        libretro.cfg->current_config.cpu_opt = fast || parse_enabled_option(value, true);
+        if (fast)
+            lr_log(RETRO_LOG_INFO, "CPU: fast mode (exclusive accesses skip the global monitor)\\n");
+#else
+        libretro.cfg->current_config.cpu_opt = parse_enabled_option(value, true);
+#endif
+    });''')
+print('CPU option: a Fast mode that skips the exclusive monitor.')
