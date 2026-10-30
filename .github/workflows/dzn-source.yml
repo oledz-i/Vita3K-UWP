@@ -1,0 +1,53 @@
+name: Copy the patched Dozen source to a branch
+
+# Builds the Mesa Dozen files exactly as the Xbox package does (pinned Mesa base,
+# then the OnyxEMU series, then this port's own patches) and saves them on the
+# `dzn-source` branch, so the pipeline code can be read and patched here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: astra-undertale
+          path: port
+      - name: Fetch Mesa at the pinned base and the OnyxEMU patches
+        run: |
+          set -euo pipefail
+          lock=port/core-candidates.lock.json
+          base=$(jq -r .onyx_renderer_source.mesa_patch_base "$lock")
+          onyx=$(jq -r .onyx_renderer_source.commit "$lock")
+          repo=$(jq -r .onyx_renderer_source.repository "$lock")
+          git clone --depth 25 "$repo" onyx
+          git -C onyx fetch --depth 1 origin "$onyx"
+          git -C onyx checkout --detach --force "$onyx"
+          mkdir mesa && cd mesa
+          git init -q
+          git remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
+          git fetch --depth 1 origin "$base"
+          git checkout -q FETCH_HEAD
+      - name: Apply the patch series
+        run: |
+          set -euo pipefail
+          cd mesa
+          for p in ../onyx/patches/mesa/*.patch ../port/scripts/dozen-patches/*.patch; do
+            echo "== $p"
+            git apply --whitespace=nowarn "$p" || patch -p1 --no-backup-if-mismatch < "$p"
+          done
+      - name: Save the Dozen files on a branch
+        run: |
+          set -euo pipefail
+          mkdir out
+          cp mesa/src/microsoft/vulkan/dzn_*.c mesa/src/microsoft/vulkan/dzn_*.h out/
+          cd out
+          git init -q
+          git checkout -q -b dzn-source
+          git add .
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -q -m "Patched Dozen sources used by the Xbox package"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" dzn-source
