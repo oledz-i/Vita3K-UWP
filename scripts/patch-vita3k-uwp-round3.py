@@ -2197,3 +2197,16 @@ replace('vita3k/libretro/libretro_vita3k.cpp', '''    read_core_option("vita3k_c
 #endif
     });''')
 print('CPU option: a Fast mode that skips the exclusive monitor.')
+
+# New shaders compile on background threads, and a draw is skipped until its
+# pipeline is ready: Minecraft's trees and chunks appeared half-drawn and
+# filled in late. The console has eight logical cores and the compiler had
+# three; a fourth clears a burst of new shaders sooner.
+replace('vita3k/renderer/src/vulkan/pipeline_cache.cpp', '''    else if (nb_logical_threads >= 8)
+        nb_worker_threads = 3;''', '''    else if (nb_logical_threads >= 8)
+#ifdef VITA3K_UWP
+        nb_worker_threads = 4;
+#else
+        nb_worker_threads = 3;
+#endif''')
+print('Shaders: four background compiler threads on the console.')
