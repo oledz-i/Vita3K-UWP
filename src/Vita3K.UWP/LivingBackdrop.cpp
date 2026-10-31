@@ -1,0 +1,282 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#include <collection.h>
+#include "LivingBackdrop.h"
+#include <WindowsNumerics.h>
+#include <algorithm>
+#include <cmath>
+#include <random>
+#include <vector>
+
+using namespace Windows::Foundation;
+using namespace Windows::Foundation::Numerics;
+using namespace Windows::UI;
+using namespace Windows::UI::Composition;
+using namespace Windows::UI::Xaml;
+using namespace Windows::UI::Xaml::Hosting;
+
+namespace vita3k_uwp {
+namespace {
+TimeSpan Seconds(double s) {
+    TimeSpan t;
+    t.Duration = static_cast<long long>(s * 10000000.0);
+    return t;
+}
+Color WithAlpha(Color c, int a) {
+    return ColorHelper::FromArgb(static_cast<unsigned char>((std::max)(0, (std::min)(255, a))), c.R, c.G, c.B);
+}
+Color Scale(Color c, double f) {
+    const auto ch = [f](unsigned char v) {
+        return static_cast<unsigned char>((std::max)(0.0, (std::min)(255.0, v * f)));
+    };
+    return ColorHelper::FromArgb(255, ch(c.R), ch(c.G), ch(c.B));
+}
+Color Mix(Color a, Color b, double t) {
+    const auto ch = [t](unsigned char x, unsigned char y) {
+        return static_cast<unsigned char>(x + (y - x) * t);
+    };
+    return ColorHelper::FromArgb(255, ch(a.R, b.R), ch(a.G, b.G), ch(a.B, b.B));
+}
+
+struct Scene {
+    Compositor^ c;
+    ContainerVisual^ root;
+    float w;
+    float h;
+    std::mt19937 rng;
+    CompositionEasingFunction^ smooth;
+
+    float Rand(float lo, float hi) {
+        std::uniform_real_distribution<float> d(lo, hi);
+        return d(rng);
+    }
+
+    // A soft round light: bright core fading to nothing.
+    CompositionBrush^ Glow(Color color, int core, float mid = 0.45f) {
+        auto brush = c->CreateRadialGradientBrush();
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.0f, WithAlpha(color, core)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(mid, WithAlpha(color, core / 3)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(1.0f, WithAlpha(color, 0)));
+        return brush;
+    }
+
+    // A ring with a lit rim, like the bubbles of the Vita's home screen.
+    CompositionBrush^ Ring(Color color, int rim) {
+        auto brush = c->CreateRadialGradientBrush();
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.0f, WithAlpha(color, rim / 10)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.70f, WithAlpha(color, rim / 6)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.88f, WithAlpha(color, rim)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.96f, WithAlpha(color, rim / 3)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(1.0f, WithAlpha(color, 0)));
+        return brush;
+    }
+
+    SpriteVisual^ Sprite(CompositionBrush^ brush, float width, float height, float x, float y) {
+        auto sprite = c->CreateSpriteVisual();
+        sprite->Brush = brush;
+        sprite->Size = float2(width, height);
+        sprite->Offset = float3(x, y, 0);
+        root->Children->InsertAtTop(sprite);
+        return sprite;
+    }
+
+    void Loop(Visual^ visual, Platform::String^ property, const std::vector<float3>& points, double seconds, double delay = 0) {
+        auto animation = c->CreateVector3KeyFrameAnimation();
+        const size_t count = points.size();
+        for (size_t i = 0; i < count; ++i)
+            animation->InsertKeyFrame(count == 1 ? 1.0f : static_cast<float>(i) / static_cast<float>(count - 1), points[i], smooth);
+        animation->Duration = Seconds(seconds);
+        animation->DelayTime = Seconds(delay);
+        animation->IterationBehavior = AnimationIterationBehavior::Forever;
+        visual->StartAnimation(property, animation);
+    }
+
+    void LoopScalar(Visual^ visual, Platform::String^ property, const std::vector<float>& values, double seconds, double delay = 0,
+                    bool linear = false) {
+        auto animation = c->CreateScalarKeyFrameAnimation();
+        const size_t count = values.size();
+        for (size_t i = 0; i < count; ++i) {
+            const float progress = count == 1 ? 1.0f : static_cast<float>(i) / static_cast<float>(count - 1);
+            if (linear) animation->InsertKeyFrame(progress, values[i], c->CreateLinearEasingFunction());
+            else animation->InsertKeyFrame(progress, values[i], smooth);
+        }
+        animation->Duration = Seconds(seconds);
+        animation->DelayTime = Seconds(delay);
+        animation->IterationBehavior = AnimationIterationBehavior::Forever;
+        visual->StartAnimation(property, animation);
+    }
+
+    // Large lights wandering slowly across the screen.
+    void Wanderers(Color a, Color b, int count, int core) {
+        for (int i = 0; i < count; ++i) {
+            const float size = Rand(0.55f, 0.95f) * (std::max)(w, h);
+            const Color color = i % 2 == 0 ? a : b;
+            auto glow = Sprite(Glow(color, core), size, size, 0, 0);
+            glow->CenterPoint = float3(size / 2, size / 2, 0);
+            std::vector<float3> path;
+            for (int k = 0; k < 4; ++k)
+                path.push_back(float3(Rand(-0.45f, 0.75f) * w, Rand(-0.5f, 0.6f) * h, 0));
+            path.push_back(path.front());
+            Loop(glow, L"Offset", path, Rand(38, 70), 0);
+            Loop(glow, L"Scale", { float3(1, 1, 1), float3(1.18f, 1.18f, 1), float3(0.92f, 0.92f, 1), float3(1, 1, 1) }, Rand(18, 30));
+        }
+    }
+
+    // Particles that travel from one edge to the other, fading in and out.
+    void Stream(CompositionBrush^ brush, int count, float minSize, float maxSize, bool upward, float sway,
+                float minSeconds, float maxSeconds, float peakOpacity) {
+        for (int i = 0; i < count; ++i) {
+            const float size = Rand(minSize, maxSize);
+            const float x = Rand(-0.05f, 1.0f) * w;
+            const float start = upward ? h + size : -size;
+            const float end = upward ? -size * 2 : h + size;
+            auto particle = Sprite(brush, size, size, x, start);
+            particle->Opacity = 0;
+            const float drift = Rand(-sway, sway);
+            const double seconds = Rand(minSeconds, maxSeconds);
+            const double delay = Rand(0, static_cast<float>(seconds));
+            Loop(particle, L"Offset", {
+                float3(x, start, 0),
+                float3(x + drift, start + (end - start) * 0.33f, 0),
+                float3(x - drift * 0.6f, start + (end - start) * 0.66f, 0),
+                float3(x + drift * 0.4f, end, 0) }, seconds, delay);
+            const float peak = peakOpacity * Rand(0.55f, 1.0f);
+            LoopScalar(particle, L"Opacity", { 0.0f, peak, peak * 0.85f, 0.0f }, seconds, delay);
+        }
+    }
+
+    // Points that stay put and twinkle.
+    void Stars(Color color, int count) {
+        auto brush = Glow(color, 255, 0.25f);
+        for (int i = 0; i < count; ++i) {
+            const float size = Rand(3, 9);
+            auto star = Sprite(brush, size, size, Rand(0, 1) * w, Rand(0, 1) * h);
+            const float low = Rand(0.05f, 0.3f);
+            const float high = Rand(0.5f, 1.0f);
+            LoopScalar(star, L"Opacity", { low, high, low }, Rand(2.5f, 7.0f), Rand(0, 4));
+        }
+    }
+
+    void Vignette(Color edge) {
+        auto brush = c->CreateRadialGradientBrush();
+        brush->EllipseRadius = float2(0.75f, 0.75f);
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.0f, WithAlpha(edge, 0)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(0.55f, WithAlpha(edge, 0)));
+        brush->ColorStops->Append(c->CreateColorGradientStop(1.0f, WithAlpha(edge, 200)));
+        Sprite(brush, w, h, 0, 0);
+    }
+};
+}
+
+void LivingBackdrop::Attach(FrameworkElement^ host) {
+    host_ = host;
+    compositor_ = ElementCompositionPreview::GetElementVisual(host)->Compositor;
+    scene_ = compositor_->CreateContainerVisual();
+    ElementCompositionPreview::SetElementChildVisual(host, scene_);
+    host->SizeChanged += ref new SizeChangedEventHandler([this](Platform::Object^, SizeChangedEventArgs^ e) {
+        const float w = static_cast<float>(e->NewSize.Width);
+        const float h = static_cast<float>(e->NewSize.Height);
+        if (std::fabs(w - width_) < 1 && std::fabs(h - height_) < 1) return;
+        width_ = w;
+        height_ = h;
+        Build();
+    });
+}
+
+void LivingBackdrop::SetTheme(int theme, Color base, Color accent, Color glow) {
+    theme_ = theme;
+    base_ = base;
+    accent_ = accent;
+    glow_ = glow;
+    Build();
+}
+
+void LivingBackdrop::SetActive(bool active) {
+    if (active == active_) return;
+    active_ = active;
+    Build();
+}
+
+void LivingBackdrop::Build() {
+    if (!scene_) return;
+    // Removing the visuals ends their animations as well.
+    scene_->Children->RemoveAll();
+    if (!active_ || width_ < 2 || height_ < 2) return;
+    scene_->Size = float2(width_, height_);
+
+    Scene s{ compositor_, scene_, width_, height_, std::mt19937(static_cast<unsigned>(theme_) * 7919u + 17u), nullptr };
+    s.smooth = compositor_->CreateCubicBezierEasingFunction(float2(0.45f, 0.0f), float2(0.55f, 1.0f));
+
+    // The floor: the theme's base colour, lifted towards the top corner.
+    auto floor = compositor_->CreateLinearGradientBrush();
+    floor->StartPoint = float2(0, 0);
+    floor->EndPoint = float2(1, 1);
+    floor->ColorStops->Append(compositor_->CreateColorGradientStop(0.0f, Mix(Scale(base_, 1.6), glow_, 0.35)));
+    floor->ColorStops->Append(compositor_->CreateColorGradientStop(0.55f, base_));
+    floor->ColorStops->Append(compositor_->CreateColorGradientStop(1.0f, Scale(base_, 0.6)));
+    s.Sprite(floor, width_, height_, 0, 0);
+
+    const Color white = ColorHelper::FromArgb(255, 255, 255, 255);
+    switch (theme_) {
+    case 1: { // Aurora: curtains of light swaying over a dark sea, drifting motes
+        s.Wanderers(glow_, Mix(glow_, accent_, 0.4), 2, 150);
+        for (int i = 0; i < 3; ++i) {
+            const float bandW = width_ * s.Rand(0.9f, 1.3f);
+            const float bandH = height_ * s.Rand(0.28f, 0.42f);
+            auto band = s.Sprite(s.Glow(i == 1 ? Mix(accent_, white, 0.25) : accent_, 105, 0.35f), bandW, bandH,
+                                 s.Rand(-0.3f, 0.1f) * width_, height_ * (0.08f + 0.17f * i));
+            band->CenterPoint = float3(bandW / 2, bandH / 2, 0);
+            band->RotationAngleInDegrees = s.Rand(-14, -4);
+            const float x = band->Offset.x;
+            const float y = band->Offset.y;
+            s.Loop(band, L"Offset", { float3(x, y, 0), float3(x + width_ * 0.18f, y - height_ * 0.05f, 0),
+                                      float3(x - width_ * 0.08f, y + height_ * 0.04f, 0), float3(x, y, 0) }, s.Rand(26, 40));
+            s.LoopScalar(band, L"Opacity", { 0.35f, 0.9f, 0.5f, 0.35f }, s.Rand(14, 22));
+            s.LoopScalar(band, L"RotationAngleInDegrees", { -12.0f, -4.0f, -12.0f }, s.Rand(30, 44));
+        }
+        s.Stream(s.Glow(Mix(accent_, white, 0.5), 230, 0.3f), 26, 4, 10, true, 70, 22, 38, 0.7f);
+        break;
+    }
+    case 2: { // Ember: a warm stage, sparks rising from below
+        s.Wanderers(glow_, Mix(glow_, accent_, 0.5), 3, 170);
+        auto heat = s.Sprite(s.Glow(accent_, 120, 0.4f), width_ * 1.4f, height_ * 0.9f, -width_ * 0.2f, height_ * 0.55f);
+        s.LoopScalar(heat, L"Opacity", { 0.55f, 0.9f, 0.6f, 0.55f }, 9);
+        s.Stream(s.Glow(Mix(accent_, ColorHelper::FromArgb(255, 255, 214, 140), 0.5), 255, 0.25f), 46, 3, 9, true, 90, 7, 15, 0.95f);
+        break;
+    }
+    case 3: { // Glacier: cold light and snow falling past
+        s.Wanderers(glow_, Mix(glow_, accent_, 0.3), 3, 140);
+        s.Stream(s.Glow(white, 235, 0.35f), 58, 3, 11, false, 110, 14, 30, 0.85f);
+        break;
+    }
+    case 4: { // Orbit: a starfield, a planet glow and a ring turning around it
+        s.Stars(white, 90);
+        s.Wanderers(glow_, Mix(glow_, accent_, 0.5), 2, 130);
+        const float planet = (std::min)(width_, height_) * 0.62f;
+        const float px = width_ * 0.66f;
+        const float py = height_ * 0.18f;
+        auto halo = s.Sprite(s.Glow(accent_, 140, 0.3f), planet, planet, px, py);
+        s.LoopScalar(halo, L"Opacity", { 0.6f, 1.0f, 0.6f }, 12);
+        const float ringW = planet * 1.9f;
+        const float ringH = planet * 0.5f;
+        auto ring = s.Sprite(s.Ring(Mix(accent_, white, 0.3), 170), ringW, ringH,
+                             px + planet / 2 - ringW / 2, py + planet / 2 - ringH / 2);
+        ring->CenterPoint = float3(ringW / 2, ringH / 2, 0);
+        s.LoopScalar(ring, L"RotationAngleInDegrees", { -18.0f, -8.0f, -18.0f }, 26);
+        auto moon = s.Sprite(s.Glow(white, 255, 0.2f), 18, 18, px, py);
+        const float cx = px + planet / 2 - 9;
+        const float cy = py + planet / 2 - 9;
+        s.Loop(moon, L"Offset", { float3(cx - ringW * 0.46f, cy + ringH * 0.1f, 0), float3(cx, cy + ringH * 0.42f, 0),
+                                  float3(cx + ringW * 0.46f, cy - ringH * 0.1f, 0), float3(cx, cy - ringH * 0.42f, 0),
+                                  float3(cx - ringW * 0.46f, cy + ringH * 0.1f, 0) }, 24);
+        break;
+    }
+    default: { // Onyx: rose light and the Vita's home-screen bubbles floating up
+        s.Wanderers(glow_, Mix(glow_, accent_, 0.45), 3, 165);
+        s.Stream(s.Ring(Mix(accent_, white, 0.35), 150), 18, 40, 140, true, 120, 26, 48, 0.7f);
+        s.Stream(s.Glow(Mix(accent_, white, 0.6), 220, 0.3f), 20, 4, 9, true, 60, 18, 30, 0.6f);
+        break;
+    }
+    }
+    s.Vignette(Scale(base_, 0.35));
+}
+}

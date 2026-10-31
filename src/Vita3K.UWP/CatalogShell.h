@@ -3,11 +3,19 @@
 #include "D3D12Host.h"
 #include "GameFormats.h"
 #include "VitaLibretroHost.h"
+#include "LivingBackdrop.h"
+#include "GameInfo.h"
+#include <set>
+#include <map>
+#include "CueAudio.h"
+#include <functional>
 #include <collection.h>
 #include <ppltasks.h>
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <atomic>
+#include <mutex>
 
 namespace Vita3KUWP {
 struct LibraryGame {
@@ -21,12 +29,62 @@ struct LibraryGame {
     Platform::String^ validation = L"Awaiting source validation";
 };
 
+// The PS3-style home (XMB): categories across, their items down.
+struct XmbEntry {
+    std::wstring title;
+    std::wstring subtitle;
+    std::wstring glyph;      // Segoe MDL2 glyph, when there is no picture
+    int game = -1;           // a game of the library (its icon is the picture)
+    std::function<void()> action;
+    std::function<void()> options;
+};
+struct XmbCategory {
+    std::wstring name;
+    std::wstring glyph;
+    std::vector<XmbEntry> items;
+    int initial = 0;
+};
+
 public ref class CatalogShell sealed : Windows::UI::Xaml::Controls::UserControl {
 public:
     CatalogShell();
 
 private:
     std::vector<LibraryGame> games_;
+    bool booting_ = false;
+    // The game screen: a full-window layer over the menus while a game runs.
+    Windows::UI::Xaml::Controls::Grid^ gameLayer_ = nullptr;
+    Windows::UI::Xaml::Controls::Grid^ loadingLayer_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ loadingStage_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ loadingHint_ = nullptr;
+    Windows::UI::Xaml::Controls::ProgressBar^ loadingBar_ = nullptr;
+    Windows::UI::Xaml::Controls::ScrollViewer^ contentScroll_ = nullptr;
+    Windows::UI::Xaml::Controls::Border^ statusBar_ = nullptr;
+    Windows::UI::Xaml::DispatcherTimer^ gameTimer_ = nullptr;
+    bool inGame_ = false;
+    bool gameStarted_ = false;
+    bool loadFailed_ = false;
+    bool loadingHidden_ = false;
+    unsigned long long gameRunningSince_ = 0;
+    std::atomic<bool> pictureSeen_{false};
+    std::atomic<unsigned long long> framesShown_{0};
+    std::atomic<unsigned> lastLevel_{0};
+    std::atomic<unsigned> lastLit_{0};
+    std::mutex presentErrorMutex_;
+    std::wstring presentError_;
+    Windows::UI::Xaml::Controls::TextBlock^ statsLabel_ = nullptr;
+    // The performance overlay (quick menu: Off, FPS, Detailed), top left.
+    Windows::UI::Xaml::Controls::Border^ perfOverlay_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ perfText_ = nullptr;
+    unsigned long long perfLastTick_ = 0;
+    unsigned long long perfLastShown_ = 0;
+    unsigned long long perfLastGuest_ = 0;
+    void ApplyPerfMode();
+    void UpdatePerfOverlay();
+    // The quick menu (View + Menu): the game paused under it.
+    Windows::UI::Xaml::Controls::Grid^ quickMenu_ = nullptr;
+    bool quickMenuOpen_ = false;
+    Platform::String^ gameTitle_ = nullptr;
     Windows::UI::Xaml::Controls::Grid^ root_;
     Windows::UI::Xaml::Controls::Border^ navigation_;
     Windows::UI::Xaml::Controls::StackPanel^ content_;
@@ -34,14 +92,29 @@ private:
     Windows::Storage::Streams::IRandomAccessStream^ customMusicStream_ = nullptr;
     Windows::UI::Xaml::Controls::TextBlock^ musicStatus_ = nullptr;
     Platform::String^ playbackStatus_ = L"Not started";
-    Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[4] = {};
-    Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[4] = {};
-    bool cueReady_[4] = {};
+    // One slot per cue in vita3k_uwp::kInterfaceCueCount.
+    Windows::UI::Xaml::Controls::MediaElement^ cuePlayers_[6] = {};
+    CueAudio cueAudio_;
+    Windows::Storage::Streams::InMemoryRandomAccessStream^ cueStreams_[6] = {};
+    bool cueReady_[6] = {};
     bool uiSounds_ = true;
     double uiSoundVolume_ = 0.40;
     Windows::UI::Xaml::Controls::TextBlock^ status_;
+    // The moving scene behind the menus, and the clock on Home.
+    vita3k_uwp::LivingBackdrop backdrop_;
+    Windows::UI::Xaml::Controls::Grid^ backdropHost_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ clock_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ greeting_ = nullptr;
+    Windows::UI::Xaml::DispatcherTimer^ clockTimer_ = nullptr;
+    void UpdateClock();
+    void ApplySurfaceColors();
     Windows::UI::Xaml::Controls::TextBlock^ folderLabel_;
-    Windows::UI::Xaml::Controls::TextBlock^ firmwareLabel_;
+    Windows::UI::Xaml::Controls::TextBlock^ firmwareStatus_[3] = {};
+    Windows::UI::Xaml::Controls::Border^ firmwareDot_[3] = {};
+    Windows::UI::Xaml::Controls::ProgressBar^ firmwareProgress_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ firmwareMessage_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ dataLabel_ = nullptr;
+    bool firmwareBusy_ = false;
     Windows::UI::Xaml::Controls::TextBlock^ rendererResult_;
     Windows::UI::Xaml::Controls::TextBlock^ coreResult_;
     Windows::UI::Xaml::Controls::TextBlock^ libretroResult_;
@@ -50,9 +123,16 @@ private:
     Windows::UI::Xaml::Controls::TextBox^ searchBox_;
     Windows::UI::Xaml::Controls::StackPanel^ libraryResults_;
     void RefreshLibraryItems();
+    // A game's page: what the internet knows about it (GameInfo.h).
+    void AppendGameInfo(size_t index);
+    void FetchGameInfoFor(size_t index, bool force);
+    std::wstring GameInfoKey(size_t index) const;
+    std::wstring GameTitleId(size_t index) const;
+    std::set<std::wstring> infoFetching_;
     D3D12Host renderer_;
     VitaLibretroHost libretro_;
     int page_ = 0;
+    int shownPage_ = -1;
     int selectedGame_ = -1;
     int theme_ = 0;
     int track_ = 1;
@@ -67,13 +147,17 @@ private:
     Windows::UI::Color Accent() const;
     Windows::UI::Color Glow() const;
     Windows::UI::Color Muted() const;
+    Windows::UI::Color RailColor() const;
     Windows::UI::Xaml::Media::Brush^ Solid(Windows::UI::Color value);
     Windows::UI::Xaml::Media::Brush^ Gradient(Windows::UI::Color a, Windows::UI::Color b);
     Windows::UI::Xaml::Controls::TextBlock^ Text(Platform::String^ value, double size,
                                                   bool bold = false, bool muted = false);
     Windows::UI::Xaml::Controls::Button^ Button(Platform::String^ label, bool highlighted = false);
     Windows::UI::Xaml::Controls::Border^ Panel(Windows::UI::Xaml::UIElement^ child,
-                                                double pad = 24);
+                                                double pad = 18);
+    Windows::UI::Xaml::Controls::ControlTemplate^ ButtonTemplate(double radius, bool filled);
+    void Skin(Windows::UI::Xaml::Controls::Button^ button, double radius, bool filled = false);
+    void Reveal(Windows::UI::Xaml::UIElement^ element, double delayMs = 0, double rise = 14);
     Windows::UI::Xaml::Controls::StackPanel^ Vertical(double spacing = 0);
     void Banner(Platform::String^ eyebrow, Platform::String^ headline,
                 Platform::String^ description);
@@ -98,10 +182,82 @@ private:
     void CheckGameFolder(size_t index, unsigned revision);
     void InspectLaunch(size_t index);
     void AttemptBoot(size_t index);
+    void StartCore(Platform::String^ contentPath);
+    void RestartInto(Platform::String^ contentPath);
+    bool restartRefused_ = false;
+    // SteamGridDB: the game's own art picked by hand (covers and the wide
+    // background behind its page), over the page as a full-screen layer.
+    void ShowArtPicker(size_t index);
+    void CloseArtPicker();
+    void ArtPickerSearch(size_t index, Platform::String^ term);
+    void ArtPickerLoad(size_t index, unsigned gameId, Platform::String^ name);
+    Windows::UI::Xaml::Controls::Grid^ artPicker_ = nullptr;
+    Windows::UI::Xaml::Controls::StackPanel^ artResults_ = nullptr;
+    Windows::UI::Xaml::Controls::StackPanel^ artCovers_ = nullptr;
+    Windows::UI::Xaml::Controls::StackPanel^ artHeroes_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ artNote_ = nullptr;
+    unsigned artRequest_ = 0;
+    // The wide picture behind a game's page: its SteamGridDB background
+    // (hero), or failing that a screenshot taken while it was played.
+    Platform::String^ BackdropUri(size_t index);
+    // Pictures decoded once at the size they are shown, and kept: a full-size
+    // SteamGridDB hero (up to 3840 wide) decoded again on every page build
+    // froze the menus for a moment.
+    std::map<std::wstring, Windows::UI::Xaml::Media::Imaging::BitmapImage^> bitmapCache_;
+    Windows::UI::Xaml::Media::Imaging::BitmapImage^ CachedBitmap(Platform::String^ uri, int decodeWidth);
+    std::wstring screenshotPath_;
+    bool screenshotTaken_ = false;
+    // PS3-style XMB home (Settings, Appearance, Home screen)
+    bool xmbMode_ = false;
+    int xmbCat_ = -1;
+    std::vector<int> xmbItem_;
+    double xmbPhase_ = 0;
+    Windows::UI::Xaml::Controls::Grid^ xmb_ = nullptr;
+    Windows::UI::Xaml::Controls::Canvas^ xmbWaves_ = nullptr;
+    Windows::UI::Xaml::Controls::Canvas^ xmbStage_ = nullptr;
+    Windows::UI::Xaml::Controls::TextBlock^ xmbClock_ = nullptr;
+    Windows::UI::Xaml::DispatcherTimer^ xmbTimer_ = nullptr;
+    std::map<std::wstring, Windows::UI::Xaml::Media::Imaging::BitmapImage^> xmbIcons_;
+    std::vector<XmbCategory> XmbCategories();
+    void ShowXmb();
+    void HideXmb();
+    void LayoutXmb(int dx, int dy);
+    void XmbWaves();
+    bool XmbKey(Windows::System::VirtualKey key);
+    void SaveLayout(bool xmb);
+    int xmbTheme_ = 0;
+    void ApplyXmbSky();
+    void SaveXmbTheme(int theme);
+    void EnterGameView(Platform::String^ title);
+    void ShowLoadFailure(Platform::String^ detail);
+    void ExitGameView();
+    void ShowQuickMenu();
+    void HideQuickMenu();
+    void GameTick();
+    void UpdateGameStats();
     void ChooseLicenseForGame(size_t index);
     void ChooseFirmware();
-    void ChoosePreinstalledFirmware();
-    void ChooseFirmwareSlot(bool preinstalled);
+    void ChooseFirmwareFolder();
+    void InstallFirmwareFiles(std::vector<Windows::Storage::StorageFile^> files);
+    void ShowFirmwareProgress(double value, Platform::String^ message);
+    void StorageSettings();
+    void ChooseDataFolder();
+    // Updates and DLC: a folder of them, installed when new.
+    void ChooseAddonsFolder();
+    void InstallAddons();
+    Windows::UI::Xaml::Controls::TextBlock^ addonsLabel_ = nullptr;
+    bool addonsBusy_ = false;
+    void ChangeDataRoot(const std::wstring& chosen);
+    void CleanUpOldCopies();
+    bool SystemFirmwareInstalled();
+    void SetupCard();
+    void SaveLogToDrive();
+    std::wstring RecentLogText();
+    void RefreshFirmwareStatus();
+    void ResetInstalledFirmware();
+    void FirmwareSettings();
+    void EmulationSettings();
+    void ApplyCoreOptions(const std::wstring& contentPath = std::wstring());
     void RestorePaths();
     void ScanGames();
     void ReadSfo(size_t index, Windows::Storage::StorageFolder^ folder);
