@@ -2839,12 +2839,6 @@ const TitleOverride kTitleOverrides[] = {
     // always gets the pair.
     { L"PCSE00261", "vita3k_backend_renderer", "OpenGL", nullptr, true },
     { L"PCSE00261", "vita3k_surface_sync", "enabled", nullptr, true },
-    // Minecraft: PS Vita Edition: with async pipeline compiling, draws whose
-    // shader isn't ready yet are skipped, so new trees and chunks appear
-    // half-drawn until it finishes. Compile them in place instead (a short
-    // pause the first time something new shows up, but the picture is whole).
-    // Not "always": the player's own choice for the game still wins.
-    { L"PCSE00491", "vita3k_async_pipeline", "disabled", nullptr, false },
 };
 // The title ID (four letters, five digits) in a game's folder or file name.
 std::wstring TitleIdIn(const std::wstring& path) {
