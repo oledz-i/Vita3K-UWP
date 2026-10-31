@@ -430,6 +430,13 @@ CatalogShell::CatalogShell() {
     }
     // The app's own file calls (std::filesystem in Settings) reach USB drives too.
     vita3k_uwp::RedirectCoreFileAccess(vita3k_uwp::ModuleFromAddress(reinterpret_cast<const void*>(&Pref)));
+    {
+        // A log from an earlier run that grew huge is cleared, not appended to.
+        const std::wstring logPath = std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-runtime.log";
+        std::error_code sizeEc;
+        const auto logSize = std::filesystem::file_size(logPath, sizeEc);
+        if (!sizeEc && logSize > (80ull << 20)) DeleteFileW(logPath.c_str());
+    }
     libretro_.SetLogPath(std::wstring(ApplicationData::Current->LocalFolder->Path->Data()) + L"\\vita3k-runtime.log");
     {
         // A game was running when the app last ended and nothing cleared the

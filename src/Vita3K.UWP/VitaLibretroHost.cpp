@@ -8,6 +8,7 @@
 #include <cstring>
 #include <share.h>
 #include <string>
+#include <utility>
 #include <chrono>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
@@ -690,7 +691,37 @@ void __cdecl VitaLibretroHost::Log(unsigned level, const char* format, ...) {
             host->logFilePath_ = host->runtimeLogPath_;
             if (host->logFile_) std::setvbuf(host->logFile_, nullptr, _IOFBF, 64 * 1024);
         }
-        if (host->logFile_) {
+        // A runaway line once grew the log to 3.3 GB (and cost the game its
+        // speed writing it). A line repeated over and over is written 20 times,
+        // then counted; and the file stops growing at 64 MB.
+        static std::string lastKey;
+        static unsigned long long repeats = 0, written = 0;
+        static bool capped = false;
+        bool write = host->logFile_ != nullptr && !capped;
+        if (write) {
+            const char* bar = std::strchr(message, '|');
+            std::string key = bar ? bar : message;
+            if (key == lastKey) {
+                if (++repeats > 20) write = false;
+            } else {
+                if (repeats > 20) {
+                    char note[96];
+                    const int n = std::snprintf(note, sizeof(note), "(the line above repeated %llu more times)\n", repeats - 20);
+                    if (n > 0) { std::fwrite(note, 1, static_cast<size_t>(n), host->logFile_); written += static_cast<unsigned long long>(n); }
+                }
+                lastKey = std::move(key);
+                repeats = 1;
+            }
+        }
+        if (write && written > (64ull << 20)) {
+            static const char stop[] = "LOG STOPPED: the file reached 64 MB. Everything after this is left out.\n";
+            std::fwrite(stop, 1, sizeof(stop) - 1, host->logFile_);
+            std::fflush(host->logFile_);
+            capped = true;
+            write = false;
+        }
+        if (write) {
+            written += std::strlen(message);
             std::fwrite(message, 1, std::strlen(message), host->logFile_);
             // A flush per line was a write to the drive for every file a game
             // opened (hundreds a second in some games). Warnings and errors
