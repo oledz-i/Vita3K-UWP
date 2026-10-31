@@ -1141,6 +1141,7 @@ static GLuint uwp_color_attachment_copy(GLuint attachment) {
         GLint format = 0;
         GLint width = 0;
         GLint height = 0;
+        bool convert = false; // the copy's sized format differs from the source's unsized one
     };
     static Copy copies[4];
     static int next = 0;
@@ -1179,6 +1180,7 @@ static GLuint uwp_color_attachment_copy(GLuint attachment) {
         default: break;
         }
         glTextureStorage2D(copy->texture, 1, storage, width, height);
+        copy->convert = storage != static_cast<GLenum>(format);
         copy->format = format;
         copy->width = width;
         copy->height = height;
@@ -1188,7 +1190,24 @@ static GLuint uwp_color_attachment_copy(GLuint attachment) {
             LOG_INFO("Programmable blending: render target copy {}x{} format 0x{:X}", width, height, format);
         }
     }
-    glCopyImageSubData(attachment, GL_TEXTURE_2D, 0, 0, 0, 0, copy->texture, GL_TEXTURE_2D, 0, 0, 0, 0, width, height, 1);
+    if (copy->convert) {
+        // glCopyImageSubData wants identical formats and refused GL_RGBA to
+        // GL_RGBA8 (GL_INVALID_OPERATION, internalFormat mismatch: the copy
+        // stayed empty and Persona 4 Golden's background came out black).
+        // Reading the target through a framebuffer converts as it copies.
+        static GLuint read_fbo = 0;
+        if (!read_fbo)
+            glGenFramebuffers(1, &read_fbo);
+        GLint previous_read = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, attachment, 0);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glCopyTextureSubImage2D(copy->texture, 0, 0, 0, 0, 0, width, height);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read));
+    } else {
+        glCopyImageSubData(attachment, GL_TEXTURE_2D, 0, 0, 0, 0, copy->texture, GL_TEXTURE_2D, 0, 0, 0, 0, width, height, 1);
+    }
     return copy->texture;
 }
 #endif
@@ -2097,11 +2116,11 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
 #ifdef VITA3K_UWP
     if (cpu_opt) {
         config.unsafe_optimizations = true;
-        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreStandardFPCRValue;
-        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN;
-        // Reciprocal and reciprocal-square-root estimates (the heart of vector
-        // normalisation) may be a little more exact than the ARM table.
-        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_ReducedErrorFP;
+        // The three unsafe floating-point settings (ignore the standard FPCR,
+        // inaccurate NaN, reduced-error estimates) are off again: speckled
+        // textures in Uncharted and Minecraft, and the same artifacts upstream
+        // reports in Uncharted that vanish with CPU optimisation off, pointed
+        // at them.
         // No Vita game runs big-endian; skip the check on every memory access.
         config.always_little_endian = true;
         // Hint instructions (PLD preloads, YIELD, SEV, WFE) each ended the JIT
@@ -2113,8 +2132,12 @@ replace(dyn, '''    config.optimizations = cpu_opt ? Dynarmic::all_safe_optimiza
         // Fast mode (opt-in): LDREX/STREX no longer consult the shared monitor.
         // Quicker locks and reference counts; a game that relies on exact
         // exclusive-access behaviour can hang or misbehave.
-        if (uwp_profile::fast_atomics.load(std::memory_order_relaxed))
-            config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreGlobalMonitor;
+        // On for every game from build 94: the biggest CPU gain left for
+        // games with several busy threads (Minecraft's server, chunk and
+        // render threads all take locks). If a game hangs or misbehaves,
+        // the CPU setting "fast" is no longer needed to turn this off: tell me.
+        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreGlobalMonitor;
+        (void)uwp_profile::fast_atomics;
         if (config.fastmem_pointer) {
             config.fastmem_exclusive_access = true;
             config.recompile_on_exclusive_fastmem_failure = true;
