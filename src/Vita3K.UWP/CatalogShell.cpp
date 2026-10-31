@@ -65,13 +65,17 @@ Platform::String^ Pref(Platform::String^ key, Platform::String^ fallback = L"") 
     if (!values->HasKey(key)) return fallback;
     return safe_cast<Platform::String^>(values->Lookup(key));
 }
+void BackupSettings();
+void RestoreSettingsFromDrives(std::function<void()> done);
 void PutPref(Platform::String^ key, Platform::String^ value) {
     ApplicationData::Current->LocalSettings->Values->Insert(key, value);
+    BackupSettings();
 }
 // Defined with the firmware helpers further down.
 std::wstring FirmwareRoot();
 bool HasFiles(const std::wstring& directory);
 std::string NarrowUtf8(const std::wstring& text);
+std::wstring WidenUtf8(const std::string& text);
 TimeSpan Millis(double ms) {
     TimeSpan span;
     span.Duration = static_cast<long long>(ms * 10000.0);
@@ -445,6 +449,12 @@ CatalogShell::CatalogShell() {
         }
     }
     CleanUpOldCopies();
+    RestoreSettingsFromDrives([this]() {
+        SetStatus(L"Found your saved settings on the drive and restored them.");
+        RestorePaths();
+        ScanGames();
+        Render();
+    });
 
     // Cinematic television layout: permanently dark canvas, narrow icon rail,
     // full-bleed content area, and an understated 30px status line.
@@ -2118,6 +2128,7 @@ void CatalogShell::ChooseGameFolder() {
                 auto folder = work.get();
                 if (folder == nullptr) return;
                 StorageApplicationPermissions::FutureAccessList->AddOrReplace(L"vita-games", folder);
+                PutPref(L"storage.gamesPath", folder->Path);
                 SetStatus(L"Library folder access saved. Scanning selected storage...");
                 RestorePaths();
                 ScanGames();
@@ -2185,6 +2196,103 @@ std::wstring WidenUtf8(const std::string& text) {
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &result[0], count);
     result.resize(static_cast<size_t>(count - 1));
     return result;
+}
+// ---- Settings that outlive an uninstall ----
+// Uninstalling the app deletes everything in its own (internal) storage,
+// settings included. A copy of the settings sits as Vita3K-settings.txt on the
+// drive: next to the data folder, at the drive's root and in the games folder.
+// A fresh install with nothing set up looks for it on the connected drives and
+// takes the settings, data folder, games folder and updates folder back.
+std::vector<std::wstring> SettingsBackupDirs() {
+    std::vector<std::wstring> dirs;
+    auto add = [&dirs](const std::wstring& dir) {
+        if (dir.empty()) return;
+        for (const auto& have : dirs)
+            if (_wcsicmp(have.c_str(), dir.c_str()) == 0) return;
+        dirs.push_back(dir);
+    };
+    for (const wchar_t* key : { L"storage.dataRoot", L"storage.gamesPath" }) {
+        const std::wstring dir = Pref(ref new Platform::String(key), L"")->Data();
+        if (dir.empty()) continue;
+        add(dir);
+        add(std::filesystem::path(dir).root_path().wstring());
+    }
+    return dirs;
+}
+void BackupSettings() {
+    try {
+        std::string text;
+        for (auto pair : ApplicationData::Current->LocalSettings->Values) {
+            auto value = dynamic_cast<Platform::String^>(pair->Value);
+            if (value == nullptr) continue;
+            const std::wstring key = pair->Key->Data();
+            const std::wstring data = value->Data();
+            if (key.rfind(L"firmware.stage", 0) == 0 || key == L"restore.done") continue;
+            if (data.find_first_of(L"\t\r\n") != std::wstring::npos) continue;
+            text += NarrowUtf8(key) + "\t" + NarrowUtf8(data) + "\n";
+        }
+        if (text.empty()) return;
+        for (const auto& dir : SettingsBackupDirs()) {
+            std::error_code ec;
+            if (!std::filesystem::is_directory(dir, ec)) continue;
+            FILE* file = nullptr;
+            if (_wfopen_s(&file, (dir + L"\\Vita3K-settings.txt").c_str(), L"wb") != 0 || file == nullptr) continue;
+            fwrite(text.data(), 1, text.size(), file);
+            fclose(file);
+        }
+    } catch (...) {
+    }
+}
+// Reads a settings copy; settings already set on this install win.
+bool ImportSettings(const std::wstring& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    auto values = ApplicationData::Current->LocalSettings->Values;
+    std::string line;
+    unsigned taken = 0;
+    while (std::getline(in, line)) {
+        const auto tab = line.find('\t');
+        if (tab == std::string::npos || tab == 0) continue;
+        auto key = ref new Platform::String(WidenUtf8(line.substr(0, tab)).c_str());
+        if (values->HasKey(key)) continue;
+        values->Insert(key, ref new Platform::String(WidenUtf8(line.substr(tab + 1)).c_str()));
+        ++taken;
+    }
+    return taken != 0;
+}
+// A folder permission is lost with the app: ask for it again by path.
+void RegrantFolder(const wchar_t* pathKey, const wchar_t* token) {
+    auto path = Pref(ref new Platform::String(pathKey), L"");
+    if (path->IsEmpty()) return;
+    create_task(StorageFolder::GetFolderFromPathAsync(path)).then([token](task<StorageFolder^> found) {
+        try { StorageApplicationPermissions::FutureAccessList->AddOrReplace(ref new Platform::String(token), found.get()); }
+        catch (Platform::Exception^) {}
+    });
+}
+// Fresh install: look for a settings copy on the connected drives.
+void RestoreSettingsFromDrives(std::function<void()> done) {
+    if (!Pref(L"storage.dataRoot", L"")->IsEmpty() || Pref(L"storage.internal", L"0")->Equals(L"1") ||
+        StorageApplicationPermissions::FutureAccessList->ContainsItem(L"vita-games") || !Pref(L"storage.addons", L"")->IsEmpty())
+        return;
+    create_task(KnownFolders::RemovableDevices->GetFoldersAsync()).then(
+        [done](task<Windows::Foundation::Collections::IVectorView<StorageFolder^>^> found) {
+            try {
+                for (auto drive : found.get()) {
+                    std::wstring root = drive->Path->Data();
+                    if (!root.empty() && root.back() != L'\\') root.push_back(L'\\');
+                    for (const wchar_t* relative : { L"Vita3K-settings.txt", L"Vita3K\\Vita3K-settings.txt" }) {
+                        std::error_code ec;
+                        const std::wstring file = root + relative;
+                        if (!std::filesystem::exists(file, ec) || !ImportSettings(file)) continue;
+                        RegrantFolder(L"storage.gamesPath", L"vita-games");
+                        RegrantFolder(L"storage.addons", L"vita-addons");
+                        done();
+                        return;
+                    }
+                }
+            } catch (Platform::Exception^) {
+            }
+        }, task_continuation_context::use_current());
 }
 // 0x03740000 -> "3.74"
 std::wstring FirmwareVersionText(std::uint32_t version) {
